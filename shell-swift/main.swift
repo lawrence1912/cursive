@@ -211,8 +211,12 @@ func findRendererRoot() -> URL {
 // 所以窗口拖拽必须用一个透明的原生 NSView 叠在顶部实现。
 // 高度对应 src/renderer/themes/base.css 的 --drag-strip: 38px，改那边记得同步这里。
 final class DragStripView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        // 确定性拖拽：直接进入窗口拖拽循环，不依赖 isMovableByWindowBackground 机制
+        window?.performDrag(with: event)
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { true }
 }
 
 // MARK: - PDF 导出：离屏 A4 视图复用同一 renderer 渲染，createPDF 落盘
@@ -379,16 +383,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true         // 替代 -webkit-app-region: drag
         window.minSize = NSSize(width: 480, height: 360)
-        window.contentView = webView
+        // 容器：webView + 顶部拖拽条是平级兄弟（不能把子视图挂在 webView 上，
+        // 否则 relativeTo 自身未定义，且 WKWebView 会重排内部子视图）
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        container.autoresizingMask = [.width, .height]
+        window.contentView = container
+        webView.frame = container.bounds
+        webView.autoresizingMask = [.width, .height]
+        container.addSubview(webView)
 
         // 顶部拖拽条（叠在 webview 上方，与渲染层的 #drag-strip 重合）
         let dragStrip = DragStripView(frame: .zero)
         dragStrip.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView?.addSubview(dragStrip, positioned: .above, relativeTo: webView)
+        container.addSubview(dragStrip, positioned: .above, relativeTo: webView)
         NSLayoutConstraint.activate([
-            dragStrip.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
-            dragStrip.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
-            dragStrip.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
+            dragStrip.topAnchor.constraint(equalTo: container.topAnchor),
+            dragStrip.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            dragStrip.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             dragStrip.heightAnchor.constraint(equalToConstant: 38)
         ])
 
@@ -734,7 +745,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }))()
         """
         webView.evaluateJavaScript(probe) { [weak self] result, _ in
-            guard let self, let obj = result else { return }
+            guard let self, var obj = result as? [String: Any] else { return }
+            // 原生侧自检：拖拽条就位、命中测试命中它（performDrag 的充分前置）
+            if let container = self.webView.superview,
+               let strip = container.subviews.compactMap({ $0 as? DragStripView }).first {
+                let p = strip.convert(CGPoint(x: strip.bounds.midX, y: strip.bounds.midY), to: container.superview)
+                obj["dragStripHit"] = (container.superview?.hitTest(p) === strip)
+                obj["stripFrame"] = "\(strip.frame)"
+            } else {
+                obj["dragStripHit"] = false
+            }
             self.writeJSON(obj, to: "/tmp/typmd-shell-check.json")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runE2E() }
         }
