@@ -147,7 +147,9 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 - ~~P2-2 输入规则~~ ✅ `editor/input-rules.ts`：Enter 时表格骨架（`| a | b |` → 补分隔行+空行）与围栏骨架（` ```ts ` → 补空行+闭合围栏）；标题/引用/列表/分隔线的即时渲染由 live-preview 负责、续行由 markdownKeymap 负责，不重复造。一次事务 → ⌘Z 一步撤销
   - 围栏「是否已闭合」判定要 `gm` 正则逐行数围栏（无 `m` 时 `^` 只匹配串首，永远数不到第二个）
 - ~~P2-3 列表智能~~ ✅ `editor/list-ops.ts`：Tab/⇧Tab 升降级（列表上下文优先于 indentWithTab），有序列表**向前向后扩到段边界**后整段重编号（只向后找会漏前半段），保留 `)` 分隔符风格；每行一条前缀替换 change → 缩进与重编号同一事务、不重叠。回车续行/空项退出/任务项续 `[ ]` 仍归 markdownKeymap
-- **P2-4** 智能粘贴（HTML→MD / URL 包链接 / ⇧⌘V 纯文本）· **P2-5** 图片粘贴落盘
+- ~~P2-4 智能粘贴~~ ✅ `editor/paste.ts`（`EditorView.domEventHandlers.paste`）：网页/飞书/Notion 的 HTML → turndown 转 Markdown（强调符统一 `*`/`**`，补 `~~` 删除线规则）；选中文字粘 URL → 包成 `[文字](url)`；⇧⌥⌘V 粘贴为纯文本走原生菜单 + 壳读剪贴板
+  - **「粘什么」的判定**：转换结果与 plain 一致就用 plain（本编辑器自复制时不往返、不损失），不同才用转换结果；convert 注入以便 node 单测
+  - 契约 v4：`readClipboardText()`（`NSPasteboard.general.string`，剪贴板由壳读 — 判断 3）
 - **P2-6** 表格工具栏 · **P2-7** 查找替换本地化
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）

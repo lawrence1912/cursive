@@ -82,7 +82,7 @@ ViewPlugin 不能提供跨行装饰（抛 `Block decorations may not be specifie
 | 格式化快捷键（⌘B/⌘1-6…） | ● | ● | ● | 已补齐，含格式菜单 |
 | Markdown 输入规则 | ● | ● | ● | 表格/围栏骨架已补（续行归 markdownKeymap） |
 | 表格可编辑（工具栏 / 点单元格） | ◐ 只读渲染 | ● | ● | P2，本清单最难一项 |
-| 智能粘贴 HTML → Markdown | ○ | ● | ● | P2，从网页抄资料的刚需 |
+| 智能粘贴 HTML → Markdown | ● | ● | ● | 已补齐，含 URL 包链接 / ⇧⌥⌘V 纯文本 |
 | 图片粘贴 / 拖拽落盘 | ○ | ● | ● | P2 |
 | 图床上传 | ○ | ● | ● | P4，自用可跳过 |
 | 自动保存 + 崩溃恢复 | ○ | ● | ● | P0，丢内容是致命体验 |
@@ -228,7 +228,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 - **现状**：`markdownKeymap` 已经给了回车续行和退格删标记，**缺的是升降级和重编号**。
   Tab 现在绑的是 `indentWithTab`，要在列表上下文里优先接管
 
-#### P2-4 智能粘贴（1 天）
+#### ✅ P2-4 智能粘贴
 
 - **需求**：粘贴 HTML（网页、飞书、Notion）自动转 Markdown；选中文字时粘贴 URL 自动包成链接；
   ⇧⌥⌘V 粘贴为纯文本

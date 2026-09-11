@@ -8,6 +8,7 @@ export type MenuAction =
   | 'file:save-and-close'
   | 'file:open-folder'
   | 'edit:find'
+  | 'edit:paste-plain'
   | 'view:toggle-source'
   | 'view:toggle-sidebar'
   | 'view:toggle-outline'
@@ -89,6 +90,8 @@ export interface CursiveApi {
   pickFolder(): Promise<string | null>
   readDir(path: string): Promise<DirEntry[]>
   lastFolder(): Promise<string | null>
+  /** 读系统剪贴板的纯文本（⇧⌥⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
+  readClipboardText(): Promise<string>
 
   /** ---- P0 自动保存 / 崩溃恢复 / 外部变更（契约 v2，见 CONTEXT.md）---- */
   /** 无路径文档的静默落盘：写 ~/Library/Application Support/cursive/scratch/<id>.json */

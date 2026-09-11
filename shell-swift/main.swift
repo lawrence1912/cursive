@@ -611,6 +611,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         edit.addItem(NSMenuItem(title: "粘贴", action: Selector(("paste:")), keyEquivalent: "v"))
         edit.addItem(NSMenuItem(title: "全选", action: Selector(("selectAll:")), keyEquivalent: "a"))
         edit.addItem(.separator())
+        // P2-4：粘贴为纯文本（⇧⌥⌘V）—— ⌘ 组合一律走菜单（判断 1）
+        edit.addItem(item("粘贴为纯文本", "edit:paste-plain", key: "v", modifiers: [.command, .option, .shift]))
+        edit.addItem(.separator())
         edit.addItem(item("查找…", "edit:find", key: "f"))
         editItem.submenu = edit
 
@@ -919,6 +922,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
         case "lastFolder":
             respond(id, UserDefaults.standard.string(forKey: "lastFolder") ?? NSNull())
+
+        case "readClipboardText":
+            // ⇧⌥⌘V 粘贴为纯文本：剪贴板由壳侧读（判断 3：渲染层不碰原生）
+            respond(id, NSPasteboard.general.string(forType: .string) ?? "")
 
         case "scratchSave":
             guard let sid = args[0] as? String, let content = args[1] as? String,

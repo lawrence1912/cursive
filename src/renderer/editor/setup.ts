@@ -14,6 +14,7 @@ import {
 } from '@codemirror/view'
 import { expandOnEnter } from './input-rules'
 import { changeListIndent } from './list-ops'
+import { smartPaste } from './paste'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
 import { cursiveMarkdown } from './markdown-lang'
 import { cursiveTheme } from './theme'
@@ -51,6 +52,7 @@ export function createState(
       EditorState.allowMultipleSelections.of(true),
       EditorView.lineWrapping,
       cursiveMarkdown(),
+      smartPaste(),
       docDir.of(options.dir ?? null),
       revealScope.of(options.reveal ?? 'line'),
       cursiveTheme,

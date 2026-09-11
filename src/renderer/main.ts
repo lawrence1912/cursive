@@ -14,6 +14,7 @@ import { livePreview, themeEffect } from './editor/live-preview'
 import { currentTheme } from './editor/live-preview/widgets'
 import { createState, livePreviewConf } from './editor/setup'
 import { applyFormat } from './editor/fmt'
+import { insertText } from './editor/paste'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline, type OutlineItem } from './ui/outline'
@@ -470,6 +471,12 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'edit:find':
       openSearchPanel(view)
       break
+    case 'edit:paste-plain': {
+      // P2-4：⇧⌥⌘V 粘贴为纯文本
+      const text = await window.api.readClipboardText()
+      if (text) insertText(view, text)
+      break
+    }
     case 'view:toggle-sidebar':
       toggleSidebar()
       break

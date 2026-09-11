@@ -1,0 +1,101 @@
+import { EditorSelection, type Extension } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
+import TurndownService from 'turndown'
+
+/**
+ * P2-4 智能粘贴。
+ *
+ * - 粘贴 HTML（网页 / 飞书 / Notion）→ turndown 转 Markdown
+ * - 选中文字后粘贴一个 URL → 包成 `[文字](url)`
+ * - ⇧⌥⌘V → 始终纯文本
+ *
+ * 转换结果的强调符统一成 `*` / `**`（与 fmt.ts 的格式化命令一致），
+ * 删除线补上 `~~`（turndown 默认不认 <del>/<s>）。
+ */
+
+const turndown = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+  bulletListMarker: '-',
+  emDelimiter: '*',
+  strongDelimiter: '**'
+})
+turndown.addRule('strikethrough', {
+  filter: (node) => ['DEL', 'S', 'STRIKE'].includes(node.nodeName),
+  replacement: (content) => `~~${content}~~`
+})
+
+const URL_RE = /^https?:\/\/\S+$/i
+
+/**
+ * 决定粘什么：HTML 能转出与纯文本**不同**的 Markdown 才用转换结果。
+ * 从本编辑器复制的富文本，plain 已是 Markdown、html 是渲染结果，
+ * 转一圈会等于 plain —— 这种情况直接用纯文本，避免无谓往返与损失。
+ * convert 注入是为了在 node 测试里不依赖 DOM。
+ */
+export function choosePasteContent(
+  plain: string,
+  html: string | null,
+  convert: (html: string) => string
+): { text: string; converted: boolean } {
+  const p = plain ?? ''
+  if (!html) return { text: p, converted: false }
+  let md: string
+  try {
+    md = convert(html)
+  } catch {
+    return { text: p, converted: false }
+  }
+  if (md.trim() === p.trim()) return { text: p, converted: false }
+  return { text: md, converted: true }
+}
+
+export function insertText(view: EditorView, text: string): void {
+  const ranges = view.state.selection.ranges
+  const changes = ranges.map((r) => ({ from: r.from, to: r.to, insert: text }))
+  const sel = ranges.map((r) => EditorSelection.cursor(r.from + text.length))
+  view.dispatch({
+    changes,
+    selection: EditorSelection.create(sel, view.state.selection.mainIndex),
+    userEvent: 'input.paste'
+  })
+}
+
+/** 把选区/词包成链接（选中文字 + 粘 URL 时用） */
+function wrapSelectionAsLink(view: EditorView, url: string): void {
+  const r = view.state.selection.main
+  const label = view.state.doc.sliceString(r.from, r.to)
+  const text = `[${label}](${url})`
+  view.dispatch({
+    changes: { from: r.from, to: r.to, insert: text },
+    selection: EditorSelection.cursor(r.from + text.length),
+    userEvent: 'input.paste'
+  })
+}
+
+export function smartPaste(): Extension {
+  return EditorView.domEventHandlers({
+    paste(event, view) {
+      const dt = event.clipboardData
+      if (!dt) return false
+      const plain = dt.getData('text/plain')
+      const html = dt.getData('text/html') || null
+
+      const sel = view.state.selection.main
+      // 选中文字 + 粘贴的是一整个 URL → 包成链接
+      if (!sel.empty && URL_RE.test(plain.trim())) {
+        event.preventDefault()
+        wrapSelectionAsLink(view, plain.trim())
+        return true
+      }
+
+      // 没有 HTML（纯文本复制）→ 交给 CodeMirror 默认处理
+      if (!html) return false
+
+      const { text } = choosePasteContent(plain, html, (h) => turndown.turndown(h))
+      event.preventDefault()
+      insertText(view, text)
+      return true
+    }
+  })
+}
