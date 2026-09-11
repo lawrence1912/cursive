@@ -36,6 +36,7 @@ if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
 if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and c.get('outlineRows', 0) >= 3
+    ok = ok and e.get('recents', 0) >= 1   # P0-1：打开过的文件进了系统最近列表
 print(('PASS ' if ok else 'FAIL ') + sys.argv[1])
 sys.exit(0 if ok else 1)
 PY

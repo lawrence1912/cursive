@@ -368,6 +368,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     var lastDocPath: String?
     /// 渲染层推来的当前文档路径（setDocState），用于导出文件名与相对图片解析
     var docPath: String?
+    /// 外部变更监听：path → DispatchSource
+    var watchers: [String: DispatchSourceFileSystemObject] = [:]
+    var lastNotify: [String: Date] = [:]
     var pdfExporter: PDFExporter?
 
     // ---- 启动 ----
@@ -460,6 +463,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         file.addItem(item("新建", "file:new", key: "n"))
         file.addItem(item("打开…", "file:open", key: "o"))
         file.addItem(item("打开文件夹…", "file:open-folder", key: "o", modifiers: [.command, .shift]))
+
+        let recentItem = NSMenuItem(title: "打开最近", action: nil, keyEquivalent: "")
+        recentItem.submenu = recentMenu()
+        file.addItem(recentItem)
         file.addItem(.separator())
         file.addItem(item("保存", "file:save", key: "s"))
         file.addItem(item("另存为…", "file:save-as", key: "s", modifiers: [.command, .shift]))
@@ -502,6 +509,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         winItem.submenu = win
 
         NSApp.mainMenu = main
+    }
+
+    private func recentMenu() -> NSMenu {
+        let menu = NSMenu(title: "打开最近")
+        let recents = NSDocumentController.shared.recentDocumentURLs.prefix(10)
+        if recents.isEmpty {
+            menu.addItem(NSMenuItem(title: "（暂无）", action: nil, keyEquivalent: ""))
+        } else {
+            for url in recents {
+                let mi = NSMenuItem(title: url.deletingPathExtension().lastPathComponent,
+                                    action: #selector(openRecent(_:)), keyEquivalent: "")
+                mi.representedObject = url.path
+                mi.toolTip = url.path
+                menu.addItem(mi)
+            }
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "清除最近",
+                                    action: #selector(clearRecents(_:)), keyEquivalent: ""))
+        }
+        return menu
+    }
+
+    @objc func openRecent(_ sender: NSMenuItem) {
+        if let path = sender.representedObject as? String { openPath(path) }
+    }
+
+    @objc func clearRecents(_ sender: Any?) {
+        NSDocumentController.shared.clearRecentDocuments(nil)
+        buildMenu()
+    }
+
+    /// Dock 图标右键：最近文件
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu(title: "dock")
+        for url in NSDocumentController.shared.recentDocumentURLs.prefix(10) {
+            let mi = NSMenuItem(title: url.deletingPathExtension().lastPathComponent,
+                                action: #selector(openRecent(_:)), keyEquivalent: "")
+            mi.representedObject = url.path
+            mi.toolTip = url.path
+            mi.target = self
+            menu.addItem(mi)
+        }
+        return menu
     }
 
     private func item(_ title: String, _ action: String, key: String,
@@ -575,6 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func openPath(_ path: String) {
         do {
             lastDocPath = path
+            NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
             let doc = try readDoc(path)
             let js = "window.__shellEmit('file:opened', \(jsValue(doc)))"
             webView.evaluateJavaScript(js) { _, err in
@@ -632,6 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             do {
                 try encodeDoc(content, fp).write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
                 dirty = false; window.isDocumentEdited = false
+                NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
                 respond(id, ["path": path])
             } catch { reject(id, "写入失败：\(error.localizedDescription)") }
 
@@ -815,7 +867,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             in: nil, in: .page
         ) { [weak self] result in
             guard let self else { return }
-            var out: [String: Any] = ["source": source, "roundtrip": outPath]
+            var out: [String: Any] = [
+                "source": source, "roundtrip": outPath,
+                "recents": NSDocumentController.shared.recentDocumentURLs.count
+            ]
             switch result {
             case .success(let v):
                 out["result"] = v
