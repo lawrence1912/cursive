@@ -1,3 +1,5 @@
+import { icon } from './icons'
+
 export interface TabItem {
   id: number
   title: string
@@ -21,7 +23,8 @@ export class TabBar {
       const tab = (e.target as HTMLElement).closest<HTMLElement>('.tab-item')
       if (!tab) return
       const id = Number(tab.dataset['id'])
-      if ((e.target as HTMLElement).classList.contains('tab-close')) {
+      // 关闭键里现在是 SVG，e.target 可能是 <svg> 或 <path> —— 必须用 closest
+      if ((e.target as Element).closest('.tab-close')) {
         e.stopPropagation()
         this.onClose(id)
         return
@@ -56,14 +59,15 @@ export class TabBar {
       if (t.stale) {
         const warn = document.createElement('span')
         warn.className = 'tab-stale'
-        warn.textContent = '⚠'
+        warn.innerHTML = icon('warn')
         warn.title = '文件在外部被修改，此标签的未保存改动已过期'
         el.appendChild(warn)
       }
 
-      const close = document.createElement('span')
+      const close = document.createElement('button')
       close.className = 'tab-close'
-      close.textContent = '×'
+      close.setAttribute('aria-label', `关闭 ${t.title}`)
+      close.innerHTML = icon('close')
       el.appendChild(close)
 
       frag.appendChild(el)

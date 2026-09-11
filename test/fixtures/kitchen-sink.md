@@ -53,3 +53,13 @@ $$
 正文里的脚注引用[^1]。
 
 [^1]: 脚注内容。
+external-append-marker
+
+autosave-check-markerexternal-append-marker
+
+autosave-check-markerexternal-append-marker
+external-append-marker
+
+autosave-check-markerexternal-append-marker
+
+autosave-check-marker

@@ -11,6 +11,10 @@ export type MenuAction =
   | 'view:toggle-source'
   | 'view:toggle-sidebar'
   | 'view:toggle-outline'
+  | 'view:theme-system'
+  | 'view:theme-light'
+  | 'view:theme-dark'
+  | 'app:preferences'
 
 /** 一份从磁盘读到的文档 */
 export interface DocPayload {
@@ -78,6 +82,14 @@ export interface TypmdApi {
   /** 当前打开的全部文档路径（壳侧据此注册外部变更监听） */
   openTabs(paths: string[]): void
   onFileChangedExternal(fn: (path: string) => void): () => void
+
+  /** ---- 主题（契约 v3）----
+   * 渲染层切主题后同步原生外观：标题栏、红绿灯、NSAlert、NSOpenPanel 都吃这个。
+   * 不同步的话切一半很违和 —— 正文暗了，系统面板还是亮的。
+   * 'system' = 交还给系统（NSApp.appearance = nil）。 */
+  setAppearance(mode: AppearanceMode): void
 }
+
+export type AppearanceMode = 'system' | 'light' | 'dark'
 
 export type DiscardChoice = 'save' | 'discard' | 'cancel'

@@ -1,13 +1,25 @@
 :root {
+  color-scheme: light;
   --bg: #ffffff;
   --fg: #24292f;
-  --muted: #8b949e;
-  --mark: #c9ced6;
-  --accent: #2f7bd4;
+  /* 对比度按 WCAG 相对亮度实算过：正文 14.6:1，次要 4.8:1，强调 5.2:1 */
+  --muted: #6b7280;
+  /* --mark 拆成两个语义：idle = 预览态残留的标记，纯装饰，该淡；
+     reveal = 光标进入后回显的 markdown 源码，那是正在读写的内容，必须可读 */
+  --mark-idle: #9aa3ae;
+  --mark-reveal: var(--muted);
+  --accent: #0969da;
   --border: #e6e8eb;
   --sel: #d7e6fb;
   --code-bg: #f4f5f7;
-  --status-bg: #fafbfc;
+  /* 面板底色：侧边栏 / 标签栏 / 大纲 / 状态栏 / 浮标 共用（原名 --status-bg，
+     但它从来就不只服务状态栏）*/
+  --surface: #fafbfc;
+  /* 激活态的浅底。比 --sel 淡得多 —— --sel 是文本选区色，当行背景太重，
+     一棵长树里会不停抢视线 */
+  --accent-wash: #eaf2fd;
+  /* 外部变更告警（标签上的 ⚠）。取自 theme.ts 语法高亮的橙 */
+  --warn: #b4622a;
 
   --serif: "Georgia", "Songti SC", "Noto Serif CJK SC", serif;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -15,23 +27,65 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "JetBrains Mono",
     "Sarasa Mono SC", monospace;
 
-  --column: 46rem;
+  /* ---- 正文排版：以下四项由「设置」面板（ui/prefs.ts）写成 :root 内联样式覆盖 ----
+     界面字体（PingFang）是为短标签调的，长文阅读默认用衬线 */
+  --body-font: var(--serif);
+  --body-size: 16px;
+  --body-leading: 1.75;
+
+  /* 42rem 减去 .cm-content 左右各 32px padding = 608px ≈ 38 个汉字/行，
+     落在中文阅读的舒适区（35–40 字）。原 46rem 是 42 字，偏宽 */
+  --column: 42rem;
   --drag-strip: 38px;
-  --status-h: 26px;
+
+  /* ---- chrome 统一网格：四块面板此前是四套字号三套行高 ----
+     13px 是 macOS 的界面字号（Finder 侧栏、Safari 标签都是它）；12px 退一档给次要层，
+     两级之间 1.08 的比例正好 —— 产品 UI 的字号梯子要密，拉太开就变噪音。
+     行 30 / 标签栏 40：12px+28px 那套在 Retina 上看着像缩略图，点击也偏小 */
+  --chrome-size: 13px;    /* 树行 / 大纲行 / 标签 */
+  --chrome-label: 12px;   /* 面板小标题（大写字距）/ 状态栏 */
+  --chrome-row: 30px;     /* 树行 / 大纲行 */
+  --tabbar-h: 40px;
+  --status-h: 30px;
 }
 
+/* ---- 暗色 ----
+   两份是有意的，不是复制粘贴事故：
+   · 媒体查询这份只管 JS 起来之前的首帧（页面 CSP 禁内联脚本，抢不到更早的时机）；
+     :not([data-theme="light"]) 保证「系统暗 + 用户选浅」时浅色仍然赢
+   · [data-theme="dark"] 那份是真正生效的那份 —— prefs.ts 解析完 system 后
+     总会把 data-theme 钉成 light/dark 确定值
+   改一处必须改另一处。 */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #1c1f24;
     --fg: #d6dae0;
-    --muted: #737b85;
-    --mark: #4a515a;
+    --muted: #8b939d;
+    --mark-idle: #5a636e;
     --accent: #6ba6e8;
     --border: #2c3138;
     --sel: #2b415e;
     --code-bg: #262a30;
-    --status-bg: #191c20;
+    --surface: #191c20;
+    --accent-wash: #1e2831;
+    --warn: #d08a52;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1f24;
+  --fg: #d6dae0;
+  --muted: #8b939d;
+  --mark-idle: #5a636e;
+  --accent: #6ba6e8;
+  --border: #2c3138;
+  --sel: #2b415e;
+  --code-bg: #262a30;
+  --surface: #191c20;
+  --accent-wash: #1e2831;
+  --warn: #d08a52;
 }
 
 * { box-sizing: border-box; }
@@ -45,13 +99,43 @@ html, body {
   font-family: var(--sans);
 }
 
-/* macOS hiddenInset：给红绿灯让出可拖拽区域 */
+/* macOS hiddenInset：给红绿灯让出可拖拽区域，两端放面板开关 */
 #drag-strip {
   height: var(--drag-strip);
   -webkit-app-region: drag;
-  background: var(--bg);
+  /* 与侧栏/标签栏/大纲/状态栏同属 chrome 层（--surface），正文那张纸才是 --bg。
+     原来标题栏用 --bg，白条压在灰侧栏上，顶部像断了一截 */
+  background: var(--surface);
   flex: none;
+  display: flex;
+  /* 与红绿灯同一条水平线：灯是 14×14、圆心离窗口顶 16pt（探针 trafficMidFromTop 实测），
+     26px 的按钮得从 y=3 起画才对得齐 —— align-items:center 会把它按 38px 条高居中到 19，低 3px */
+  align-items: flex-start;
+  /* 左内边距 = 红绿灯的地盘（三颗 14px，到 x=69 结束，探针 trafficEnd 把关） */
+  padding: 3px 10px 0 78px;
 }
+.tb-spacer { flex: 1; }
+
+/* 标题栏按钮（main.ts 插入）。⚠️ 这三个数字（左 78 / 右 10 / 宽 26）与
+   shell-swift `DragStripView.hitTest` 的挖洞区强耦合：原生拖拽条整条盖在 webview 上，
+   壳不挖洞这两个按钮收不到点击。改这里必须同步壳。 */
+.tb-btn {
+  -webkit-app-region: no-drag;   /* Electron 退路：否则整条都是拖拽区，按钮点不动 */
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--mark-idle);
+  cursor: pointer;
+}
+.tb-btn.is-on { color: var(--fg); }          /* 亮 = 对应面板开着 */
+.tb-btn:hover { background: var(--code-bg); color: var(--fg); }
 
 body {
   display: flex;
@@ -63,7 +147,6 @@ body {
   min-height: 0;
   display: flex;
   align-items: stretch;
-  position: relative;   /* sb-show / ol-show 浮标的定位锚 */
 }
 
 #center {
@@ -84,11 +167,11 @@ body {
   height: var(--status-h);
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 14px;
-  font-size: 11px;
+  gap: 16px;
+  padding: 0 16px;
+  font-size: var(--chrome-label);
   color: var(--muted);
-  background: var(--status-bg);
+  background: var(--surface);
   border-top: 1px solid var(--border);
   user-select: none;
   -webkit-user-select: none;
@@ -96,7 +179,6 @@ body {
 
 #status-bar .spacer { flex: 1; }
 #status-saved { font-variant-numeric: tabular-nums; }
-.tab-stale { color: #d29922; font-size: 11px; }
 #status-file { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status-mode { font-variant-numeric: tabular-nums; }
 
@@ -114,9 +196,9 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--status-bg);
+  background: var(--surface);
   border-right: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: var(--chrome-size);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -127,7 +209,7 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 6px 8px 12px;
+  padding: 2px 8px 10px 18px;
 }
 .sb-head.is-hidden { display: none; }
 .sb-title {
@@ -136,7 +218,7 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--chrome-label);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -144,14 +226,14 @@ body.is-resizing {
 }
 .sb-change {
   flex: none;
+  display: flex;
   border: none;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 .sb-change:hover { background: var(--code-bg); color: var(--fg); }
 
@@ -159,23 +241,29 @@ body.is-resizing {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
   outline: none;
 }
 
 .sb-row {
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 24px;
-  padding-right: 8px;
-  border-radius: 5px;
-  margin: 0 6px 1px;
+  gap: 6px;
+  height: var(--chrome-row);
+  padding-right: 10px;
+  border-radius: 6px;
+  margin: 0 8px 1px;
   cursor: default;
   color: var(--fg);
+  transition: background-color 120ms ease;
 }
 .sb-row:hover { background: var(--code-bg); }
-.sb-row.is-active { background: var(--sel); }
+.sb-row.is-active {
+  background: var(--accent-wash);
+  font-weight: 500;
+  /* 左边 2px 强调条：安静但明确，和「强调色只标当前位置」这条对得上 */
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .sb-row.is-dir > .sb-name { font-weight: 550; }
 
 .sb-name {
@@ -188,21 +276,15 @@ body.is-resizing {
 /* 目录前的折叠箭头；文件占同样宽度以保持对齐 */
 .sb-chevron {
   flex: none;
-  width: 14px;
-  height: 14px;
-  position: relative;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mark-idle);
 }
-.sb-row.is-dir > .sb-chevron::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 3.5px;
-  border: 4px solid transparent;
-  border-left-color: var(--muted);
-  transition: transform 0.12s ease;
-  transform-origin: 2px 4px;
-}
-.sb-row.is-dir > .sb-chevron.is-open::before { transform: rotate(90deg); }
+.sb-chevron .ic { transition: transform 0.12s ease; }
+.sb-chevron.is-open .ic { transform: rotate(90deg); }
 
 .sb-empty {
   flex: 1;
@@ -216,15 +298,16 @@ body.is-resizing {
   text-align: center;
 }
 .sb-empty[hidden] { display: none; }  /* display:flex 会盖掉 UA 的 [hidden] 规则 */
-.sb-empty p { margin: 0; font-size: 11px; }
+.sb-empty p { margin: 0; font-size: var(--chrome-label); }
 .sb-open-btn {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 12px;
+  border-radius: 7px;
+  padding: 7px 16px;
+  font-size: var(--chrome-size);
   cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
 }
 .sb-open-btn:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -240,16 +323,20 @@ body.is-resizing {
 }
 .sb-resize:hover { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 
-/* ---------- 标签栏 ---------- */
+/* ---------- 标签栏 ----------
+   活动标签 = 编辑区那张纸的顶边：同底色 + 描边，且把标签栏底部那条分隔线压在身下，
+   于是标签和正文连成一片。分隔线所以画成 inset box-shadow（背景层）而不是 border-bottom：
+   border 在盒子外沿，子元素盖不住它；inset shadow 在背景层，标签的底色正好遮住。
+   标签占满内容高（条 40 − 顶部 6 = 34），所有标签等高 —— 活动态不能比别人高，
+   否则文字基线会跟着跳。非活动标签不画边框：一排描边盒子会让标签栏变成格栅。 */
 #tabbar {
   flex: none;
   display: flex;
-  align-items: flex-end;
   gap: 2px;
-  height: 32px;
-  padding: 4px 8px 0;
-  background: var(--status-bg);
-  border-bottom: 1px solid var(--border);
+  height: var(--tabbar-h);
+  padding: 6px 8px 0;
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--border);
   overflow-x: auto;
   user-select: none;
   -webkit-user-select: none;
@@ -257,21 +344,26 @@ body.is-resizing {
 .tab-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  max-width: 180px;
-  min-width: 90px;
-  height: calc(100% - 3px);
-  padding: 0 10px;
-  border: 1px solid var(--border);
+  gap: 7px;
+  min-width: 112px;
+  max-width: 200px;
+  height: 100%;
+  padding: 0 11px;
+  border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  font-size: 12px;
+  border-radius: 8px 8px 0 0;
+  font-size: var(--chrome-size);
   color: var(--muted);
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.tab-item.is-active {
+.tab-item:hover { background: var(--code-bg); color: var(--fg); }
+.tab-item.is-active,
+.tab-item.is-active:hover {
   background: var(--bg);
+  border-color: var(--border);
   color: var(--fg);
+  font-weight: 500;
 }
 .tab-title {
   overflow: hidden;
@@ -280,33 +372,45 @@ body.is-resizing {
 }
 .tab-dirty {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent);
 }
+/* 关闭键只在 hover / 活动标签上现身 —— 一排 × 会把标签栏吵成工具条。
+   用 opacity 而不是 display：位置留着，标题不会在鼠标进出时抖 */
 .tab-close {
   flex: none;
-  padding: 0 3px;
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: none;
+  border-radius: 5px;
+  color: var(--mark-idle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
 }
+.tab-item:hover .tab-close,
+.tab-item.is-active .tab-close,
+.tab-close:focus-visible { opacity: 1; }
+.tab-close:hover { color: var(--fg); background: var(--code-bg); }
 .tab-item.is-active .tab-close:hover {
-  background: var(--mark);
+  background: var(--code-bg);
   color: var(--fg);
 }
+.tab-stale { flex: none; display: flex; align-items: center; color: var(--warn); }
 
 /* ---------- 大纲视图（右侧） ---------- */
 #outline {
   flex: none;
-  width: 200px;
+  width: 220px;
   display: flex;
   flex-direction: column;
-  background: var(--status-bg);
+  background: var(--surface);
   border-left: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: var(--chrome-size);
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
@@ -314,65 +418,167 @@ body.is-resizing {
 #outline.is-hidden { display: none; }
 .ol-head {
   flex: none;
-  padding: 10px 12px 6px;
+  padding: 11px 16px 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--chrome-label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .ol-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 6px 12px;
+  padding: 0 8px 14px;
 }
 .ol-item {
-  padding: 4px 6px;
-  border-radius: 4px;
+  /* 用 line-height 撑行高而不是 flex：flex 会把自身文本变成匿名 flex item，
+     text-overflow: ellipsis 失效，长标题就不省略了 */
+  height: var(--chrome-row);
+  line-height: var(--chrome-row);
+  padding: 0 8px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background-color 120ms ease;
 }
 .ol-item:hover { background: var(--code-bg); }
-.ol-item.is-active { background: var(--sel); }
+.ol-item.is-active {
+  background: var(--accent-wash);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .ol-l6 { font-size: 0.92em; color: var(--muted); }
 
-/* ---------- 面板显隐浮标 ---------- */
-#sb-show,
-#ol-show {
+/* ---------- 图标 ---------- */
+/* 内联 SVG（ui/icons.ts）。原来 » « ⋯ × 是 Unicode 字符当图标：
+   不同字体里字形、基线、视觉大小都对不齐，也没有稳定的无障碍名 */
+.ic { flex: none; display: block; }
+
+/* ---------- 键盘焦点 ----------
+   此前整个 chrome 没有任何 focus 样式。按钮本来就可聚焦，这条立刻生效；
+   树行 / 标签的 roving tabindex 留给「键盘可达」那批 */
+.sb-row:focus-visible,
+.ol-item:focus-visible,
+.tab-item:focus-visible,
+.tab-close:focus-visible,
+.tb-btn:focus-visible,
+.sb-change:focus-visible,
+.sb-open-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 5px;
+}
+
+/* ---------- 设置面板（ui/prefs.ts） ---------- */
+#prefs { position: fixed; inset: 0; z-index: 100; }
+#prefs[hidden] { display: none; }
+.pf-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.28); }
+.pf-panel {
   position: absolute;
-  top: 8px;
-  z-index: 30;
-  width: 26px;
-  height: 26px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(430px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--status-bg);
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-#sb-show { left: 8px; }
-#ol-show { right: 8px; }
-#sb-show:hover,
-#ol-show:hover {
-  color: var(--fg);
-  background: var(--code-bg);
-}
-.ol-head {
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
+  padding: 16px 20px;
+  /* 面板是 chrome，不跟正文字体走 */
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 14px;
 }
-.ol-hide,
-.sb-hide {
+.pf-head { display: flex; align-items: center; justify-content: space-between; }
+.pf-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.pf-close {
+  display: flex;
+  border: none;
+  background: none;
+  color: var(--mark-idle);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 5px;
+}
+.pf-close:hover { background: var(--code-bg); color: var(--fg); }
+
+.pf-row {
+  display: grid;
+  /* 第三列定宽：分段行那一格是空的，用 auto 会塌成 0，
+     1fr 就把它吃掉 —— 分段控件于是比滑杆宽出一截，右边对不齐 */
+  grid-template-columns: 4.2rem 1fr 3.4rem;
+  align-items: center;
+  gap: 12px;
+}
+.pf-label { color: var(--muted); }
+
+/* 分段控件：主题、正文字体 */
+.pf-seg {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+.pf-seg button {
+  flex: 1;
   border: none;
   background: none;
   color: var(--muted);
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 5px;
   cursor: pointer;
-  font-size: 13px;
-  padding: 0 3px;
+  white-space: nowrap;
 }
-.ol-hide:hover,
-.sb-hide:hover { color: var(--fg); }
+.pf-seg button:hover { color: var(--fg); }
+.pf-seg button.is-on {
+  background: var(--bg);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+#prefs input[type='range'] { width: 100%; accent-color: var(--accent); }
+.pf-val {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.pf-hint { color: var(--muted); font-size: 11px; }
+.pf-reset {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.pf-reset:hover { border-color: var(--accent); color: var(--accent); }
+
+.pf-seg button:focus-visible,
+.pf-close:focus-visible,
+.pf-reset:focus-visible,
+#prefs input[type='range']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

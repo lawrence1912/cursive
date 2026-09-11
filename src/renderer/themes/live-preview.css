@@ -2,25 +2,45 @@
    这些类名全部由 live-preview 插件通过装饰器挂上，
    源代码模式把插件撤掉，样式自然全部消失 —— 不需要另写一套。 */
 
-/* ---------- 标题 ---------- */
+/* ---------- 强调 ----------
+   注意：这个类由 theme.ts 的 HighlightStyle 挂上（不是 live-preview 插件），
+   所以源代码模式下依然生效 —— 和下面的 .cm-lp-* 不是一回事。
+
+   中文强调用着重号，不用斜体：PingFang / Songti 都没有真斜体字形，
+   font-style: italic 得到的是浏览器机械倾斜（synthetic oblique），
+   在中文排印里是错的。拉丁文场景想换回斜体：给 <body> 加 typmd-em-italic。 */
+.cm-md-em {
+  -webkit-text-emphasis: dot currentColor;
+  text-emphasis: dot currentColor;
+  -webkit-text-emphasis-position: under right;
+  text-emphasis-position: under right;
+}
+body.typmd-em-italic .cm-md-em {
+  font-style: italic;
+  -webkit-text-emphasis: none;
+  text-emphasis: none;
+}
+
+/* ---------- 标题 ----------
+   padding-top 用 em，对各级标题自动按字号成比例放大；
+   下边距交给下一段的 line-height，形成「上疏下密」，标题归属它下面的内容 */
 .cm-lp-h1, .cm-lp-h2, .cm-lp-h3, .cm-lp-h4, .cm-lp-h5, .cm-lp-h6 {
   font-weight: 700;
   line-height: 1.35;
-  padding-top: 0.8em;
+  padding-top: 1.2em;
 }
-.cm-lp-h1 { font-size: 1.8em; }
-.cm-lp-h2 { font-size: 1.45em; }
-.cm-lp-h3 { font-size: 1.22em; }
+.cm-lp-h1 { font-size: 2em; }
+.cm-lp-h2 { font-size: 1.5em; }
+.cm-lp-h3 { font-size: 1.25em; }
 .cm-lp-h4 { font-size: 1.08em; }
 .cm-lp-h5 { font-size: 1em; }
 .cm-lp-h6 { font-size: 0.94em; color: var(--muted); }
 
 /* ---------- 引用 ---------- */
 .cm-lp-quote {
-  border-left: 3px solid var(--border);
+  border-left: 2px solid var(--mark-idle);
   padding-left: 0.9em;
   color: var(--muted);
-  font-style: italic;
 }
 
 /* ---------- 代码块 ----------
@@ -91,7 +111,7 @@
   height: 1em;
   margin: 0 0.45em 0 0;
   vertical-align: -0.12em;
-  border: 1.5px solid var(--mark);
+  border: 1.5px solid var(--muted);
   border-radius: 0.28em;
   background: transparent;
   cursor: pointer;

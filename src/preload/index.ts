@@ -33,7 +33,8 @@ const api: TypmdApi = {
   scratchClear: () => Promise.resolve(),
   confirmReload: () => Promise.resolve('keep'),
   openTabs: () => undefined,
-  onFileChangedExternal: () => () => undefined
+  onFileChangedExternal: () => () => undefined,
+  setAppearance: () => undefined
 }
 
 contextBridge.exposeInMainWorld('api', api)

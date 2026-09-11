@@ -14,6 +14,8 @@ import { createState, livePreviewConf } from './editor/setup'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline, type OutlineItem } from './ui/outline'
+import { icon } from './ui/icons'
+import { Prefs } from './ui/prefs'
 
 const host = document.getElementById('editor-host')!
 const elFile = document.getElementById('status-file')!
@@ -33,6 +35,10 @@ const listener = EditorView.updateListener.of((u) => {
 
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
+// 主题 + 排版偏好。字号/行距一变，CodeMirror 缓存的字符尺寸就过期了，必须重量
+const prefs = new Prefs(() => view.requestMeasure())
+prefs.apply()
+
 const sidebar = new Sidebar((path) => void openPath(path))
 const center = document.getElementById('center')!
 document.getElementById('main')!.insertBefore(sidebar.el, center)
@@ -50,28 +56,49 @@ view.scrollDOM.addEventListener('scroll', () => {
   outline.setActive(activeHeadingPos())
 })
 
-// 面板隐藏后的「唤回」浮标（不依赖快捷键/菜单）
-const sbShow = document.createElement('button')
-sbShow.id = 'sb-show'
-sbShow.textContent = '»'
-sbShow.title = '显示文件树 (⌘\\)'
-document.getElementById('main')!.insertBefore(sbShow, center)
+// ---------- 标题栏按钮 ----------
+// 两个面板开关从面板头部搬到拖拽条的左右两端（红绿灯右边 / 最右）：面板藏起来之后
+// 开关还在，不用去翻菜单，也不会像旧的「唤回浮标」那样压住第一个标签。
+// ⚠️ 位置与 shell-swift 的 `DragStripView.hitTest` 挖洞区强耦合 —— 原生拖拽条整条盖在
+// webview 上，不挖洞这两个按钮根本收不到点击（改 CSS 的 padding/尺寸记得同步壳）。
+const tbSidebar = titlebarButton('tb-sidebar', 'panel-left', '文件树', '⌘\\')
+const tbOutline = titlebarButton('tb-outline', 'panel-right', '大纲', '⌘⇧T')
+const tbSpacer = document.createElement('span')
+tbSpacer.className = 'tb-spacer'
+document.getElementById('drag-strip')!.append(tbSidebar, tbSpacer, tbOutline)
+tbSidebar.addEventListener('click', toggleSidebar)
+tbOutline.addEventListener('click', toggleOutline)
+syncTitlebar()
 
-const olShow = document.createElement('button')
-olShow.id = 'ol-show'
-olShow.textContent = '«'
-olShow.title = '显示大纲 (⌘⇧T)'
-document.getElementById('main')!.appendChild(olShow)
-
-const syncPanels = (): void => {
-  sbShow.hidden = sidebar.visible
-  olShow.hidden = outline.visible
+function titlebarButton(id: string, name: 'panel-left' | 'panel-right', label: string, key: string): HTMLButtonElement {
+  const b = document.createElement('button')
+  b.id = id
+  b.className = 'tb-btn'
+  b.innerHTML = icon(name)
+  b.title = `显示/隐藏${label} (${key})`
+  b.setAttribute('aria-label', `显示/隐藏${label}`)
+  return b
 }
-new MutationObserver(syncPanels).observe(sidebar.el, { attributes: true, attributeFilter: ['class'] })
-new MutationObserver(syncPanels).observe(outline.el, { attributes: true, attributeFilter: ['class'] })
-sbShow.addEventListener('click', () => sidebar.toggle())
-olShow.addEventListener('click', () => outline.toggle())
-syncPanels()
+
+function toggleSidebar(): void {
+  sidebar.toggle()
+  syncTitlebar()
+}
+
+function toggleOutline(): void {
+  outline.toggle()
+  localStorage.setItem('typmd.outlineVisible', outline.visible ? '1' : '0')
+  if (outline.visible) updateOutline()
+  syncTitlebar()
+}
+
+/** 按钮亮=面板开着。aria-pressed 让读屏也拿得到这个状态 */
+function syncTitlebar(): void {
+  for (const [b, on] of [[tbSidebar, sidebar.visible], [tbOutline, outline.visible]] as const) {
+    b.classList.toggle('is-on', on)
+    b.setAttribute('aria-pressed', String(on))
+  }
+}
 
 // ---------- 标签页 ----------
 // 每个标签持有独立的完整 EditorState：切走时冻结，切回 setState 原样恢复
@@ -433,14 +460,23 @@ async function handleMenu(action: MenuAction): Promise<void> {
       openSearchPanel(view)
       break
     case 'view:toggle-sidebar':
-      sidebar.toggle()
+      toggleSidebar()
       break
-    case 'view:toggle-outline': {
-      outline.toggle()
-      localStorage.setItem('typmd.outlineVisible', outline.visible ? '1' : '0')
-      if (outline.visible) updateOutline()
+    case 'view:toggle-outline':
+      toggleOutline()
       break
-    }
+    case 'view:theme-system':
+      prefs.setTheme('system')
+      break
+    case 'view:theme-light':
+      prefs.setTheme('light')
+      break
+    case 'view:theme-dark':
+      prefs.setTheme('dark')
+      break
+    case 'app:preferences':
+      prefs.toggle()
+      break
     case 'view:toggle-source': {
       sourceMode = !sourceMode
       const cur = activeTab()
@@ -547,14 +583,21 @@ syncStatus(true)
 scheduleCount()
 view.focus()
 
-// P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签
+// P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签。
+// 整段是异步的，而 argv/Finder 那份文件是壳轮询 __typmd 就绪后推过来的 ——
+// 两边谁先到都有可能，所以这里必须假设「等 scratchList 的工夫文件已经开好了」
 void (async () => {
   const list = await window.api.scratchList()
   if (!list.length) return
+  // 恢复出来的草稿是背景内容，不能把用户刚点开的那份挤下去（spawnTab 会自动激活新标签）
+  const keep = activeTab()?.path ? activeId : null
   tabs = tabs.filter((t) => !(t.path === null && !isTabDirty(t)))
-  if (!tabs.length) activeId = 0
+  // 被过滤掉的往往正是活动标签（启动空白页）。activeId 悬空的话，接下来的 activate()
+  // 既不会冻结旧 state，也不会更新 docPath —— 状态栏会一直显示那个已经不存在的文件名
+  if (!tabs.some((t) => t.id === activeId)) activeId = 0
   for (const s of list) {
     const t = spawnTab(createState(s.content, listener, { sourceMode }), null, s.fp)
     t.scratchId = s.id
   }
+  if (keep !== null) activate(keep)
 })()

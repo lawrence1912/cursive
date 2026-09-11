@@ -11,11 +11,11 @@ const markdownHighlight = HighlightStyle.define([
   // 标题字号交给 live-preview 的行级类（.cm-lp-h1…），
   // 这样源代码模式关掉插件后就是纯文本，符合预期
   { tag: t.strong, fontWeight: '700' },
-  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.emphasis, class: 'cm-md-em' },
   { tag: t.strikethrough, textDecoration: 'line-through', color: 'var(--muted)' },
   { tag: t.url, color: 'var(--muted)' },
   { tag: t.processingInstruction, class: 'cm-md-mark' },
-  { tag: t.contentSeparator, color: 'var(--mark)' },
+  { tag: t.contentSeparator, color: 'var(--mark-reveal)' },
   // 代码块内的嵌套语言
   { tag: t.keyword, color: '#a353b8' },
   { tag: [t.string, t.special(t.string)], color: '#2c8f5a' },
@@ -28,13 +28,13 @@ const markdownHighlight = HighlightStyle.define([
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: '16px',
+    fontSize: 'var(--body-size)',
     color: 'var(--fg)',
     backgroundColor: 'var(--bg)'
   },
   '.cm-scroller': {
-    fontFamily: 'var(--sans)',
-    lineHeight: '1.75',
+    fontFamily: 'var(--body-font)',
+    lineHeight: 'var(--body-leading)',
     overflowY: 'auto',
     // 底部留白，让最后一行也能滚到舒服的位置（打字机模式的地基）
     paddingBottom: '40vh'
@@ -42,7 +42,7 @@ const editorTheme = EditorView.theme({
   '.cm-content': {
     maxWidth: 'var(--column)',
     margin: '0 auto',
-    padding: '8px 32px 0',
+    padding: '48px 32px 0',
     caretColor: 'var(--fg)'
   },
   '.cm-line': { padding: '0' },
@@ -52,12 +52,12 @@ const editorTheme = EditorView.theme({
     backgroundColor: 'var(--sel)'
   },
   '.cm-activeLine': { backgroundColor: 'transparent' },
-  '.cm-selectionMatch': { backgroundColor: 'transparent', boxShadow: 'inset 0 -1px 0 var(--mark)' },
+  '.cm-selectionMatch': { backgroundColor: 'transparent', boxShadow: 'inset 0 -1px 0 var(--mark-idle)' },
   // 语法标记：源码模式下恢复正常对比度
-  '.cm-md-mark': { color: 'var(--mark)' },
+  '.cm-md-mark': { color: 'var(--mark-reveal)' },
   '&.typmd-source .cm-md-mark': { color: 'var(--accent)', opacity: '1' },
   '.cm-panels': {
-    backgroundColor: 'var(--status-bg)',
+    backgroundColor: 'var(--surface)',
     color: 'var(--fg)',
     borderTop: '1px solid var(--border)',
     fontFamily: 'var(--sans)'

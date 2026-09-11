@@ -7,9 +7,10 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 ## 功能要点（renderer）
 
 - **文件树**：`sidebar.ts` 懒加载树。打开单个 .md 且未开过文件夹时，`setActive` 自动把文档目录挂为树根（sbRows E2E 断言把关）
-- **大纲视图**：`ui/outline.ts`，右侧 200px 面板。标题来自 syntaxTree 的 ATX/SetextHeading 节点（250ms 防抖重建）；点击 `scrollIntoView(y:'start')` 跳转；滚动时按「视口顶部行之前最近的标题」跟随高亮。显隐 = 菜单 `view:toggle-outline`（⌘⇧T，新增 MenuAction——契约已同步 types.ts），状态存 localStorage `typmd.outlineVisible`。**布局总览**：drag-strip(38) → **main(左 sidebar 通栏 | center=tabbar+editor | 右 outline 通栏)** → status-bar。标签栏只属于中间编辑器列（在文件树/大纲的右侧），不横贯全宽；DOM：index.html 静态 #main/#center 骨架，sidebar/tabbar/outline 由 main.ts 插入对应槽位
+- **大纲视图**：`ui/outline.ts`，右侧 220px 面板。标题来自 syntaxTree 的 ATX/SetextHeading 节点（250ms 防抖重建）；点击 `scrollIntoView(y:'start')` 跳转；滚动时按「视口顶部行之前最近的标题」跟随高亮。显隐 = 菜单 `view:toggle-outline`（⌘⇧T，新增 MenuAction——契约已同步 types.ts），状态存 localStorage `typmd.outlineVisible`。**两个面板开关在标题栏两端**（`.tb-btn`，main.ts 插进 `#drag-strip`：左内边距 78 躲开红绿灯、右留 10，26×26；**顶部 3px 不是 align-items:center** —— 红绿灯是 14×14、圆心离窗口顶 16pt，按 38px 条高居中会落到 19，低 3px；两个数都由探针 `trafficEnd`/`trafficMidFromTop` 实测把关），面板藏了开关还在，亮=面板开着（`.is-on` + aria-pressed）。面板头部原来的隐藏按钮、以及更早的「唤回浮标」（#sb-show/#ol-show，absolute 钉在 #main 左右上角，正好压住第一个标签）**都已删**，开关只剩标题栏 + 菜单 ⌘\ / ⌘⇧T 两条路，且都走 main.ts 的 `toggleSidebar()`/`toggleOutline()`（localStorage 持久化和按钮状态各只有一份）。E2E 防回归：`tabHit`（藏起文件树后 `elementFromPoint` 打第一个标签中心）、`tbHoleLeft/tbHoleRight`（原生放行）、`tbHitPage`（页面命中）、`tbToggle`（点击真切面板）、`trafficEnd ≤ 72`（左按钮躲开红绿灯）、`|tbMidY - trafficMidFromTop| ≤ 1`（与红绿灯同线）。**布局总览**：drag-strip(38) → **main(左 sidebar 通栏 | center=tabbar+editor | 右 outline 通栏)** → status-bar。标签栏只属于中间编辑器列（在文件树/大纲的右侧），不横贯全宽；DOM：index.html 静态 #main/#center 骨架，sidebar/tabbar/outline 由 main.ts 插入对应槽位
 - **标签页**：`main.ts` + `ui/tabbar.ts`。每标签持有完整 EditorState（切走冻结/切回 setState，装饰+撤销历史+光标随 tab 走）；`setDocState` 的 dirty 聚合为「任意标签脏」，`file:save-and-close` = 所有脏标签落盘（任一取消即中止关窗）；关闭最后标签自动开新空白标签；开新标签**不**触发 dirty 守卫（不会丢内容）。布局：#tabbar 在 drag-strip 之下 32px，打印时隐藏
-- **表格真渲染**：`index.ts tableField`（StateField）+ `widgets.ts TableWidget/parseTable`。块级（跨行）装饰**只能走 StateField**，ViewPlugin 的会直接报错；光标碰到由 decorate.ts 回显源码（同一套 reveal 判定，两个集合不重叠）。样式 `.cm-lp-tableview`
+- **chrome 视觉网格**（真相 = `base.css` 顶部那几个 token，别在组件里写死尺寸）：`--chrome-size:13px`（树行/大纲行/标签，macOS 的界面字号）、`--chrome-label:12px`（面板小标题 + 状态栏）、`--chrome-row:30px`、`--tabbar-h:40px`、`--status-h:30px`、图标 16px（`ui/icons.ts` 一处改全局）。拖拽条与侧栏/标签栏/大纲/状态栏同属 chrome 层 `--surface`，**只有正文那张纸是 `--bg`**。**标签栏**：活动标签 = 编辑区那张纸的顶边（`--bg` + 1px 描边 + 8px 上圆角，与正文连成一片），分隔线画成 `#tabbar` 的 `box-shadow: inset 0 -1px 0`（border-bottom 在盒子外沿，子元素盖不住它；inset 在背景层，活动标签的底色正好压住那一段）；所有标签等高（条高 40 − 顶部 6 = 34，用 `height:100%` 拿），**活动态不能比别人高**，否则文字基线会跳；非活动标签不画边框（一排描边盒子 = 格栅），关闭 × 平时 `opacity:0`、hover/活动/键盘聚焦才现身（用 opacity 不用 display，位置留着才不抖）。原先那条「顶部 2px 蓝条」已删 —— 连成一片本身就是当前位置的信号。
+- **表格真渲染**：`index.ts tableField`（StateField）+ `widgets.ts TableWidget/parseTable`。块级（跨行）装饰**只能走 StateField**，ViewPlugin 的会直接报错；光标碰到由 decorate.ts 回显源码（同一套 reveal 判定，两个集合不重叠）。样式 `.cm-lp-tableview`。**表格必须点得进去**：`WidgetType.ignoreEvent()` 默认返回 true = widget 里的事件编辑器一概不管（CM 的 `eventBelongsToEditor` 直接判定事件不属于编辑器，连 `domEventHandlers` 都收不到）→ 点表格毫无反应、改不了字。现在 TableWidget 只放行 `mousedown`（其余继续忽略，否则 widget 内容会被 DOM observer 当成编辑输入写回文档），index.ts 的 `editTableOnClick` 接住它：`posAtDOM(单元格)` 拿到表格块起点 → 行号 = 起点行 + （表头 0 / 正文 n+1，**源码第 1 行是分隔行，DOM 里没有它**）→ `cellSpan()`（widgets.ts）算出那一格文字在行内的偏移 → 点左半格进格首、右半格进格尾。选区一动 reveal 就把整块换回源码，于是可以直接打字。E2E `tableEdit` + 6 个 `cellSpan` 单测把关
 
 ## 决策记录（2026-09-11）
 
@@ -22,10 +23,11 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 
 - 渲染进程：`src/renderer`，产物 `out/renderer`，纯 CodeMirror 6 —— **禁止让它依赖 Electron**
 - IPC 契约 = `window.api`（签名见 `src/shared/types.ts` 的 `TypmdApi`），壳侧 1:1 实现：
-  - invoke：`openDialog` / `read` / `save` / `saveAs` / `confirmDiscard` / `openExternal` / `pickFolder` / `readDir` / `lastFolder`
+  - invoke：`openDialog` / `read` / `save` / `saveAs` / `confirmDiscard` / `openExternal` / `pickFolder` / `readDir` / `lastFolder` / `setAppearance`
   - send：`setDocState` / `confirmClose`
   - 壳→渲染推送：`menu` / `file:opened` / `folder:opened`
-- 菜单动作字符串必须与 `src/main/menu.ts` 一致：`file:new` `file:open` `file:save` `file:save-as` `file:save-and-close` `file:open-folder` `edit:find` `view:toggle-source` `view:toggle-sidebar`
+- 菜单动作字符串（真相在 `src/shared/types.ts` 的 `MenuAction`）：`file:new` `file:open` `file:save` `file:save-as` `file:save-and-close` `file:open-folder` `edit:find` `view:toggle-source` `view:toggle-sidebar` `view:toggle-outline` `view:theme-system` `view:theme-light` `view:theme-dark` `app:preferences`
+- **主题与排版偏好**：真相在渲染层 localStorage `typmd.prefs`（`ui/prefs.ts`）。CSS 只认 `data-theme="light|dark"` 两个确定值，`system` 由 matchMedia 解析后钉上去；`base.css` 里那份媒体查询只兜首帧（CSP 禁内联脚本，抢不到更早时机），**暗色 token 两份必须同步改**。切主题会调 `setAppearance` 让壳设 `NSApp.appearance` —— 不设的话标题栏/红绿灯/NSAlert/NSOpenPanel 还是系统色，切一半很违和。字号/行距改完必须 `view.requestMeasure()`，否则 CodeMirror 缓存的字符尺寸是过期的
 - 文件读写必须走 `src/shared/textfile.ts` 的 BOM/EOL 指纹逻辑（Swift 侧已移植为 `decodeDoc`/`encodeDoc`），保证「保存零损耗」
 
 ## 自定义协议（两个，缺一不可）—— ✅ 已实现
@@ -39,6 +41,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
   `~/Library/Application Support/typmd/scratch/<id>.json`）、`scratchList()`、
   `scratchClear(id)`、`confirmReload(name) → 'reload'|'keep'`、`openTabs(paths)`
   （壳据此注册外部变更监听）；推送通道新增 `file:changed-externally(path)`
+- **崩溃恢复不许抢焦点**：`scratchList()` 是异步的，而 argv/Finder 那份文件是壳轮询 `__typmd` 就绪后推过来的 —— 谁先到都有可能。恢复前先记下「活动标签是否已有路径」，spawnTab 完再 `activate` 回去；另外过滤启动空白页之后必须校正 `activeId`，否则它悬空 → 后续 `activate()` 既不冻结旧 state 也不更新 `docPath`，状态栏会一直挂着一个已经不存在的文件名（真出现过：三个标签 + 状态栏显示另一个文件）
 - 自动保存：停止输入 2s / 切标签 / 失焦时静默落盘，**必须走 encodeDoc 指纹路径**
   （E2E 验证字节级一致）；无路径文档进 scratch；真正保存/关闭时清 scratch
 - 外部变更：壳侧 DispatchSource 监听 openTabs 的所有路径；
@@ -63,7 +66,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 - `NSWindow` 脏标记是 `isDocumentEdited` 属性（没有 `setDocumentEdited()`）
 - `NSAlert.runModal()` 返回 `ModalResponse`，做数组下标要 `.rawValue` 运算
 - 大字符串回传：`evaluateJavaScript("window.api._resolve(\(id), <json>)")`，JSON 用 `JSONSerialization` 生成，别手拼；异步通道用 `callAsyncJavaScript(body, arguments:, in: nil, in: .page)`（body 是第一个无标签参数）
-- `#drag-strip` 拖拽（两代实现，现在是确定性方案）：WKWebView 不认 `-webkit-app-region`，且把 `mouseDownCanMoveWindow` 重写为 false。第一代「叠 NSView + isMovableByWindowBackground」**失败**——当时 contentView 就是 webView，`addSubview(_, positioned:, relativeTo: webView)` 相对自身属未定义用法。现在的做法：① 容器视图做 contentView，webView 与 `DragStripView` 平级兄弟；② 条的 `mouseDown` 直接 `window.performDrag(with: event)`（与系统标题栏同源，不依赖任何机制位）。**38px 高度与 base.css `--drag-strip` 强耦合，改 CSS 记得同步壳**；smoke 探针有 `dragStripHit`（原生 hitTest）自动把关
+- `#drag-strip` 拖拽（两代实现，现在是确定性方案）：WKWebView 不认 `-webkit-app-region`，且把 `mouseDownCanMoveWindow` 重写为 false。第一代「叠 NSView + isMovableByWindowBackground」**失败**——当时 contentView 就是 webView，`addSubview(_, positioned:, relativeTo: webView)` 相对自身属未定义用法。现在的做法：① 容器视图做 contentView，webView 与 `DragStripView` 平级兄弟；② 条的 `mouseDown` 直接 `window.performDrag(with: event)`（与系统标题栏同源，不依赖任何机制位）。**38px 高度与 base.css `--drag-strip` 强耦合，改 CSS 记得同步壳**；③ `clickCount == 2` 走 `performDoubleClickAction()` —— titleVisibility 藏了系统标题栏，双击缩放 AppKit 不会替你接，得自己读 NSGlobalDomain 的 `AppleActionOnDoubleClick`（Maximize 默认 / Minimize / None）再分派 `performZoom`/`performMiniaturize`。单击那条先进 performDrag 的拖拽循环，跑完才返回，第二击照常带 clickCount=2，两者不打架；④ 条子两端要给标题栏按钮**挖洞**：`hitTest` 在左 72–110、右末尾 42 这两段返回 nil，点击才落得到网页上的 `.tb-btn`（区间按 `webView.pageZoom` 缩放 —— 页面一缩放 CSS px 就不等于点了），**这几个数与 base.css `#drag-strip` 的内边距/按钮尺寸强耦合**；smoke 探针有 `dragStripHit`（原生 hitTest）与 `dblClickZoomed` 自动把关（后者**必须先把窗口设成确定的小 frame**：窗口若已在 standard state，zoom 只会试着回 user state，而新窗口没有 user state，frame 纹丝不动 → 假阴性）
 - 本机 agent 环境里 Electron 起不来（GPU/network service 崩溃循环），renderer 行为用壳内探针 + vitest 验证，不要浪费时间去修 Electron 的环境问题
 - `WKPDFConfiguration.rect` 输出**单页** PDF（页尺寸 = rect），不是分页文档；要 A4 分页需走 `WKWebView.printOperation`（NSPrintOperation）或 print CSS @page，当前长条页方案对自用足够
 
@@ -75,6 +78,8 @@ TYPMD_SMOKE=1 ./shell-swift/typmd-shell <file.md>
 # +4s 写 /tmp/typmd-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后自动退出
 ```
 
+另加 `TYPMD_SMOKE_SHOT=<png>`（截 webView）、`TYPMD_SMOKE_THEME=dark|light|system`（截图前切主题，走查两套配色；**会写进 localStorage，走查完用 system 复位**）、`TYPMD_SMOKE_SCRATCH_DELAY=<ms>`（拖慢 scratchList 应答，逼出「文件先到、崩溃恢复后到」的竞态）。⚠️ `~/Library/Application Support/typmd/scratch/` 里的残留快照会被下一轮当成待恢复草稿开出来，把用例打开的文件挤成非活动标签 —— release.sh 每轮开头会清空它，手跑探针时也记得清。
+
 另加 `TYPMD_SMOKE_PDF=<路径>`：E2E 后顺带导出 PDF（绕过保存面板），结果写 `/tmp/typmd-shell-pdf.json`（bytes/error）。
 
 验证 PDF 不要用 PDFKit 提取文本（CJK 提取严重失真），改用结构信号：页尺寸（`PDFDocument.page.bounds` 应为 595×内容高）、`strings out.pdf | grep -c "Subtype */Image"`（图片对象数）、`sips -s format png` 转 PNG 目检。
@@ -83,7 +88,7 @@ TYPMD_SMOKE=1 ./shell-swift/typmd-shell <file.md>
 （历史教训：曾把 `NSApp.terminate()` 编进默认路径，导致「启动几秒后闪退」。）
 从 Finder/非项目根目录启动时，cwd 不是项目根 —— renderer 资源路径按可执行文件位置向上回退（shell-swift/ 的上级）。
 
-PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹还原）；`counts.cm-lp-*` 视口内非零；图片用例 `img.loaded=true`。
+PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹还原）；`counts.cm-lp-*` 视口内非零；图片用例 `img.loaded=true`；`tabHit=true`（无浮层压标签）；`tbHoleLeft/tbHoleRight/tbHitPage=true`、`trafficEnd≤72`、`|tbMidY - trafficMidFromTop| ≤ 1`（标题栏开关点得到、不撞红绿灯、与红绿灯同一条水平线）；`dblClickZoomed=true`（系统偏好非 Maximize 时该项跳过，只记 `dblClickAction`）。
 测试夹具生成：见 `/tmp/typmd-e2e/`（kitchen-sink.md / crlf.md / img.md + assets），图片 URL 里的空格/中文要百分号编码（渲染层 parseImage 不接受裸空格）。
 
 ## 构建与运行

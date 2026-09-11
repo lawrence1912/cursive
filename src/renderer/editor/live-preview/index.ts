@@ -9,7 +9,7 @@ import {
 } from '@codemirror/view'
 import { buildDecorations } from './decorate'
 import { Reveal, revealScope } from './reveal'
-import { parseTable, TableWidget } from './widgets'
+import { cellSpan, parseTable, TableWidget } from './widgets'
 
 export { docDir } from './decorate'
 export { revealScope, type RevealScope } from './reveal'
@@ -61,6 +61,48 @@ const openLinkOnClick = EditorView.domEventHandlers({
 })
 
 /**
+ * 点表格单元格 → 光标落到源码里对应的那一格（选区一动，reveal 判定就把整块换回管道符源码）。
+ * 没有这条，表格是块级 replace 装饰 + widget 默认吞事件，点上去毫无反应 —— 表格改不了。
+ * 另一半在 widgets.ts：TableWidget.ignoreEvent 放行 mousedown。
+ */
+const editTableOnClick = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    const cell = (event.target as HTMLElement | null)?.closest?.('td, th') as HTMLTableCellElement | null
+    if (!cell?.closest('.cm-lp-tableview')) return false
+
+    // widget 子节点的 posAtDOM = 被替换区间的起点，也就是表格块的开头
+    const pos = view.posAtDOM(cell)
+    let tableFrom = -1
+    syntaxTree(view.state).iterate({
+      from: pos,
+      to: pos,
+      enter: (n) => {
+        if (n.name === 'Table') tableFrom = n.from
+      }
+    })
+    if (tableFrom < 0) return false
+
+    const row = cell.parentElement as HTMLTableRowElement
+    // 源码第 1 行是分隔行（|---|---|），DOM 里没有它：表头 → 第 0 行，正文第 n 行 → 第 n+1 行
+    const lineNo =
+      view.state.doc.lineAt(tableFrom).number + (row.rowIndex === 0 ? 0 : row.rowIndex + 1)
+    if (lineNo > view.state.doc.lines) return false
+    const line = view.state.doc.line(lineNo)
+    const span = cellSpan(line.text, cell.cellIndex)
+    // 没法把 x 精确映射到字符，至少方向别拧：点左半格进格首，右半格进格尾
+    const box = cell.getBoundingClientRect()
+    const anchor = span
+      ? line.from + (event.clientX > box.left + box.width / 2 ? span.to : span.from)
+      : line.to
+
+    event.preventDefault()
+    view.dispatch({ selection: { anchor }, scrollIntoView: true })
+    view.focus()
+    return true
+  }
+})
+
+/**
  * 表格 → 真表格。
  * 块级（跨行）装饰不允许从 ViewPlugin 提供，必须走 StateField；
  * 光标碰到时由 decorate.ts 回显管道符源码（两个集合不会重叠：同一套 reveal 判定）。
@@ -96,7 +138,7 @@ function buildTables(state: EditorState): DecorationSet {
 }
 
 export function livePreview(): Extension {
-  return [livePreviewPlugin, tableField, openLinkOnClick]
+  return [livePreviewPlugin, tableField, openLinkOnClick, editTableOnClick]
 }
 
 /** 源代码模式就是把上面这套整个撤掉 */

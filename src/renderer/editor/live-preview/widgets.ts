@@ -118,6 +118,37 @@ function splitRow(line: string): string[] {
   return body.split('|').map((c) => c.trim().split(ESC).join('|'))
 }
 
+/**
+ * 行内第 index 格「文字」的区间（相对行首），给「点单元格 → 光标落进对应源码」定位。
+ * 切列规则与 splitRow 对齐：先 trim，再吃掉首尾各一根管道符，中间按 | 切。
+ * `\|` 先换成两个占位符（同样两个字符，偏移不变），免得被当成列边界。
+ */
+export function cellSpan(line: string, index: number): { from: number; to: number } | null {
+  const masked = line.replace(/\\\|/g, ESC + ESC)
+  let start = 0
+  let end = masked.length
+  while (start < end && /\s/.test(masked[start]!)) start++
+  while (end > start && /\s/.test(masked[end - 1]!)) end--
+  if (masked[start] === '|') start++
+  if (end > start && masked[end - 1] === '|') end--
+
+  let from = start
+  let seen = 0
+  for (let i = start; i <= end; i++) {
+    if (i < end && masked[i] !== '|') continue
+    if (seen === index) {
+      let f = from
+      let t = i
+      while (f < t && /\s/.test(masked[f]!)) f++
+      while (t > f && /\s/.test(masked[t - 1]!)) t--
+      return { from: f, to: t }
+    }
+    seen++
+    from = i + 1
+  }
+  return null
+}
+
 /** 解析 GFM 管道表格；结构不合法（少于 2 行 / 分隔行不合规）返回 null */
 export function parseTable(text: string): TableData | null {
   const lines = text
@@ -146,6 +177,15 @@ export class TableWidget extends WidgetType {
   }
   eq(other: TableWidget): boolean {
     return JSON.stringify(other.data) === JSON.stringify(this.data)
+  }
+  /**
+   * 默认实现返回 true = widget 里发生的事件编辑器一概不管，于是「点进表格改一个字」
+   * 根本做不到（CM 的 eventBelongsToEditor 会直接判定事件不属于编辑器）。
+   * 只放行 mousedown：index.ts 的 editTableOnClick 接住它，把光标送进对应的源码格；
+   * 其余事件继续忽略 —— 放行 DOM 变更/选区同步会让 widget 内容被当成编辑输入写回文档。
+   */
+  override ignoreEvent(event: Event): boolean {
+    return event.type !== 'mousedown'
   }
   toDOM(): HTMLElement {
     const wrap = document.createElement('div')

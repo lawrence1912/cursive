@@ -81,6 +81,7 @@ let BRIDGE_JS = """
     pickFolder: () => call('pickFolder'),
     readDir: (path) => call('readDir', [path]),
     lastFolder: () => call('lastFolder'),
+    setAppearance: (mode) => call('setAppearance', [mode]),
     scratchSave: (id, content, fp) => call('scratchSave', [id, content, fp]),
     scratchList: () => call('scratchList'),
     scratchClear: (id) => call('scratchClear', [id]),
@@ -228,10 +229,51 @@ final class MainWebView: WKWebView {
 // 所以窗口拖拽必须用一个透明的原生 NSView 叠在顶部实现。
 // 高度对应 src/renderer/themes/base.css 的 --drag-strip: 38px，改那边记得同步这里。
 final class DragStripView: NSView {
+    /// 只为读 pageZoom —— 页面缩放后 CSS px 不等于点，挖洞区得跟着缩放
+    weak var host: WKWebView?
+
+    /// 标题栏两端给渲染层的面板开关（base.css `.tb-btn`：左起 78、右留 10、26 宽）让路：
+    /// 条子整条盖在 webview 上，这里不返回 nil 的话那两个按钮永远收不到点击。
+    /// 两侧各留几点余量，省得边缘 1px 打偏
+    private func passesThrough(_ p: NSPoint) -> Bool {
+        let z = host?.pageZoom ?? 1
+        return (p.x >= 72 * z && p.x <= 110 * z)
+            || (p.x >= bounds.maxX - 42 * z && p.x <= bounds.maxX - 4 * z)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }   // 压根不在条子里
+        return passesThrough(convert(point, from: superview)) ? nil : hit
+    }
+
     override func mouseDown(with event: NSEvent) {
+        // 双击 = 系统标题栏那套行为。titleVisibility=.hidden 之后这条就是唯一的
+        // 标题栏，AppKit 不会替我们接：拖拽自己实现了，双击也得自己实现。
+        // （单击先走 performDrag，它跑完拖拽循环才返回；第二次 mouseDown
+        //   照常带 clickCount=2 送进来，两者不冲突）
+        if event.clickCount == 2 {
+            performDoubleClickAction()
+            return
+        }
         // 确定性拖拽：直接进入窗口拖拽循环，不依赖 isMovableByWindowBackground 机制
         window?.performDrag(with: event)
     }
+
+    /// 「系统设置 → 桌面与程序坞 → 连按窗口标题栏时」：Maximize（默认）/ Minimize / None。
+    /// 该偏好写在 NSGlobalDomain，standard defaults 会自动查到。
+    var doubleClickAction: String {
+        UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+    }
+
+    func performDoubleClickAction() {
+        guard let window else { return }
+        switch doubleClickAction {
+        case "Minimize": window.performMiniaturize(nil)
+        case "None": break
+        default: window.performZoom(nil)   // 放大 ⇄ 还原（与绿灯同一动作）
+        }
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { true }
 }
@@ -306,7 +348,10 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
     #drag-strip, #status-bar, #sidebar, #tabbar, #outline { display: none !important; }
     #main, #center { display: block !important; height: auto !important; overflow: visible !important; }
     body { display: block !important; background: #fff !important; color: #24292f !important; }
-    :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb; --muted: #8b949e; --sel: transparent; }
+    /* 导出恒为浅色：离屏 webview 会继承系统外观，必须把浅色值钉死。
+       ⚠️ 这些值是 base.css :root 的副本，改那边记得同步这里 */
+    :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb;
+            --muted: #6b7280; --mark-idle: #9aa3ae; --accent: #0969da; --sel: transparent; }
     #workspace { display: block !important; }
     #editor-host { overflow: visible !important; height: auto !important; padding: 46px 42px !important; }
     .cm-editor { height: auto !important; background: #fff !important; }
@@ -366,6 +411,8 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+    /// 视图 → 主题 的三个菜单项，setAppearance 回来时同步勾选
+    private var themeItems: [NSMenuItem] = []
     var window: NSWindow!
     var webView: WKWebView!
     var dirty = false
@@ -452,6 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
         // 顶部拖拽条（叠在 webview 上方，与渲染层的 #drag-strip 重合）
         let dragStrip = DragStripView(frame: .zero)
+        dragStrip.host = webView
         dragStrip.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(dragStrip, positioned: .above, relativeTo: webView)
         NSLayoutConstraint.activate([
@@ -496,6 +544,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let appMenu = NSMenu(title: "typmd")
         appMenu.addItem(NSMenuItem(title: "关于 typmd", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
         appMenu.addItem(.separator())
+        appMenu.addItem(item("设置…", "app:preferences", key: ","))
+        appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "隐藏 typmd", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem(title: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem(title: "退出 typmd", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -538,6 +588,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         view.addItem(item("显示/隐藏侧边栏", "view:toggle-sidebar", key: "\\"))
         view.addItem(item("显示/隐藏大纲", "view:toggle-outline", key: "t", modifiers: [.command, .shift]))
         view.addItem(item("源代码模式", "view:toggle-source", key: "/"))
+        view.addItem(.separator())
+        let themeRoot = NSMenuItem(title: "主题", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu(title: "主题")
+        themeItems = [
+            item("跟随系统", "view:theme-system", key: ""),
+            item("浅色", "view:theme-light", key: ""),
+            item("深色", "view:theme-dark", key: "")
+        ]
+        for mi in themeItems { themeMenu.addItem(mi) }
+        themeRoot.submenu = themeMenu
+        view.addItem(themeRoot)
         view.addItem(.separator())
         view.addItem(NSMenuItem(title: "实际大小", action: #selector(resetZoom(_:)), keyEquivalent: "0"))
         view.addItem(NSMenuItem(title: "放大", action: #selector(zoomIn(_:)), keyEquivalent: "+"))
@@ -606,6 +667,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     @objc func menuAction(_ sender: NSMenuItem) { send(sender.representedObject as! String) }
+
+    /// 主题菜单的勾选状态。真相在渲染层（localStorage），壳只是跟着显示
+    private func syncThemeMenu(_ mode: String) {
+        let order = ["system", "light", "dark"]
+        for (i, mi) in themeItems.enumerated() { mi.state = order[i] == mode ? .on : .off }
+    }
     @objc func zoomIn(_ sender: Any?) { webView.pageZoom *= 1.1 }
     @objc func zoomOut(_ sender: Any?) { webView.pageZoom /= 1.1 }
     @objc func resetZoom(_ sender: Any?) { webView.pageZoom = 1.0 }
@@ -759,6 +826,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             ]
             respond(id, choice)
 
+        case "setAppearance":
+            // nil = 交还给系统。标题栏、红绿灯、NSAlert、NSOpenPanel 都吃 NSApp.appearance，
+            // 不设的话切主题只切了网页那一半，系统面板还是亮的
+            let mode = args.first as? String ?? "system"
+            NSApp.appearance = mode == "dark" ? NSAppearance(named: .darkAqua)
+                             : mode == "light" ? NSAppearance(named: .aqua) : nil
+            syncThemeMenu(mode)
+            respond(id, NSNull())
+
         case "openExternal":
             if let s = args[0] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
             respond(id, NSNull())
@@ -817,7 +893,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                     }
                 }
             }
-            respond(id, list)
+            // 冒烟用：拖慢恢复的应答，制造「文件先到、崩溃恢复后到」的竞态 ——
+            // 正常顺序下 scratchList 几毫秒就回来了，那条路永远测不到
+            if let d = ProcessInfo.processInfo.environment["TYPMD_SMOKE_SCRATCH_DELAY"],
+               let ms = Double(d) {
+                let payload = list
+                DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000) { self.respond(id, payload) }
+            } else {
+                respond(id, list)
+            }
 
         case "scratchClear":
             if let sid = args[0] as? String {
@@ -914,6 +998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           sbDisplay: getComputedStyle(document.getElementById('sidebar')).display,
           cmTextLen: (document.querySelector('.cm-content')?.textContent || '').length,
           tabs: document.querySelectorAll('.tab-item').length,
+          tabList: [...document.querySelectorAll('.tab-item')].map(e => e.title),
           outlineRows: document.querySelectorAll('.ol-item').length
         }))()
         """
@@ -925,6 +1010,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 let p = strip.convert(CGPoint(x: strip.bounds.midX, y: strip.bounds.midY), to: container.superview)
                 obj["dragStripHit"] = (container.superview?.hitTest(p) === strip)
                 obj["stripFrame"] = "\(strip.frame)"
+                // 红绿灯占到哪儿：base.css `#drag-strip` 的左内边距（78）必须躲开它，
+                // 不然按钮和红绿灯叠在一起 —— 用真值把关，别拍脑袋
+                if let zoomBtn = self.window.standardWindowButton(.zoomButton) {
+                    obj["trafficEnd"] = Double(zoomBtn.frame.maxX)
+                    // 红绿灯圆心离窗口顶多远（窗口坐标系原点在左下，要翻过来）——
+                    // base.css 用它把 .tb-btn 钉到同一条水平线上
+                    let inWin = zoomBtn.convert(zoomBtn.bounds, to: nil)
+                    obj["trafficMidFromTop"] = Double(self.window.frame.height - inWin.midY)
+                    obj["trafficSize"] = "\(zoomBtn.frame.size)"
+                }
+                // 标题栏按钮的挖洞：两端按钮中心必须漏给 webview，条子中间照旧归拖拽
+                for (key, x) in [("tbHoleLeft", 91.0), ("tbHoleRight", strip.bounds.maxX - 23)] {
+                    let q = strip.convert(CGPoint(x: x, y: strip.bounds.midY), to: container.superview)
+                    obj[key] = (container.superview?.hitTest(q) !== strip)
+                }
+                // 双击标题栏 → 缩放：真跑一次动作，看窗口是否变大，跑完还原原 frame。
+                // 必须先缩到一个确定的小 frame —— 窗口若已在 standard state（上次
+                // 运行把 zoom 后的 frame 存进了 setFrameAutosaveName），zoom 只会尝试
+                // 回到 user state，而新窗口没有 user state，frame 纹丝不动 → 假阴性。
+                // 系统偏好设成 Minimize/None 时这条不成立，只记录动作名，不判定
+                obj["dblClickAction"] = strip.doubleClickAction
+                if strip.doubleClickAction == "Maximize", let w = self.window {
+                    let saved = w.frame
+                    let small = NSRect(x: saved.minX, y: saved.minY, width: 700, height: 500)
+                    w.setFrame(small, display: false)
+                    strip.performDoubleClickAction()
+                    obj["dblClickZoomed"] = (w.frame.width > small.width + 1
+                                             || w.frame.height > small.height + 1)
+                    w.setFrame(saved, display: true)
+                }
             } else {
                 obj["dragStripHit"] = false
             }
@@ -955,12 +1070,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         const sb = document.getElementById('sidebar')
         const sbAfterToggle = getComputedStyle(sb).display
         const sbClassAfter = sb.className
+        // 文件树藏起来后，第一个标签的中心必须点得到标签本身 ——
+        // 「唤回浮标」当年就钉在 #main 左上角，正好压住第一个标签。浮标已删，这条防回归
+        const r0 = document.querySelector('.tab-item').getBoundingClientRect()
+        const hitEl = document.elementFromPoint(r0.left + r0.width / 2, r0.top + r0.height / 2)
+        const tabHit = !!(hitEl && hitEl.closest('.tab-item'))
         window.__shellEmit('menu', 'view:toggle-sidebar')
         await new Promise(r => setTimeout(r, 80))
         const sbRestored = getComputedStyle(sb).display
+        // 壳挖的洞（左 91、右 maxX-23）落在页面里必须正好是这两个按钮 ——
+        // 合起来才是「真鼠标点得到」的闭环：原生放行 + 页面命中
+        const tbLeftAt = document.elementFromPoint(91, 16)
+        const tbRightAt = document.elementFromPoint(window.innerWidth - 23, 16)
+        // 按钮圆心的 y，拿去和原生量到的红绿灯圆心（trafficMidFromTop）比，必须同一条线
+        const tbBox = document.getElementById('tb-sidebar').getBoundingClientRect()
+        const tbMidY = tbBox.top + tbBox.height / 2
+        const tbHitPage = !!(tbLeftAt && tbLeftAt.closest('#tb-sidebar')
+                             && tbRightAt && tbRightAt.closest('#tb-outline'))
+        // 标题栏按钮（面板开关搬到拖拽条两端之后的主路径）：点一下藏、再点一下回来
+        const tbBtn = document.getElementById('tb-sidebar')
+        tbBtn.click()
+        await new Promise(r => setTimeout(r, 60))
+        const tbHidden = getComputedStyle(sb).display
+        const tbOn = tbBtn.classList.contains('is-on')
+        tbBtn.click()
+        await new Promise(r => setTimeout(r, 60))
+        const tbBack = getComputedStyle(sb).display
         const counts = {}
         for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview'])
           counts[cls] = document.querySelectorAll('.' + cls).length
+        // 表格可编辑回归（counts 之后做 —— 这一点会把 tableview 换回源码）：
+        // 点第一个正文单元格的左半边，光标必须落在源码里那一格的开头
+        let tableEdit = null
+        const td = document.querySelector('.cm-lp-tableview td')
+        if (td) {
+          const box = td.getBoundingClientRect()
+          td.dispatchEvent(new MouseEvent('mousedown',
+            { bubbles: true, clientX: box.left + 4, clientY: box.top + box.height / 2 }))
+          await new Promise(done => setTimeout(done, 80))
+          const st = window.__typmd.view.state
+          const head = st.selection.main.head
+          tableEdit = {
+            revealed: !document.querySelector('.cm-lp-tableview'),
+            line: st.doc.lineAt(head).text,
+            cell: st.doc.sliceString(head, head + 1)
+          }
+        }
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
@@ -970,6 +1125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
             : null,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
+          tabHit,
+          tbToggle: { hidden: tbHidden, restored: tbBack, onWhileHidden: tbOn },
+          tbHitPage,
+          tbMidY,
+          tableEdit,
           counts,
           cmLines: document.querySelectorAll('.cm-line').length
         }
@@ -999,6 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 out["bytesEqual"] = false
             }
             self.writeJSON(out, to: "/tmp/typmd-shell-e2e.json")
+            self.captureShot {
             // TYPMD_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板）
             if let pdfOut = ProcessInfo.processInfo.environment["TYPMD_SMOKE_PDF"] {
                 self.fetchLiveContent { text in
@@ -1022,6 +1183,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             } else {
                 NSApp.terminate(nil)
             }
+            }
+        }
+    }
+
+    /// TYPMD_SMOKE_SHOT=<路径>：整窗截图（含 sidebar / tabbar / outline / status-bar）。
+    /// 目检 chrome 必须走这条 —— PDF 那条路的 printCSS 第一行就把这些面板全 display:none 了。
+    private func captureShot(then next: @escaping () -> Void) {
+        guard let out = ProcessInfo.processInfo.environment["TYPMD_SMOKE_SHOT"] else { return next() }
+        // TYPMD_SMOKE_THEME=dark|light|system：截图前先切主题（视觉走查两套配色用；
+        // 它会写进 localStorage，走查完记得用 system 复位）
+        if let theme = ProcessInfo.processInfo.environment["TYPMD_SMOKE_THEME"],
+           ["dark", "light", "system"].contains(theme) {
+            webView.evaluateJavaScript("window.__shellEmit('menu', 'view:theme-\(theme)')")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.snapshot(to: out, then: next) }
+            return
+        }
+        snapshot(to: out, then: next)
+    }
+
+    private func snapshot(to out: String, then next: @escaping () -> Void) {
+        let cfg = WKSnapshotConfiguration()
+        cfg.rect = webView.bounds
+        webView.takeSnapshot(with: cfg) { [weak self] image, err in
+            var res: [String: Any] = ["out": out]
+            if let image, let tiff = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: URL(fileURLWithPath: out))
+                res["bytes"] = png.count
+                res["size"] = "\(rep.pixelsWide)x\(rep.pixelsHigh)"
+            } else {
+                res["error"] = err?.localizedDescription ?? "snapshot failed"
+            }
+            self?.writeJSON(res, to: "/tmp/typmd-shell-shot.json")
+            next()
         }
     }
 }

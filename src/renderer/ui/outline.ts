@@ -15,12 +15,11 @@ export class Outline {
     this.el = document.createElement('aside')
     this.el.id = 'outline'
     this.el.innerHTML = `
-      <div class="ol-head"><span>大纲</span><button class="ol-hide" title="隐藏大纲 (⌘⇧T)">»</button></div>
+      <div class="ol-head">大纲</div>
       <div class="ol-list"></div>
     `
     this.listEl = this.el.querySelector('.ol-list')!
 
-    this.el.querySelector('.ol-hide')!.addEventListener('click', () => this.el.classList.add('is-hidden'))
     this.el.addEventListener('click', (e) => {
       const row = (e.target as HTMLElement).closest<HTMLElement>('.ol-item')
       if (!row) return
@@ -58,7 +57,7 @@ export class Outline {
       row.className = `ol-item ol-l${item.level}`
       if (item.pos === this.activePos) row.classList.add('is-active')
       row.dataset['pos'] = String(item.pos)
-      row.style.paddingLeft = `${6 + (item.level - 1) * 12}px`
+      row.style.paddingLeft = `${8 + (item.level - 1) * 14}px`
       row.textContent = item.text
       row.title = item.text
       frag.appendChild(row)

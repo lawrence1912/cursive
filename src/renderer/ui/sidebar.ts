@@ -1,4 +1,5 @@
 import { basename, dirname } from '../../shared/path'
+import { icon } from './icons'
 import type { DirEntry } from '../../shared/types'
 
 interface Node {
@@ -8,8 +9,8 @@ interface Node {
 }
 
 const WIDTH_KEY = 'typmd.sidebarWidth'
-const MIN_WIDTH = 150
-const MAX_WIDTH = 520
+const MIN_WIDTH = 180
+const MAX_WIDTH = 560
 
 export class Sidebar {
   readonly el: HTMLElement
@@ -29,8 +30,7 @@ export class Sidebar {
     this.el.innerHTML = `
       <div class="sb-head">
         <span class="sb-title"></span>
-        <button class="sb-hide" title="隐藏文件树 (⌘\\)">«</button>
-        <button class="sb-change" title="打开其他文件夹">⋯</button>
+        <button class="sb-change" aria-label="打开其他文件夹" title="打开其他文件夹">${icon('dots')}</button>
       </div>
       <div class="sb-tree" tabindex="-1"></div>
       <div class="sb-empty">
@@ -43,7 +43,6 @@ export class Sidebar {
     this.treeEl = this.el.querySelector('.sb-tree')!
     this.emptyEl = this.el.querySelector('.sb-empty')!
 
-    this.el.querySelector('.sb-hide')!.addEventListener('click', () => this.el.classList.add('is-hidden'))
     this.el.querySelector('.sb-change')!.addEventListener('click', () => void this.pick())
     this.el.querySelector('.sb-open-btn')!.addEventListener('click', () => void this.pick())
     this.treeEl.addEventListener('click', (e) => void this.onRowClick(e))
@@ -161,13 +160,16 @@ export class Sidebar {
       const row = document.createElement('div')
       row.className = 'sb-row'
       row.dataset['path'] = entry.path
-      row.style.paddingLeft = `${8 + depth * 14}px`
+      row.style.paddingLeft = `${10 + depth * 16}px`
       if (entry.isDir) row.classList.add('is-dir')
       if (entry.path === this.activePath) row.classList.add('is-active')
 
       const chevron = document.createElement('span')
       chevron.className = 'sb-chevron'
-      if (entry.isDir) chevron.classList.toggle('is-open', this.expanded.has(entry.path))
+      if (entry.isDir) {
+        chevron.innerHTML = icon('chevron')
+        chevron.classList.toggle('is-open', this.expanded.has(entry.path))
+      }
       row.appendChild(chevron)
 
       const name = document.createElement('span')
@@ -187,7 +189,7 @@ export class Sidebar {
 
   private savedWidth(): number {
     const raw = Number(localStorage.getItem(WIDTH_KEY))
-    return Number.isFinite(raw) && raw >= MIN_WIDTH ? Math.min(raw, MAX_WIDTH) : 240
+    return Number.isFinite(raw) && raw >= MIN_WIDTH ? Math.min(raw, MAX_WIDTH) : 252
   }
 
   private setupResize(): void {
