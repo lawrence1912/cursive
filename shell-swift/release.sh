@@ -7,8 +7,8 @@
 set -e -o pipefail
 cd "$(dirname "$0")/.."
 
-echo "==> [1/4] 单元测试 + 构建 renderer"
-npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm run build --silent
+echo "==> [1/4] 类型检查 + 单元测试 + 构建 renderer"
+npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm run build --silent
 
 echo "==> [2/4] 编译原生壳"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
