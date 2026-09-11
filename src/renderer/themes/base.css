@@ -95,6 +95,8 @@ body {
 }
 
 #status-bar .spacer { flex: 1; }
+#status-saved { font-variant-numeric: tabular-nums; }
+.tab-stale { color: #d29922; font-size: 11px; }
 #status-file { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status-mode { font-variant-numeric: tabular-nums; }
 

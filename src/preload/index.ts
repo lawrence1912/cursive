@@ -25,7 +25,15 @@ const api: TypmdApi = {
 
   pickFolder: () => ipcRenderer.invoke('dir:open-dialog'),
   readDir: (path) => ipcRenderer.invoke('dir:read', path),
-  lastFolder: () => ipcRenderer.invoke('dir:last')
+  lastFolder: () => ipcRenderer.invoke('dir:last'),
+
+  // ---- 以下为原生壳（P0）新增通道的遗留桩：Electron 版已停止演进，P0-4 将整体删除 ----
+  scratchSave: () => Promise.resolve(),
+  scratchList: () => Promise.resolve([]),
+  scratchClear: () => Promise.resolve(),
+  confirmReload: () => Promise.resolve('keep'),
+  openTabs: () => undefined,
+  onFileChangedExternal: () => () => undefined
 }
 
 contextBridge.exposeInMainWorld('api', api)

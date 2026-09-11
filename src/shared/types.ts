@@ -34,6 +34,13 @@ export interface DirEntry {
   isDir: boolean
 }
 
+/** scratch 自动保存文件里的一条未命名文档 */
+export interface ScratchDoc {
+  id: string
+  content: string
+  fp: FileFingerprint
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的接口 */
 export interface TypmdApi {
   openDialog(): Promise<DocPayload | null>
@@ -59,6 +66,18 @@ export interface TypmdApi {
   pickFolder(): Promise<string | null>
   readDir(path: string): Promise<DirEntry[]>
   lastFolder(): Promise<string | null>
+
+  /** ---- P0 自动保存 / 崩溃恢复 / 外部变更（契约 v2，见 CONTEXT.md）---- */
+  /** 无路径文档的静默落盘：写 ~/Library/Application Support/typmd/scratch/<id>.json */
+  scratchSave(id: string, content: string, fp: FileFingerprint): Promise<void>
+  scratchList(): Promise<ScratchDoc[]>
+  /** 标签真正关闭或已另存为路径后，清掉对应 scratch */
+  scratchClear(id: string): Promise<void>
+  /** 外部修改确认（脏标签收到外部变更时弹）：'reload' 重载 | 'keep' 保留我的版本 */
+  confirmReload(name: string): Promise<'reload' | 'keep'>
+  /** 当前打开的全部文档路径（壳侧据此注册外部变更监听） */
+  openTabs(paths: string[]): void
+  onFileChangedExternal(fn: (path: string) => void): () => void
 }
 
 export type DiscardChoice = 'save' | 'discard' | 'cancel'

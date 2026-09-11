@@ -31,7 +31,8 @@ e = json.load(open('/tmp/typmd-shell-e2e.json'))
 r = e['result']; img = r.get('img')
 ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and e['bytesEqual'] and (img is None or img['loaded'])
-      and c.get('sbRows', 0) >= 1 and c.get('tabs', 0) >= 1)
+      and c.get('sbRows', 0) >= 1 and c.get('tabs', 0) >= 1
+      and r.get('autosaved') is True and r.get('reloaded') is True)
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
 if sys.argv[1] == 'kitchen-sink.md':

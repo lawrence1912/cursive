@@ -7,7 +7,7 @@ import { EditorView } from '@codemirror/view'
 import type { EditorState, Text } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
 import type { DocPayload, MenuAction } from '../shared/types'
-import { DEFAULT_FINGERPRINT, type FileFingerprint } from '../shared/textfile'
+import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
 import { count } from '../shared/wordcount'
 import { livePreview } from './editor/live-preview'
 import { createState, livePreviewConf } from './editor/setup'
@@ -19,6 +19,7 @@ const host = document.getElementById('editor-host')!
 const elFile = document.getElementById('status-file')!
 const elCount = document.getElementById('status-count')!
 const elMode = document.getElementById('status-mode')!
+const elSaved = document.getElementById('status-saved')!
 
 let sourceMode = false
 
@@ -26,6 +27,7 @@ const listener = EditorView.updateListener.of((u) => {
   if (u.docChanged) {
     syncStatus()
     scheduleCount()
+    scheduleAutosave()
   }
 })
 
@@ -84,6 +86,10 @@ interface Tab {
   savedDoc: Text
   scroll: number
   sourceMode: boolean
+  /** 无路径文档的 scratch 快照 id（自动保存用） */
+  scratchId?: string
+  /** 磁盘文件被外部修改且本标签有未保存改动 */
+  stale?: boolean
 }
 
 let tabs: Tab[] = []
@@ -123,7 +129,7 @@ function newUntitledTab(): void {
   spawnTab(createState('', listener), null, DEFAULT_FINGERPRINT)
 }
 
-function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint): void {
+function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint): Tab {
   // 启动时的空白首标签直接复用，避免「打开一个文件却多出一个空标签」
   const pristine = tabs.find(
     (t) => !t.path && !isTabDirty(t) && t.state.doc.length === 0
@@ -134,10 +140,12 @@ function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint):
     pristine.fp = fp
     pristine.savedDoc = state.doc
     activate(pristine.id)
-    return
+    return pristine
   }
-  tabs.push({ id: nextId++, path, fp, state, savedDoc: state.doc, scroll: 0, sourceMode })
-  activate(tabs[tabs.length - 1]!.id)
+  const t: Tab = { id: nextId++, path, fp, state, savedDoc: state.doc, scroll: 0, sourceMode }
+  tabs.push(t)
+  activate(t.id)
+  return t
 }
 
 function activate(id: number): void {
@@ -146,6 +154,7 @@ function activate(id: number): void {
     cur.state = view.state
     cur.scroll = view.scrollDOM.scrollTop
     cur.sourceMode = sourceMode
+    void flushTabAutosave(cur)
   }
   const t = tabs.find((x) => x.id === id)
   if (!t) return
@@ -213,9 +222,16 @@ function syncStatus(force = false): void {
     window.api.setDocState({ path: docPath, dirty })
   }
   tabbar.render(
-    tabs.map((x) => ({ id: x.id, title: tabTitle(x), dirty: isTabDirty(x) })),
+    tabs.map((x) => ({
+      id: x.id,
+      title: tabTitle(x),
+      dirty: isTabDirty(x),
+      stale: x.stale === true,
+      path: x.path
+    })),
     activeId
   )
+  window.api.openTabs(tabs.map((x) => x.path).filter((p): p is string => p !== null))
 }
 
 let countTimer: number | undefined
@@ -282,7 +298,7 @@ function syncMode(): void {
 // ---------- 文档生命周期 ----------
 
 /** 打开到新标签页；同一文件已开着则原地替换内容并激活 */
-function openTab(content: string, path: string | null, fp: FileFingerprint): void {
+function openTab(content: string, path: string | null, fp: FileFingerprint): Tab {
   const existing = path ? tabs.find((t) => t.path === path) : undefined
   if (existing) {
     existing.state = createState(content, listener, {
@@ -292,9 +308,9 @@ function openTab(content: string, path: string | null, fp: FileFingerprint): voi
     existing.savedDoc = existing.state.doc
     existing.fp = fp
     activate(existing.id)
-    return
+    return existing
   }
-  spawnTab(
+  return spawnTab(
     createState(content, listener, { dir: path ? dirname(path) : null, sourceMode }),
     path,
     fp
@@ -316,9 +332,19 @@ async function save(): Promise<boolean> {
   if (t) {
     t.path = res.path
     t.savedDoc = view.state.doc
+    if (t.scratchId) {
+      void window.api.scratchClear(t.scratchId)
+      t.scratchId = undefined
+    }
   }
+  markSaved()
   syncStatus(true)
   return true
+}
+
+function markSaved(): void {
+  const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  elSaved.textContent = `已保存 ${time}`
 }
 
 async function saveAs(): Promise<boolean> {
@@ -329,10 +355,48 @@ async function saveAs(): Promise<boolean> {
   if (t) {
     t.path = res.path
     t.savedDoc = view.state.doc
+    if (t.scratchId) {
+      void window.api.scratchClear(t.scratchId)
+      t.scratchId = undefined
+    }
   }
+  markSaved()
   syncStatus(true)
   return true
 }
+
+// ---------- P0-2 自动保存（2s 防抖 / 切标签 / 失焦即时落盘） ----------
+
+let autosaveTimer: number | undefined
+function scheduleAutosave(): void {
+  clearTimeout(autosaveTimer)
+  autosaveTimer = window.setTimeout(() => void flushAutosave(), 2000)
+}
+
+/** 静默落盘一个标签：有路径走 save，无路径进 scratch */
+async function flushTabAutosave(t: Tab): Promise<void> {
+  if (t.id === activeId) t.state = view.state
+  if (!isTabDirty(t)) return
+  if (t.path) {
+    const res = await window.api.save(t.path, t.state.doc.toString(), t.fp)
+    if (res) {
+      t.savedDoc = t.state.doc
+      markSaved()
+    }
+  } else {
+    t.scratchId ??= `tab-${Date.now()}-${t.id}`
+    await window.api.scratchSave(t.scratchId, t.state.doc.toString(), t.fp)
+  }
+}
+
+async function flushAutosave(): Promise<void> {
+  const t = activeTab()
+  if (t) await flushTabAutosave(t)
+}
+
+window.addEventListener('blur', () => {
+  for (const t of [...tabs]) void flushTabAutosave(t)
+})
 
 async function handleMenu(action: MenuAction): Promise<void> {
   switch (action) {
@@ -397,6 +461,79 @@ window.api.onFileOpened((doc: DocPayload) => {
 // 命令行 / Finder 传来的是目录时，在侧边栏里打开它
 window.api.onFolderOpened((dir) => void sidebar.open(dir))
 
+// ---------- P0-3 外部变更 ----------
+window.api.onFileChangedExternal((path) => void handleExternalChange(path))
+
+async function handleExternalChange(path: string): Promise<void> {
+  const t = tabs.find((x) => x.path === path)
+  if (!t) return
+  let disk: DocPayload
+  try {
+    disk = await window.api.read(path)
+  } catch {
+    t.stale = true
+    syncStatus(true)
+    return
+  }
+  const curText = t.id === activeId ? view.state.doc.toString() : t.state.doc.toString()
+  // 与磁盘一致 → 是我们自己的自动保存触发的监听事件，忽略
+  if (encode(curText, t.fp) === encode(disk.content, disk.fingerprint)) return
+
+  if (t.id === activeId) {
+    if (!isTabDirty(t)) {
+      // 干净：静默重载，保留滚动与光标
+      const scroll = view.scrollDOM.scrollTop
+      const sel = view.state.selection
+      t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
+      t.savedDoc = t.state.doc
+      t.fp = disk.fingerprint
+      fingerprint = disk.fingerprint
+      view.setState(t.state)
+      view.dispatch({ selection: sel })
+      requestAnimationFrame(() => {
+        view.scrollDOM.scrollTop = scroll
+      })
+      syncMode()
+      syncStatus(true)
+      updateOutline()
+      return
+    }
+    const choice = await window.api.confirmReload(tabTitle(t))
+    if (choice === 'reload') {
+      const scroll = view.scrollDOM.scrollTop
+      const sel = view.state.selection
+      t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
+      t.savedDoc = t.state.doc
+      t.fp = disk.fingerprint
+      fingerprint = disk.fingerprint
+      view.setState(t.state)
+      view.dispatch({ selection: sel })
+      requestAnimationFrame(() => {
+        view.scrollDOM.scrollTop = scroll
+      })
+      syncMode()
+      syncStatus(true)
+      updateOutline()
+    }
+    // 'keep'：保留编辑器版本，不做任何事（后续自动保存会覆盖外部改动）
+    return
+  }
+
+  // 非活动标签：干净就静默换内容，脏则标记失效
+  if (!isTabDirty(t)) {
+    t.state = createState(disk.content, listener, {
+      dir: dirname(path),
+      sourceMode: t.sourceMode
+    })
+    t.savedDoc = t.state.doc
+    t.fp = disk.fingerprint
+    syncStatus(true)
+  } else {
+    t.stale = true
+    syncStatus(true)
+  }
+}
+
 // 暴露给冒烟脚本和开发者控制台，方便在没法手点界面时驱动编辑器
 ;(window as unknown as { __typmd: { view: EditorView; sidebar: Sidebar } }).__typmd = {
   view,
@@ -409,3 +546,15 @@ syncMode()
 syncStatus(true)
 scheduleCount()
 view.focus()
+
+// P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签
+void (async () => {
+  const list = await window.api.scratchList()
+  if (!list.length) return
+  tabs = tabs.filter((t) => !(t.path === null && !isTabDirty(t)))
+  if (!tabs.length) activeId = 0
+  for (const s of list) {
+    const t = spawnTab(createState(s.content, listener, { sourceMode }), null, s.fp)
+    t.scratchId = s.id
+  }
+})()

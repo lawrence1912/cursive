@@ -2,6 +2,8 @@ export interface TabItem {
   id: number
   title: string
   dirty: boolean
+  /** 磁盘文件被外部修改且本标签有未保存改动 */
+  stale?: boolean
 }
 
 /** 顶部标签栏：点击激活、× 关闭、中键关闭。每次全量重建（标签数小，无所谓） */
@@ -50,6 +52,13 @@ export class TabBar {
         const dot = document.createElement('span')
         dot.className = 'tab-dirty'
         el.appendChild(dot)
+      }
+      if (t.stale) {
+        const warn = document.createElement('span')
+        warn.className = 'tab-stale'
+        warn.textContent = '⚠'
+        warn.title = '文件在外部被修改，此标签的未保存改动已过期'
+        el.appendChild(warn)
       }
 
       const close = document.createElement('span')

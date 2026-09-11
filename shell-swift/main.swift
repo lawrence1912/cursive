@@ -59,7 +59,7 @@ let BRIDGE_JS = """
 (() => {
   const pending = new Map()
   let seq = 0
-  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [] }
+  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [], 'file:changed-externally': [] }
 
   function call(method, args = []) {
     return new Promise((resolve, reject) => {
@@ -80,7 +80,12 @@ let BRIDGE_JS = """
     openExternal: (url) => call('openExternal', [url]),
     pickFolder: () => call('pickFolder'),
     readDir: (path) => call('readDir', [path]),
-    lastFolder: () => call('lastFolder')
+    lastFolder: () => call('lastFolder'),
+    scratchSave: (id, content, fp) => call('scratchSave', [id, content, fp]),
+    scratchList: () => call('scratchList'),
+    scratchClear: (id) => call('scratchClear', [id]),
+    confirmReload: (name) => call('confirmReload', [name]),
+    openTabs: (paths) => call('openTabs', [paths])
   }
 
   function subscribe(event, fn) {
@@ -93,6 +98,7 @@ let BRIDGE_JS = """
     onMenu: (fn) => subscribe('menu', fn),
     onFileOpened: (fn) => subscribe('file:opened', fn),
     onFolderOpened: (fn) => subscribe('folder:opened', fn),
+    onFileChangedExternal: (fn) => subscribe('file:changed-externally', fn),
 
     // —— 以下供原生侧回调 ——
     _resolve: (id, value) => {
@@ -371,6 +377,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     /// 外部变更监听：path → DispatchSource
     var watchers: [String: DispatchSourceFileSystemObject] = [:]
     var lastNotify: [String: Date] = [:]
+
+    var scratchDir: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("typmd/scratch", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// P0-3：外部变更监听。rename/delete 后必须重开重注册（rename-replace 保存会让 fd 失效）
+    private func watch(_ path: String) {
+        watchers[path]?.cancel()
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { watchers.removeValue(forKey: path); return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self, let src = self.watchers[path] else { return }
+            let data = src.data
+            if data.contains(.rename) || data.contains(.delete) { self.watch(path) }
+            if let last = self.lastNotify[path], Date().timeIntervalSince(last) < 0.8 { return }
+            self.lastNotify[path] = Date()
+            self.webView.evaluateJavaScript(
+                "window.__shellEmit('file:changed-externally', \(jsonLiteral(path)))")
+        }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        watchers[path] = src
+    }
+
+    private func updateWatchers(_ paths: [String]) {
+        let set = Set(paths)
+        for (p, src) in watchers where !set.contains(p) {
+            src.cancel()
+            watchers.removeValue(forKey: p)
+        }
+        for p in paths where watchers[p] == nil { watch(p) }
+    }
     var pdfExporter: PDFExporter?
 
     // ---- 启动 ----
@@ -691,6 +734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let st = args[0] as? [String: Any] ?? [:]
             let path = st["path"] as? String
             docPath = path
+            if let p = path { updateWatchers([p]) }
             dirty = st["dirty"] as? Bool ?? false
             let name = path.map { ($0 as NSString).lastPathComponent } ?? "未命名"
             window.title = "\(dirty ? "• " : "")\(name) — typmd"
@@ -743,6 +787,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "lastFolder":
             respond(id, UserDefaults.standard.string(forKey: "lastFolder") ?? NSNull())
 
+        case "scratchSave":
+            guard let sid = args[0] as? String, let content = args[1] as? String,
+                  let fpDict = args[2] as? [String: Any] else { respond(id, NSNull()); break }
+            let fp = Fingerprint(eol: fpDict["eol"] as? String ?? "\n", bom: fpDict["bom"] as? Bool ?? false)
+            let payload: [String: Any] = [
+                "content": content, "fingerprint": ["eol": fp.eol, "bom": fp.bom],
+                "savedAt": ISO8601DateFormatter().string(from: Date())
+            ]
+            do {
+                let data = try JSONSerialization.data(withJSONObject: payload)
+                try data.write(to: scratchDir.appendingPathComponent("\(sid).json"))
+                respond(id, true)
+            } catch { reject(id, "scratch 写入失败：\(error.localizedDescription)") }
+
+        case "scratchList":
+            var list: [[String: Any]] = []
+            if let files = try? FileManager.default.contentsOfDirectory(at: scratchDir, includingPropertiesForKeys: nil) {
+                for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where f.pathExtension == "json" {
+                    if let data = try? Data(contentsOf: f),
+                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let content = obj["content"] as? String,
+                       let fp = obj["fingerprint"] as? [String: Any] {
+                        list.append([
+                            "id": f.deletingPathExtension().lastPathComponent,
+                            "content": content,
+                            "fp": ["eol": fp["eol"] ?? "\n", "bom": fp["bom"] ?? false]
+                        ])
+                    }
+                }
+            }
+            respond(id, list)
+
+        case "scratchClear":
+            if let sid = args[0] as? String {
+                try? FileManager.default.removeItem(at: scratchDir.appendingPathComponent("\(sid).json"))
+            }
+            respond(id, true)
+
+        case "confirmReload":
+            let alert = NSAlert()
+            alert.messageText = "文件已在外部被修改"
+            alert.informativeText = "\(args[0] as? String ?? "文档") 在外部被修改，是否重新载入？保留我的版本将放弃磁盘上的改动。"
+            alert.addButton(withTitle: "重新载入")
+            alert.addButton(withTitle: "保留我的版本")
+            let choice = alert.runModal() == .alertFirstButtonReturn ? "reload" : "keep"
+            respond(id, choice)
+
+        case "openTabs":
+            if let paths = args[0] as? [String] { updateWatchers(paths) }
+            respond(id, NSNull())
+
         case "console":
             FileHandle.standardError.write(((args.map { "\($0)" }.joined(separator: " ")) + "\n").data(using: .utf8)!)
 
@@ -771,6 +866,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.runProbe() }
         flushPendingOpen()
+        // P0-3 验收：+1.5s 模拟外部修改（干净标签应静默重载）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, let p = self.lastDocPath,
+                  let h = FileHandle(forWritingAtPath: p) else { return }
+            h.seekToEndOfFile()
+            h.write("external-append-marker\n".data(using: .utf8)!)
+            try? h.close()
+        }
     }
 
     /// didFinish 可能早于渲染层模块执行完（监听器未注册时 emit 会静默丢失），
@@ -836,8 +939,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let source = lastDocPath ?? "/tmp/typmd-e2e/img.md"
         let outPath = "/tmp/typmd-e2e/roundtrip.out"
         let body = """
+        try {
         const doc = await window.api.read(path)
-        await window.api.save(outPath, doc.content, doc.fingerprint)
+        const reloaded = window.__typmd.view.state.doc.toString().includes('external-append-marker')
+        // P0-2 验收：编辑器追加标记 → 2s 防抖自动保存应落盘
+        const v = window.__typmd.view
+        v.dispatch({ changes: { from: v.state.doc.length, insert: '\\nautosave-check-marker' } })
+        await new Promise(r => setTimeout(r, 2600))
+        await window.api.save(outPath, v.state.doc.toString(), doc.fingerprint)
+        const after = await window.api.read(path)
         const img = document.querySelector('.cm-lp-image img')
         // 侧边栏开关回归验证：发两次菜单事件，查 computed display
         window.__shellEmit('menu', 'view:toggle-sidebar')
@@ -853,12 +963,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           counts[cls] = document.querySelectorAll('.' + cls).length
         return {
           fingerprint: doc.fingerprint,
+          autosaved: after.content.includes('autosave-check-marker'),
+          reloaded,
+          jsOK: true,
           img: img
             ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
             : null,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           counts,
           cmLines: document.querySelectorAll('.cm-line').length
+        }
+        } catch (e) {
+          return { jsError: String(e), stack: e && e.stack ? String(e.stack).slice(0, 300) : null }
         }
         """
         webView.callAsyncJavaScript(

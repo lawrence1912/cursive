@@ -33,6 +33,22 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 1. **`app://r/<相对路径>`** → 服务 `out/renderer` 静态资源。原因：`<script type="module" crossorigin>` 在 WKWebView 的 `file://` 下因 opaque origin **静默失败**。壳已实现 `FileSchemeHandler`（含路径穿越防护）。
 2. **`safe-file://local/<绝对路径>`** → Markdown 图片加载。渲染层由 `src/renderer/editor/live-preview/decorate.ts` 生成这种 URL。壳侧已实现，**E2E 验证中文/空格文件名图片可加载**。
 
+## 契约 v2（P0 自动保存 / 崩溃恢复 / 外部变更）
+
+- `TypmdApi` 新增：`scratchSave(id,content,fp)`（无路径文档静默写
+  `~/Library/Application Support/typmd/scratch/<id>.json`）、`scratchList()`、
+  `scratchClear(id)`、`confirmReload(name) → 'reload'|'keep'`、`openTabs(paths)`
+  （壳据此注册外部变更监听）；推送通道新增 `file:changed-externally(path)`
+- 自动保存：停止输入 2s / 切标签 / 失焦时静默落盘，**必须走 encodeDoc 指纹路径**
+  （E2E 验证字节级一致）；无路径文档进 scratch；真正保存/关闭时清 scratch
+- 外部变更：壳侧 DispatchSource 监听 openTabs 的所有路径；
+  **rename/delete 后必须重开重注册**（rename-replace 保存会让 fd 失效，事件只来一次）；
+  0.8s 节流。渲染层收到后：与磁盘一致（自己的自动保存触发）→ 忽略；
+  干净 → 静默重载保留滚动/光标；脏 → confirmReload 弹窗；非活动标签脏 → 标记 ⚠ 失效
+- 已知坑：Swift 三引号字符串里的 `\n` 是真实换行 —— 拼进 JS 字符串字面量会变成
+  跨行语法错误（callAsyncJavaScript 报 "A JavaScript exception occurred" 且
+  try/catch 接不住，因为是 parse 错误）。要写 `\\n`
+
 ## 已踩坑（勿再踩）
 
 - ⌘C/⌘V 在 WKWebView 不生效，除非应用菜单里有接线的「编辑」菜单（`Selector("cut:")` 等）
