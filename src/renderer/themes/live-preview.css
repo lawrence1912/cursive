@@ -1,0 +1,128 @@
+/* 实时预览的呈现层。
+   这些类名全部由 live-preview 插件通过装饰器挂上，
+   源代码模式把插件撤掉，样式自然全部消失 —— 不需要另写一套。 */
+
+/* ---------- 标题 ---------- */
+.cm-lp-h1, .cm-lp-h2, .cm-lp-h3, .cm-lp-h4, .cm-lp-h5, .cm-lp-h6 {
+  font-weight: 700;
+  line-height: 1.35;
+  padding-top: 0.8em;
+}
+.cm-lp-h1 { font-size: 1.8em; }
+.cm-lp-h2 { font-size: 1.45em; }
+.cm-lp-h3 { font-size: 1.22em; }
+.cm-lp-h4 { font-size: 1.08em; }
+.cm-lp-h5 { font-size: 1em; }
+.cm-lp-h6 { font-size: 0.94em; color: var(--muted); }
+
+/* ---------- 引用 ---------- */
+.cm-lp-quote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.9em;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ---------- 代码块 ----------
+   逐行铺背景，行与行之间没有间隙，视觉上就连成一整块 */
+.cm-lp-code {
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 0.9em;
+  line-height: 1.6;
+  padding-left: 0.9em;
+  box-shadow: inset 3px 0 0 var(--border);
+}
+
+/* ---------- 表格 ----------
+   真正的表格渲染是 M2，先用等宽字体让管道符对齐 */
+.cm-lp-table {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--fg);
+}
+
+/* ---------- front matter ---------- */
+.cm-lp-frontmatter {
+  font-family: var(--mono);
+  font-size: 0.82em;
+  color: var(--muted);
+  background: var(--code-bg);
+  padding-left: 0.9em;
+  line-height: 1.7;
+}
+
+/* ---------- 列表 ---------- */
+.cm-lp-bullet {
+  display: inline-block;
+  width: 1.1em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.cm-lp-ordinal {
+  color: var(--accent);
+  font-weight: 600;
+}
+.cm-lp-checkbox {
+  appearance: none;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.45em 0 0;
+  vertical-align: -0.12em;
+  border: 1.5px solid var(--mark);
+  border-radius: 0.28em;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.cm-lp-checkbox:hover { border-color: var(--accent); }
+.cm-lp-checkbox:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  /* 勾用 SVG 画，免得依赖字体里的 ✓ */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
+  background-size: 100%;
+}
+
+/* ---------- 分隔线 ---------- */
+.cm-lp-rule {
+  display: block;
+  padding: 0.5em 0;
+}
+.cm-lp-rule hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+/* ---------- 行内 ---------- */
+.cm-lp-inline-code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.34em;
+}
+.cm-lp-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.cm-lp-link:hover { border-bottom-color: var(--accent); }
+
+/* ---------- 图片 ---------- */
+.cm-lp-image img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 6px;
+  vertical-align: middle;
+}
+.cm-lp-image.is-broken {
+  font-size: 0.85em;
+  color: var(--muted);
+  background: var(--code-bg);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.3em 0.6em;
+}

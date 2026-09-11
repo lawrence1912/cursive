@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: safe-file:; script-src 'self'"
+    />
+    <title>typmd</title>
+  </head>
+  <body>
+    <div id="drag-strip"></div>
+    <div id="workspace">
+      <!-- #sidebar 由 ui/sidebar.ts 插到这里 -->
+      <main id="editor-host"></main>
+    </div>
+    <footer id="status-bar">
+      <span id="status-file">未命名</span>
+      <span class="spacer"></span>
+      <span id="status-count"></span>
+      <span id="status-mode"></span>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

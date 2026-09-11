@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; width: 1024px; height: 1024px; background: transparent; }
+  /* Apple 的 macOS 图标网格：1024 画布里圆角矩形占 824，四周留透明边 */
+  .squircle {
+    position: absolute; left: 100px; top: 100px;
+    width: 824px; height: 824px;
+    border-radius: 185px;
+    background: linear-gradient(160deg, #3b4655 0%, #232a33 55%, #171b21 100%);
+    box-shadow: inset 0 6px 0 rgba(255,255,255,.10), inset 0 -10px 24px rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center;
+    gap: 40px;
+  }
+  .hash {
+    font: 700 430px/1 -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+    color: #f4f6f8;
+    letter-spacing: -18px;
+    margin-top: -18px;
+  }
+  /* 光标条 —— 这个应用的标志：光标所到之处才显出源码 */
+  .caret {
+    width: 46px; height: 330px; border-radius: 23px;
+    background: linear-gradient(180deg, #6bb6ff, #2f7bd4);
+    box-shadow: 0 0 40px rgba(80,160,255,.55);
+  }
+</style>
+<div class="squircle"><span class="hash">#</span><span class="caret"></span></div>
