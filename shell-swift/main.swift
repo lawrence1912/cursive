@@ -182,6 +182,24 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
+// MARK: - JSON / 路径工具
+
+/// Any → JSON 字面量（可直接嵌进 evaluateJavaScript 表达式）
+func jsonLiteral(_ v: Any) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: [v]),
+          let s = String(data: data, encoding: .utf8) else { return "null" }
+    return String(s.dropFirst().dropLast())   // 去掉数组包装 [ ]
+}
+
+/// renderer 资源根：优先 cwd/out/renderer（项目根运行），否则按可执行位置回退
+func findRendererRoot() -> URL {
+    let cwd = FileManager.default.currentDirectoryPath
+    let byCwd = URL(fileURLWithPath: "\(cwd)/out/renderer")
+    if FileManager.default.fileExists(atPath: byCwd.path) { return byCwd }
+    let exeDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    return exeDir.deletingLastPathComponent().appendingPathComponent("out/renderer")
+}
+
 // MARK: - 原生拖拽条
 // `-webkit-app-region: drag` 是 Electron 专有扩展，WKWebView 不认识；
 // 且 WKWebView 把 mouseDownCanMoveWindow 重写为 false（自己要处理鼠标事件），
@@ -190,6 +208,132 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
 final class DragStripView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+// MARK: - PDF 导出：离屏 A4 视图复用同一 renderer 渲染，createPDF 落盘
+// 不改 renderer：加载 app://r/index.html，等 __typmd 就绪后用 __shellEmit 注入文档，
+// 注入打印 CSS（隐 UI/白底/高度自适应），等字体+图片稳定后 capture。
+
+final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    private let content: String
+    private let docPath: String?
+    private let out: URL
+    private let rendererRoot: URL
+    private var wv: WKWebView?
+    private var completion: ((Result<URL, Error>) -> Void)?
+
+    init(content: String, docPath: String?, out: URL, rendererRoot: URL) {
+        self.content = content
+        self.docPath = docPath
+        self.out = out
+        self.rendererRoot = rendererRoot
+    }
+
+    func run(completion: @escaping (Result<URL, Error>) -> Void) {
+        self.completion = completion
+        let config = WKWebViewConfiguration()
+        config.setURLSchemeHandler(FileSchemeHandler(root: rendererRoot), forURLScheme: "app")
+        config.setURLSchemeHandler(FileSchemeHandler(root: nil), forURLScheme: "safe-file")
+        config.userContentController.add(self, name: "shell")
+        config.userContentController.addUserScript(
+            WKUserScript(source: BRIDGE_JS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // A4：595 × 842 pt；高度在测量后由 createPDF 的 rect 决定
+        let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 595, height: 842), configuration: config)
+        wv.navigationDelegate = self
+        self.wv = wv
+        wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        waitForEditor { [weak self] in self?.injectDoc() }
+    }
+
+    private func fail(_ msg: String) {
+        completion?(.failure(NSError(domain: "typmd.export", code: 1,
+                                     userInfo: [NSLocalizedDescriptionKey: msg])))
+        completion = nil
+    }
+
+    private func waitForEditor(attempt: Int = 0, then: @escaping () -> Void) {
+        guard attempt < 100 else { return fail("渲染层初始化超时") }
+        wv?.evaluateJavaScript("typeof window.__typmd === 'object'") { [weak self] ready, _ in
+            guard let self else { return }
+            if (ready as? Bool) == true { then() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.waitForEditor(attempt: attempt + 1, then: then) } }
+        }
+    }
+
+    private func injectDoc() {
+        let doc: [String: Any] = [
+            "path": docPath ?? "",
+            "content": content,
+            "fingerprint": ["eol": "\n", "bom": false]
+        ]
+        wv?.evaluateJavaScript("window.__shellEmit('file:opened', \(jsonLiteral(doc)))") {
+            [weak self] _, _ in self?.injectPrintCSS()
+        }
+    }
+
+    private static let printCSS = """
+    html, body { height: auto !important; overflow: visible !important; }
+    #drag-strip, #status-bar, #sidebar { display: none !important; }
+    body { display: block !important; background: #fff !important; color: #24292f !important; }
+    :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb; --muted: #8b949e; --sel: transparent; }
+    #workspace { display: block !important; }
+    #editor-host { overflow: visible !important; height: auto !important; padding: 46px 42px !important; }
+    .cm-editor { height: auto !important; background: #fff !important; }
+    .cm-scroller { overflow: visible !important; height: auto !important; }
+    .cm-content { padding-bottom: 40px !important; }
+    .cm-cursor, .cm-dropCursor { display: none !important; }
+    .cm-activeLine, .cm-activeLineGutter, .cm-selectionBackground { background: transparent !important; }
+    """
+
+    private func injectPrintCSS() {
+        let js = """
+        (() => { const s = document.createElement('style'); s.textContent = \(jsonLiteral(Self.printCSS)); document.head.appendChild(s); return true })()
+        """
+        wv?.evaluateJavaScript(js) { [weak self] _, _ in self?.settleAndCapture() }
+    }
+
+    private func settleAndCapture() {
+        let body = """
+        await document.fonts.ready
+        await Promise.all([...document.images].map(i => i.decode().catch(() => {})))
+        await new Promise(r => setTimeout(r, 400))
+        return document.documentElement.scrollHeight
+        """
+        wv?.callAsyncJavaScript(body, arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard let self else { return }
+            let height: CGFloat
+            if case .success(let v) = result, let n = v as? NSNumber { height = CGFloat(n.doubleValue) }
+            else { height = 842 }
+            self.capture(height: max(height, 100))
+        }
+    }
+
+    private func capture(height: CGFloat) {
+        wv?.evaluateJavaScript("window.scrollTo(0, 0)", completionHandler: nil)
+        let cfg = WKPDFConfiguration()
+        cfg.rect = CGRect(x: 0, y: 0, width: 595, height: height)
+        wv?.createPDF(configuration: cfg) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let data):
+                do { try data.write(to: self.out); self.completion?(.success(self.out)) }
+                catch { self.completion?(.failure(error)) }
+            case .failure(let e):
+                self.completion?(.failure(e))
+            }
+            self.completion = nil
+        }
+    }
+
+    /// print 页里所有 api 请求一律回 null（编辑器 UI 的启动调用不影响渲染）
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let d = message.body as? [String: Any], let id = d["id"] as? Int else { return }
+        wv?.evaluateJavaScript("window.api._resolve(\(id), null)")
+    }
 }
 
 // MARK: - AppDelegate
@@ -201,18 +345,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     var forceClose = false
     var pendingOpen: String?
     var lastDocPath: String?
+    /// 渲染层推来的当前文档路径（setDocState），用于导出文件名与相对图片解析
+    var docPath: String?
+    var pdfExporter: PDFExporter?
 
     // ---- 启动 ----
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
-        let cwd = FileManager.default.currentDirectoryPath
-        let rendererRoot = URL(fileURLWithPath: "\(cwd)/out/renderer")
-        // 从 Finder/其他目录启动时 cwd 不是项目根，按可执行文件位置回退（shell-swift/ 的上级）
-        let exeDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-        let fallback = exeDir.deletingLastPathComponent().appendingPathComponent("out/renderer")
-        let root = FileManager.default.fileExists(atPath: rendererRoot.path) ? rendererRoot : fallback
-        config.setURLSchemeHandler(FileSchemeHandler(root: root), forURLScheme: "app")
+        config.setURLSchemeHandler(FileSchemeHandler(root: findRendererRoot()), forURLScheme: "app")
         config.setURLSchemeHandler(FileSchemeHandler(root: nil), forURLScheme: "safe-file")
         config.userContentController.add(self, name: "shell")
         config.userContentController.addUserScript(
@@ -295,6 +436,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         file.addItem(item("保存", "file:save", key: "s"))
         file.addItem(item("另存为…", "file:save-as", key: "s", modifiers: [.command, .shift]))
         file.addItem(.separator())
+        file.addItem(NSMenuItem(title: "导出为 PDF…", action: #selector(exportPDF(_:)), keyEquivalent: "p"))
+        file.addItem(.separator())
         file.addItem(NSMenuItem(title: "关闭窗口", action: Selector(("performClose:")), keyEquivalent: "w"))
         fileItem.submenu = file
 
@@ -345,6 +488,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     @objc func zoomOut(_ sender: Any?) { webView.pageZoom /= 1.1 }
     @objc func resetZoom(_ sender: Any?) { webView.pageZoom = 1.0 }
 
+    // ---- PDF 导出（离屏 A4 渲染，不走浏览器打印） ----
+
+    @objc func exportPDF(_ sender: Any?) {
+        // 从渲染层取实时内容（含未保存的修改）
+        fetchLiveContent { [weak self] in self?.runExportFlow(content: $0) }
+    }
+
+    private func fetchLiveContent(_ then: @escaping (String) -> Void) {
+        webView.evaluateJavaScript("(window.__typmd ? window.__typmd.view.state.doc.toString() : '')") {
+            content, _ in
+            if let text = content as? String { then(text) }
+        }
+    }
+
+    private func runExportFlow(content: String) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        let base = docPath.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? "未命名"
+        panel.nameFieldStringValue = base + ".pdf"
+        guard panel.runModal() == .OK, let out = panel.url else { return }
+
+        let exporter = PDFExporter(content: content, docPath: docPath, out: out, rendererRoot: findRendererRoot())
+        pdfExporter = exporter
+        exporter.run { [weak self] result in
+            self?.pdfExporter = nil
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let url):
+                    let alert = NSAlert()
+                    alert.messageText = "PDF 已导出"
+                    alert.informativeText = url.path
+                    alert.addButton(withTitle: "好")
+                    alert.addButton(withTitle: "在 Finder 中显示")
+                    if alert.runModal() == .alertSecondButtonReturn {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                case .failure(let e):
+                    self?.showError("导出失败", e.localizedDescription)
+                }
+            }
+        }
+    }
+
     // ---- 关闭拦截（与 Electron 版行为一致）----
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -355,11 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     // ---- shell -> renderer 推送 ----
 
-    private func jsValue(_ v: Any) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [v]),
-              let s = String(data: data, encoding: .utf8) else { return "null" }
-        return String(s.dropFirst().dropLast())   // 去掉数组包装 [ ]
-    }
+    private func jsValue(_ v: Any) -> String { jsonLiteral(v) }
 
     private func openPath(_ path: String) {
         do {
@@ -427,6 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "setDocState":
             let st = args[0] as? [String: Any] ?? [:]
             let path = st["path"] as? String
+            docPath = path
             dirty = st["dirty"] as? Bool ?? false
             let name = path.map { ($0 as NSString).lastPathComponent } ?? "未命名"
             window.title = "\(dirty ? "• " : "")\(name) — typmd"
@@ -592,7 +775,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 out["bytesEqual"] = false
             }
             self.writeJSON(out, to: "/tmp/typmd-shell-e2e.json")
-            NSApp.terminate(nil)
+            // TYPMD_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板）
+            if let pdfOut = ProcessInfo.processInfo.environment["TYPMD_SMOKE_PDF"] {
+                self.fetchLiveContent { text in
+                    let exporter = PDFExporter(
+                        content: text, docPath: self.lastDocPath,
+                        out: URL(fileURLWithPath: pdfOut), rendererRoot: findRendererRoot())
+                    self.pdfExporter = exporter
+                    exporter.run { result in
+                        self.pdfExporter = nil
+                        var pdfResult: [String: Any] = ["out": pdfOut]
+                        switch result {
+                        case .success(let url):
+                            pdfResult["bytes"] = (try? Data(contentsOf: url))?.count ?? 0
+                        case .failure(let e):
+                            pdfResult["error"] = e.localizedDescription
+                        }
+                        self.writeJSON(pdfResult, to: "/tmp/typmd-shell-pdf.json")
+                        NSApp.terminate(nil)
+                    }
+                }
+            } else {
+                NSApp.terminate(nil)
+            }
         }
     }
 }

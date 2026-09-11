@@ -42,6 +42,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 - 大字符串回传：`evaluateJavaScript("window.api._resolve(\(id), <json>)")`，JSON 用 `JSONSerialization` 生成，别手拼；异步通道用 `callAsyncJavaScript(body, arguments:, in: nil, in: .page)`（body 是第一个无标签参数）
 - `#drag-strip` 是 Electron 的 `-webkit-app-region` 拖拽区 —— **WKWebView 不认识，且 WKWebView 把 `mouseDownCanMoveWindow` 重写为 false**，`isMovableByWindowBackground` 形同虚设。壳用原生 `DragStripView`（38px 透明 NSView 叠在 webview 顶部）实现拖拽；**高度与 base.css 的 `--drag-strip: 38px` 强耦合，改 CSS 记得同步壳**
 - 本机 agent 环境里 Electron 起不来（GPU/network service 崩溃循环），renderer 行为用壳内探针 + vitest 验证，不要浪费时间去修 Electron 的环境问题
+- `WKPDFConfiguration.rect` 输出**单页** PDF（页尺寸 = rect），不是分页文档；要 A4 分页需走 `WKWebView.printOperation`（NSPrintOperation）或 print CSS @page，当前长条页方案对自用足够
 
 ## 自检探针 / E2E（每次改壳必跑）
 
@@ -50,6 +51,10 @@ TYPMD_SMOKE=1 ./shell-swift/typmd-shell <file.md>
 # +3s 写 /tmp/typmd-shell-check.json   （DOM：hasApi/cm/sidebar/status）
 # +4s 写 /tmp/typmd-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后自动退出
 ```
+
+另加 `TYPMD_SMOKE_PDF=<路径>`：E2E 后顺带导出 PDF（绕过保存面板），结果写 `/tmp/typmd-shell-pdf.json`（bytes/error）。
+
+验证 PDF 不要用 PDFKit 提取文本（CJK 提取严重失真），改用结构信号：页尺寸（`PDFDocument.page.bounds` 应为 595×内容高）、`strings out.pdf | grep -c "Subtype */Image"`（图片对象数）、`sips -s format png` 转 PNG 目检。
 
 ⚠️ 探针/E2E **只在 `TYPMD_SMOKE` 环境变量下运行**；不带该变量启动是正常交互应用，绝不自动退出。
 （历史教训：曾把 `NSApp.terminate()` 编进默认路径，导致「启动几秒后闪退」。）
@@ -69,7 +74,7 @@ PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹�
 
 1. ~~safe-file://local SchemeHandler（图片）~~ ✅ 含双重解码坑
 2. ~~argv 打开文档 + E2E 验证（read→save 往返/装饰/图片）~~ ✅；**待手动验证**：打开/另存为面板、脏标记关闭拦截、Finder 双击 .md（`application(_:openFile:)` 已有雏形）
-3. PDF 导出：`WKWebView.createPDF(configuration:)`（macOS 11.3+ 公开 API）
+3. ~~PDF 导出~~ ✅ 文件 →「导出为 PDF…」（⌘P）：离屏 595pt(A4) WKWebView 加载同一 renderer，`__shellEmit` 注入实时内容（含未保存修改），注入打印 CSS（隐 sidebar/状态栏/drag-strip、白底、高度自适应），等 `document.fonts.ready` + 图片 `decode()` 后 `createPDF`。输出为**单页长条 PDF**（页高=内容高），打印样式在 `PDFExporter.printCSS`
 4. 最近文件（`NSDocumentController`）/ 拖拽 .md / Dock 菜单
 5. 打包脚本：`.app` bundle（Info.plist：CFBundleDocumentTypes `.md` 关联 rank=Alternate、NSHighResolutionCapable）+ `codesign --force --deep --sign -` + `create-dmg`
 6. （可选）Sparkle 自动更新（Typora macOS 同款）
