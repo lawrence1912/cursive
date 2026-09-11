@@ -66,9 +66,12 @@ PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹�
 ## 构建与运行
 
 ```sh
-./shell-swift/build.sh          # 或: swiftc -O -swift-version 5 shell-swift/main.swift -o shell-swift/typmd-shell
-./shell-swift/typmd-shell [file.md]   # 必须在项目根运行（app:// 指向 ./out/renderer）
+./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/typmd.app
+TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
+./shell-swift/typmd-shell [file.md]   # 开发运行（项目根执行；资源查找 Bundle → cwd → exe 相对）
 ```
+
+**约定：每轮改动收尾必须跑 `release.sh`，让用户随时拿到全绿的新包。**
 
 ## 路线图
 
