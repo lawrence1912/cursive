@@ -2,7 +2,7 @@
 
 ## 一句话
 
-Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决策迁移到「Swift 壳 + WKWebView」**，`src/renderer`（CodeMirror 6）零改动复用。
+Typora 风格的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+ `src/renderer`（CodeMirror 6）**；Electron 版已彻底删除（P0-4），构建链只剩 Vite → `out/renderer`。
 
 ## 功能要点（renderer）
 
@@ -17,11 +17,11 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 - 只做 macOS，不做跨平台
 - 不引入 Rust/Tauri
 - 壳 = Swift + AppKit + WKWebView；原型在 `shell-swift/main.swift`，已探针验证渲染进程完整启动
-- Electron 版保留为对照/退路，迁移收尾后再删相关依赖
+- **P0-4 已完成**：删除 `src/main` / `src/preload` / electron 系依赖与配置，构建只走根目录 `vite.config.ts`（root=`src/renderer`，base=`./`，output=`out/renderer`）；`electron-vite.config.ts`、`electron-builder.config.cjs`、electron/electron-store/electron-vite/electron-builder 均已移除。`package.json` 无 `main` 字段，`npm run build` = `vite build`
 
 ## 架构与契约
 
-- 渲染进程：`src/renderer`，产物 `out/renderer`，纯 CodeMirror 6 —— **禁止让它依赖 Electron**
+- 渲染进程：`src/renderer`，产物 `out/renderer`，纯 CodeMirror 6 —— **构建链里没有 Electron/Node 依赖**，原生能力一律经 `window.api`
 - IPC 契约 = `window.api`（签名见 `src/shared/types.ts` 的 `TypmdApi`），壳侧 1:1 实现：
   - invoke：`openDialog` / `read` / `save` / `saveAs` / `confirmDiscard` / `openExternal` / `pickFolder` / `readDir` / `lastFolder` / `setAppearance`
   - send：`setDocState` / `confirmClose`
@@ -60,14 +60,14 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 - **WebKit 会对自定义 scheme 的 URL 再做一次百分号编码（`%` → `%25`）**，而渲染层拼 safe-file URL 时已经 encodeURI 过了 → handler 逐级解码：解一次文件不存在就再解一次（对字面 `%` 文件名依然成立）
 - 探测图片要用 `.cm-lp-image img`，`.cm-editor img` 会先匹配到 CodeMirror 自己的隐藏占位 `cm-widgetBuffer`（src=null）
 - **live-preview 装饰只铺可视视口（设计如此）**：视口外的图片 widget 不存在，滚动到位才建，不是 bug
-- **CM6 的 parse 是异步分块的**，且 `update()` 的 docChanged/selectionSet/viewportChanged 都不响应 parse 推进 → 首开长文档时深处节点拿不到树、装饰缺失。修复：`buildDecorations` 里用 `ensureSyntaxTree(state, visEnd + 1000)` 把可视范围强制同步解析到位（有限界，不伤大文档）。**这个修复同时修了 Electron 版的同款潜在 bug**
+- **CM6 的 parse 是异步分块的**，且 `update()` 的 docChanged/selectionSet/viewportChanged 都不响应 parse 推进 → 首开长文档时深处节点拿不到树、装饰缺失。修复：`buildDecorations` 里用 `ensureSyntaxTree(state, visEnd + 1000)` 把可视范围强制同步解析到位（有限界，不伤大文档）。（当时 Electron 版也有同款潜在 bug，顺带修了）
 - 编译固定 `swiftc -O -swift-version 5`（避开 Swift 6 严格并发检查）；CLT 即可，无需 Xcode.app
 - 编译输出里 8 个 `use '#selector' instead of Selector(...)` 警告是**刻意的**（undo:/cut:/paste: 等响应链派发必须用字符串选择器），忽略，不要"修"
 - `NSWindow` 脏标记是 `isDocumentEdited` 属性（没有 `setDocumentEdited()`）
 - `NSAlert.runModal()` 返回 `ModalResponse`，做数组下标要 `.rawValue` 运算
 - 大字符串回传：`evaluateJavaScript("window.api._resolve(\(id), <json>)")`，JSON 用 `JSONSerialization` 生成，别手拼；异步通道用 `callAsyncJavaScript(body, arguments:, in: nil, in: .page)`（body 是第一个无标签参数）
 - `#drag-strip` 拖拽（两代实现，现在是确定性方案）：WKWebView 不认 `-webkit-app-region`，且把 `mouseDownCanMoveWindow` 重写为 false。第一代「叠 NSView + isMovableByWindowBackground」**失败**——当时 contentView 就是 webView，`addSubview(_, positioned:, relativeTo: webView)` 相对自身属未定义用法。现在的做法：① 容器视图做 contentView，webView 与 `DragStripView` 平级兄弟；② 条的 `mouseDown` 直接 `window.performDrag(with: event)`（与系统标题栏同源，不依赖任何机制位）。**38px 高度与 base.css `--drag-strip` 强耦合，改 CSS 记得同步壳**；③ `clickCount == 2` 走 `performDoubleClickAction()` —— titleVisibility 藏了系统标题栏，双击缩放 AppKit 不会替你接，得自己读 NSGlobalDomain 的 `AppleActionOnDoubleClick`（Maximize 默认 / Minimize / None）再分派 `performZoom`/`performMiniaturize`。单击那条先进 performDrag 的拖拽循环，跑完才返回，第二击照常带 clickCount=2，两者不打架；④ 条子两端要给标题栏按钮**挖洞**：`hitTest` 在左 72–110、右末尾 42 这两段返回 nil，点击才落得到网页上的 `.tb-btn`（区间按 `webView.pageZoom` 缩放 —— 页面一缩放 CSS px 就不等于点了），**这几个数与 base.css `#drag-strip` 的内边距/按钮尺寸强耦合**；smoke 探针有 `dragStripHit`（原生 hitTest）与 `dblClickZoomed` 自动把关（后者**必须先把窗口设成确定的小 frame**：窗口若已在 standard state，zoom 只会试着回 user state，而新窗口没有 user state，frame 纹丝不动 → 假阴性）
-- 本机 agent 环境里 Electron 起不来（GPU/network service 崩溃循环），renderer 行为用壳内探针 + vitest 验证，不要浪费时间去修 Electron 的环境问题
+- renderer 行为用壳内探针 + vitest 验证（无头环境点不了界面，靠 `/tmp/typmd-shell-*.json` 断言）
 - `WKPDFConfiguration.rect` 输出**单页** PDF（页尺寸 = rect），不是分页文档；要 A4 分页需走 `WKWebView.printOperation`（NSPrintOperation）或 print CSS @page，当前长条页方案对自用足够
 
 ## 自检探针 / E2E（每次改壳必跑）
@@ -111,14 +111,24 @@ TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 1. ~~safe-file://local SchemeHandler（图片）~~ ✅ 含双重解码坑
 2. ~~argv 打开文档 + E2E 验证（read→save 往返/装饰/图片）~~ ✅；**待手动验证**：打开/另存为面板、脏标记关闭拦截、Finder 双击 .md（`application(_:openFile:)` 已有雏形）
 3. ~~PDF 导出~~ ✅ 文件 →「导出为 PDF…」（⌘P）：离屏 595pt(A4) WKWebView 加载同一 renderer，`__shellEmit` 注入实时内容（含未保存修改），注入打印 CSS（隐 sidebar/状态栏/drag-strip、白底、高度自适应），等 `document.fonts.ready` + 图片 `decode()` 后 `createPDF`。输出为**单页长条 PDF**（页高=内容高），打印样式在 `PDFExporter.printCSS`
-4. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `TYPMD_DMG=1` 连 DMG 一起出）：组装 dist/typmd.app（Info.plist 含 .md 关联 rank=Alternate/NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG。产物 ~3.4MB / DMG ~1.7MB。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
+4. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `TYPMD_DMG=1` 连 DMG 一起出）：组装 dist/typmd.app（Info.plist 含 .md 关联 rank=Alternate/NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG。产物 ~3.5MB / DMG ~1.7MB。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
+5. ~~P0-1 最近文件 + Finder 集成~~ ✅ `NSDocumentController` 系统最近列表（打开/保存时 note）、文件菜单「打开最近」10 项 + 清除、Dock 右键；E2E 断言 `recents≥1`
+6. ~~P0-2 自动保存 + 崩溃恢复~~ ✅ 停输入 2s / 切标签 / 失焦静默落盘（走 `encodeDoc` 指纹路径，E2E 断言字节一致）；无路径文档进 scratch，启动恢复为未命名标签；状态栏「已保存 HH:MM」。**坑**：恢复是异步的，不能抢走 argv/Finder 打开的那份焦点，且过滤启动空白页后必须校正 `activeId`（否则状态栏挂一个不存在的文件名）。release.sh 有专门的竞态用例（`TYPMD_SMOKE_SCRATCH_DELAY`）
+7. ~~P0-3 外部变更监听~~ ✅ 壳侧 `DispatchSource` 监听 openTabs 全部路径，0.8s 节流；**rename/delete 后必须重开重注册**（rename-replace 保存会让 fd 失效）；渲染层干净则静默重载保留滚动光标，脏则 `confirmReload`，非活动脏标签标 ⚠
+8. ~~P0-4 删除 Electron~~ ✅ 只留 `src/renderer` + `src/shared`；构建链 = 根 `vite.config.ts`；`scripts/make-icon.mjs` 改为纯 `sips`+`iconutil`（不再依赖 Electron）；README / 本节同步。验收：不装 electron 也能 `npm run build` + `release.sh` 全绿
 
-### 当前这一轮：P0 迁移收尾
+### 已完成（非 P0 清单，可插队项）
 
-- **P0-1** 最近文件（`NSDocumentController.noteNewRecentDocumentURL`）/ 拖拽 .md / Dock 菜单
-- **P0-2** 自动保存 + 崩溃恢复 —— 必须复用 `encodeDoc` 的指纹路径，否则破坏「保存零损耗」
-- **P0-3** 外部变更监听（`DispatchSource`）—— **rename-replace 后 fd 失效必须重注册**，否则第二次外部修改静默丢失。新推送通道 `file:changed-externally`，先补契约
-- **P0-4** 删除 Electron 依赖（保留 `src/renderer`、`src/shared`），更新 README。前置：P0-1 做完 + 上面第 2 条的手动验证清单全过，再删退路
+- ~~P3-4 主题系统（部分）~~ ✅ 浅/深/跟随系统三态、视图菜单、`NSApp.appearance` 同步、localStorage 持久化；**缺**护眼皮肤与扫描 `themes/*.css`
+- ~~P3-5 排版偏好面板~~ ✅ `ui/prefs.ts`（⌘,）：主题/衬线/字号/行距/栏宽 + 恢复默认；改完 `view.requestMeasure()`
+- ~~P2-6 表格点击定位（半）~~ ✅ `TableWidget.ignoreEvent` 放行 mousedown + `editTableOnClick` + `cellSpan`；**缺**增删行列工具栏 / Tab 跨格 / 对齐美化
+
+### 当前这一轮：P1 内容能力
+
+- **P1-1** KaTeX 数学公式（行内 ViewPlugin + 块级 StateField，收紧 `$` 规则别吃货币符号）
+- **P1-2** mermaid（块级 + 懒加载 + `eq()` 缓存；CSP `script-src 'self'` 先只启 flowchart/sequence/gantt/class/state）
+- **P1-3** 方言补齐：脚注 / `==高亮==` / 上下标 / emoji / `[TOC]`（注意与 math 抢 `^`）
+- **P1-4** 代码块增强（语言标签 + 复制）· **P1-5** 图片显示增强（放大/尺寸语法/失败路径）
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
 

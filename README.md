@@ -1,10 +1,12 @@
 # typmd
 
-一个 Typora 风格的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
+一个 Typora 风格的 macOS Markdown 编辑器：单窗格、无分屏、打字即渲染。
 
 ## 当前进度
 
-**已经是所见即所得了。** 打字即渲染，markdown 标记默认隐藏，光标移进某一行才回显源码。侧边栏可以打开文件夹树。
+**已经是所见即所得了。** 打字即渲染，markdown 标记默认隐藏，光标移进某一行才回显源码。
+渲染层是纯 CodeMirror 6，原生能力由 `shell-swift/` 的 Swift + WKWebView 壳提供 ——
+**仓库里没有 Electron**。
 
 | 能力 | 状态 |
 |---|:--|
@@ -12,18 +14,19 @@
 | 打开/保存/另存、脏标记、关闭拦截、原生菜单、查找 | ✅ |
 | 多标签（每标签独立 EditorState） | ✅ |
 | 文件树 · 大纲（滚动跟随） | ✅ |
-| GFM 表格真渲染 | ✅ 只读，光标进入回落源码 |
+| GFM 表格真渲染 + 点单元格进源码改字 | ✅ 浮动工具栏待补 |
+| 自动保存 + 崩溃恢复 · 外部变更监听 | ✅ |
+| 最近文件 · Finder 双击 · Dock 菜单 | ✅ |
 | 导出 PDF | ✅ 单页长条，未分页 |
-| 最近文件 | ⬜ Swift 壳里尚未接回 |
+| 主题切换（浅/深/系统）· 排版偏好（字号/行距/栏宽/衬线） | ✅ |
 | KaTeX 数学 · mermaid · 脚注 | ⬜ |
 | 格式化快捷键 · 输入规则 · 智能粘贴 · 图片落盘 | ⬜ |
-| 自动保存 · 外部变更监听 · 全局搜索 | ⬜ |
-| 专注/打字机模式 · 主题切换 · 排版偏好 | ⬜ |
+| 跨文件全局搜索 · 专注/打字机模式 | ⬜ |
 | 导出 HTML / pandoc | ⬜ |
 
 **当前已渲染**：标题、粗体/斜体/删除线、行内代码、链接、图片、引用、分隔线、
 无序/有序列表、任务复选框（可点击）、代码块（嵌套语言高亮）、YAML front matter、
-表格（等宽对齐）。数学公式和 mermaid 还是源码。
+GFM 表格。数学公式和 mermaid 还是源码。
 
 ## 快捷键
 
@@ -31,7 +34,9 @@
 |---|---|
 | ⌘O / ⌘⇧O | 打开文件 / 打开文件夹 |
 | ⌘S / ⌘⇧S | 保存 / 另存为 |
-| ⌘\ | 显示/隐藏侧边栏 |
+| ⌘P | 导出 PDF |
+| ⌘, | 设置（主题 / 排版） |
+| ⌘\ / ⌘⇧T | 显示/隐藏文件树 / 大纲 |
 | ⌘/ | 源代码模式 |
 | ⌘F | 查找 |
 | ⌘ + 点击链接 | 用浏览器打开 |
@@ -39,39 +44,48 @@
 命令行：`typmd 文件.md` 打开文件，`typmd 目录/` 在侧边栏打开文件夹。
 
 **接下来做什么见 [`ROADMAP.md`](ROADMAP.md)**（现状盘点 + 对标 Typora/MarkText + P0–P4 清单）；
-开发上下文与踩坑记录见 [`CONTEXT.md`](CONTEXT.md)。最初的完整方案在 `~/.claude/plans/spicy-questing-rivest.md`。
+开发上下文与踩坑记录见 [`CONTEXT.md`](CONTEXT.md)。
 
 ## 运行
 
 ```bash
 npm install
-npm run dev        # 开发模式（HMR）
-npm run build      # 构建到 out/
-npm start          # 跑构建产物
-npm test           # 往返保真测试
-npm run typecheck  # 主进程 + 渲染进程分别类型检查
-npm run pack       # 打成 .app（无签名，本地自用）
+npm run build                     # 构建 renderer 到 out/renderer
+./shell-swift/build.sh            # 编译原生壳 → shell-swift/typmd-shell
+./shell-swift/typmd-shell a.md    # 开发运行（资源查找 Bundle → cwd → exe 相对）
 ```
 
-> 若 `npm install` 后启动报 `Error: Electron uninstall`，说明 Electron 二进制没下下来，
-> 手动补一次：`node node_modules/electron/install.js`
+其他脚本：
+
+```bash
+npm run dev        # 浏览器里开发 renderer（HMR，但拿不到 window.api，原生功能不可用）
+npm test           # 往返保真 + 方言 + 表格单测
+npm run typecheck  # 渲染层 + 共享层类型检查
+npm run icon       # 从 build/icon.png 重建 build/icon.icns（想换图标时跑）
+```
 
 ## 架构
 
 ```
 src/
-├─ main/          Electron 主进程：窗口、菜单、文件 IO、对话框
-├─ preload/       contextBridge → window.api（渲染进程唯一的对外通道）
-├─ renderer/      CodeMirror 6 编辑器 + 应用界面
+├─ renderer/      CodeMirror 6 编辑器 + 应用界面（纯 Web，产物 out/renderer）
 └─ shared/        两端共用：类型、换行/BOM 指纹、分词计数
+shell-swift/      Swift + AppKit + WKWebView 原生壳（单文件渐进，优先 AppKit）
 ```
+
+渲染层只认 `window.api`（签名见 `src/shared/types.ts` 的 `TypmdApi`），不碰任何原生能力 ——
+这正是把 Electron 换成 Swift 壳时 renderer 零改动的原因。壳侧 1:1 实现该契约，
+新增通道要三处同步：`types.ts` ↔ `main.swift` ↔ `CONTEXT.md`。
+
+两个自定义协议缺一不可：`app://r/<路径>` 服务渲染资源（WKWebView 下 `file://` 的 ES module
+因 opaque origin 会静默失败），`safe-file://local/<绝对路径>` 加载文档里的本地图片。
 
 ### 核心约定：源码即真相
 
 编辑器缓冲区里始终是**未经修改的 markdown 文本**。渲染效果全部由 CodeMirror 装饰器
 （Decoration）叠加上去，不改动文本本身。因此：
 
-- **保存零损耗** —— 没编辑过的地方，字节完全不变
+- **保存零损耗** —— 没编辑过的地方，字节完全不变（自动保存也必须走这条指纹路径）
 - 源代码模式 = 把装饰器关掉，一次 `Compartment.reconfigure`
 - 撤销、搜索、输入法、大文档性能都由 CM6 兜底
 
@@ -100,8 +114,8 @@ LF，BOM 若不剥掉会被当成正文第一个字符。读文件时把这两�
 
 1. **ViewPlugin 不能提供块级装饰** —— `Decoration.replace({ block: true })` 会抛
    `Block decorations may not be specified via plugins`，并且连带把行渲染搞崩（报
-   一个看起来毫不相干的 `Cannot destructure property 'tile'`）。分隔线改成覆盖整行
-   文字的行内替换 + CSS `display:block`。
+   一个看起来毫不相干的 `Cannot destructure property 'tile'`）。块级（表格、以后的
+   数学块/mermaid）一律走 `StateField`，见 `tableField`。
 2. **输入法** —— `view.composing` 为真时绝不重算装饰器，否则中文连打会吞字。
    合成结束后靠 `wasComposing` 标志补一次。
 3. **widget 必须实现 `eq()`** —— 否则每次按键都会把所有图片、图表重建一遍。
@@ -110,52 +124,44 @@ LF，BOM 若不剥掉会被当成正文第一个字符。读文件时把这两�
 `markdownLanguage`，因为它自带上下标扩展，会把 `$e^{-x^2}$ ` 里的 `^` 解析成
 Superscript。`scripts/dump-tree.mjs` 可以打印任意文档的节点名，改装饰器前先跑一次。
 
-## 组装成 .app
+## 打包成 .app
 
 ```bash
-npm run icon    # 生成 build/icon.icns（只在想换图标时跑）
-npm run pack    # → dist/mac-arm64/typmd.app，拖进「应用程序」即可
-npm run dist    # → dist/typmd-0.1.0-arm64.dmg，给别人用才需要
+./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/typmd.app
+TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/typmd-<version>.dmg
 ```
 
-打包配置在 `electron-builder.config.cjs`。三处不走默认值，都有原因：
+`release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 4 个 E2E 用例 +
+崩溃恢复竞态 → `make-app.sh` 组装 bundle。产物约 3.5 MB（app）/ 1.7 MB（DMG）。
 
-**ad-hoc 签名（`afterPack` 钩子）** —— `identity: null` 会让 electron-builder
-**完全跳过**签名，包里只剩 Electron 二进制自带的 linker 签名：`Identifier=Electron`、
-`Sealed Resources=none`，`codesign --verify` 过不去。Apple Silicon 上二进制必须有有效
-签名才能执行，所以钩子里补一次 `codesign --force --deep --sign -`。签完是
-`Identifier=dev.lawrence.typmd`、`Sealed Resources version=2`，校验通过。
+`make-app.sh` 把 `out/renderer` 塞进 `Contents/Resources/renderer`，写入 `Info.plist`
+（`.md` 关联 rank=Alternate，不抢默认打开方式），再做 ad-hoc 签名
+（`codesign --force --deep --sign -`）。自用到此为止 —— 本机构建的包没有 quarantine
+属性，Gatekeeper 不拦。要发给别人才需要 Apple Developer 证书 + 公证。
 
-自用到此为止就够了 —— 本机构建的包没有 quarantine 属性，Gatekeeper 不拦。要发给别人
-才需要 Apple Developer 证书 + 公证（notarization）。
+图标母版是 `build/icon.png`（设计源 `scripts/icon.html`），`npm run icon` 用系统
+`sips` + `iconutil` 打出 `build/icon.icns`，不依赖任何图形库。
 
-**只留两份语言包** —— Electron 自带 220 份 `.lproj`，占 60MB+。
-`electronLanguages: ['en-US', 'zh-CN']` 把 307MB 压到 243MB。
+## 冒烟 / E2E
 
-**文件关联** —— `fileAssociations` 注册 `.md/.markdown/.mdown/.mkd`，主进程的
-`open-file` 事件靠它才会触发（否则 Finder 双击不会唤起 typmd）。`rank: 'Alternate'`
-表示只出现在「打开方式」里、不抢默认；想设为默认改成 `'Owner'`。
-
-图标是 `scripts/make-icon.mjs` 用 Electron 自己离屏渲染的（`scripts/icon.html` →
-capturePage → `sips` 切尺寸 → `iconutil` 打 `.icns`），没引入图形库。想换图标就改
-`scripts/icon.html` 再 `npm run icon`。
-
-## 冒烟检查
-
-没法手动点界面时（CI、沙箱），用这个确认渲染进程真的起来了：
+没法手动点界面时（沙箱、自动化），壳内置探针：
 
 ```bash
-TYPMD_SMOKE=/tmp/shot.png npx electron . test/fixtures/kitchen-sink.md
-# SMOKE probe: {"editors":1,"lines":38,"status":"kitchen-sink.md","mode":"预览"}
-# SMOKE problems: none
+TYPMD_SMOKE=1 ./shell-swift/typmd-shell test/fixtures/kitchen-sink.md
+# +3s 写 /tmp/typmd-shell-check.json  （DOM：api/cm/侧栏/状态栏/标题栏/拖拽条）
+# +4s 写 /tmp/typmd-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后退出
 ```
 
-会截图、转发渲染进程的 console 报错，有问题就以非零码退出。
+`TYPMD_SMOKE` 之外启动就是正常交互应用，绝不自动退出。可选：
+`TYPMD_SMOKE_SHOT=<png>` 截图、`TYPMD_SMOKE_THEME=dark|light|system` 切主题后截图、
+`TYPMD_SMOKE_PDF=<路径>` 顺带导出 PDF、`TYPMD_SMOKE_SCRATCH_DELAY=<ms>` 逼出崩溃恢复竞态。
+
+细节见 `CONTEXT.md` 的「自检探针 / E2E」一节。
 
 ## 已知限制
 
-- 数学公式（`$...$`）和 mermaid 还显示为源码，排在 M2
-- 表格只做了等宽对齐，还不能像 Typora 那样直接编辑单元格，排在 M2
+- 数学公式（`$...$`）和 mermaid 还显示为源码，排在 P1
+- 表格能点进单元格改字，但还没有增删行列的浮动工具栏，排在 P2-6
 - 代码块的 ``` 围栏保留可见（藏掉会剩一个空行，更难看）
-- 尚无大纲、专注/打字机模式、导出
-- GPU 沙箱环境下需加 `--disable-gpu --no-sandbox` 才能启动（正常桌面环境不需要）
+- 导出 PDF 是单页长条，不是真分页
+- 尚无跨文件搜索、专注/打字机模式、导出 HTML
