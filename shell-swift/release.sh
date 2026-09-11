@@ -57,7 +57,9 @@ if sys.argv[1] == 'table.md':
 if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and c.get('outlineRows', 0) >= 3
     ok = ok and e.get('recents', 0) >= 1
-    ok = ok and r['counts'].get('cm-lp-codebar', 0) >= 1   # P1-4：代码块右上角语言标签+复制   # P0-1：打开过的文件进了系统最近列表
+    ok = ok and r['counts'].get('cm-lp-codebar', 0) >= 1   # P1-4：代码块右上角语言标签+复制
+    fp = r.get('formatProbe') or {}   # P2-1：格式化命令幂等（加粗再加粗=原文）
+    ok = ok and fp.get('bolded') is True and fp.get('toggledBack') is True   # P0-1：打开过的文件进了系统最近列表
 if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}

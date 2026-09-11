@@ -135,10 +135,19 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 - ~~P1-4 代码块增强~~ ✅ `CodeBarWidget`（语言标签 + 复制按钮，`Decoration.widget` 挂块首行，`float:right` 到右上）。复制走 `navigator.clipboard`，WKWebView 非安全上下文会失败 → 兜底 textarea + `execCommand('copy')`。副本按钮点击即刻 e.preventDefault/stopPropagation，别让 widget 默认吞事件
 - ~~P1-5 图片显示增强~~ ✅ `parseImage` 支持 Typora `=宽x高` 尺寸语法；点击图片开灯箱（body 级遮罩 + Escape 关闭，复刻 Prefs 面板叠层模式）；加载失败显示**解析后的完整路径**（decodeURI + 剥掉 safe-file://local 前缀），而不是只给 alt —— 只给 alt 排查不了是路径错还是文件缺
 
-### 当前这一轮：P1 全部完成（第 2 段目标达成）
+### 当前这一轮：P2 手感
 
-- P1-1 数学 / P1-2 mermaid / P1-3 方言 / P1-4 代码块 / P1-5 图片 —— 内容层五个全落地，视觉上「像 Typora」到此为止
-- 下一轮：P2 手感（格式化快捷键 / 输入规则 / 智能粘贴 / 图片落盘 / 表格工具栏）
+- ~~P2-1 格式化命令 +「格式」菜单~~ ✅ 菜单「格式」15 项（粗/斜/下划线/删除线/行内码/链接/标题1-6/正文/代码块/引用/无序·有序列表/任务项）→ `menu` 通道 → `MenuAction` 的 `fmt:*` → `editor/fmt.ts` 的 `applyFormat`。⌘ 组合一律走原生菜单（判断 1）
+  - **一次 dispatch 落一笔**：所有 changes + 新选区放进同一个事务 → ⌘Z 一步撤回；多选区每个 range 独立判开/关
+  - **幂等**：已有同种格式 → 本次切换摘掉；`isWrapped` **只看选区内部首尾定界符**（不能向前 range 外取，doc 开头 from=0 会越界判失败）
+  - **选区映射用 `ChangeSet.mapPos`**：手写位移图在「删除+插入」混合时混用原始/位移后坐标，会把选区映射到文档尾之外（Selection outside）；from 取 assoc -1、to 取 +1，才能把插入的定界符包进选区供下次幂等判定
+  - **无选区**：光标落在词内才作用于该词（`Intl.Segmenter` 分词，中文按词切）；词外（空格/标点）→ 插空对，不偷偷包旁边的词
+  - **测试坑**：纯 `EditorState.create` 默认**关多选区**，多光标用例必须显式 `EditorState.allowMultipleSelections.of(true)`，否则 `selection.ranges` 被折成单个
+  - 代码块围栏摘除要连**闭围栏前的换行**一起吃掉，否则留下 `code\n`
+- **P2-2** Markdown 输入规则（行首 `## ` / `- ` / `> ` / ```` ``` ```` / `---` / 表格骨架，一次撤销）
+- **P2-3** 列表智能（Tab 升降级、有序重编号、空项退出）
+- **P2-4** 智能粘贴（HTML→MD / URL 包链接 / ⇧⌘V 纯文本）· **P2-5** 图片粘贴落盘
+- **P2-6** 表格工具栏 · **P2-7** 查找替换本地化
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
 

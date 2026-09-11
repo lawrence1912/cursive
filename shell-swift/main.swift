@@ -614,6 +614,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         edit.addItem(item("查找…", "edit:find", key: "f"))
         editItem.submenu = edit
 
+        // P2-1：格式菜单 —— ⌘ 组合全部走原生菜单（判断 1），
+        // 绝不交给 CM keymap（performKeyEquivalent 放行了命令键反而会乱）
+        let formatItem = NSMenuItem(); main.addItem(formatItem)
+        let format = NSMenu(title: "格式")
+        format.addItem(item("粗体", "fmt:bold", key: "b"))
+        format.addItem(item("斜体", "fmt:italic", key: "i"))
+        format.addItem(item("下划线", "fmt:underline", key: "u"))
+        format.addItem(item("删除线", "fmt:strikethrough", key: "x", modifiers: [.command, .shift]))
+        format.addItem(item("行内代码", "fmt:code-inline", key: "c", modifiers: [.command, .control]))
+        format.addItem(item("链接", "fmt:link", key: "k"))
+        format.addItem(.separator())
+        format.addItem(item("标题 1", "fmt:h1", key: "1"))
+        format.addItem(item("标题 2", "fmt:h2", key: "2"))
+        format.addItem(item("标题 3", "fmt:h3", key: "3"))
+        format.addItem(item("标题 4", "fmt:h4", key: "4"))
+        format.addItem(item("标题 5", "fmt:h5", key: "5"))
+        format.addItem(item("标题 6", "fmt:h6", key: "6"))
+        format.addItem(item("正文", "fmt:p", key: "0"))
+        format.addItem(.separator())
+        format.addItem(item("代码块", "fmt:code-block", key: "k", modifiers: [.command, .shift]))
+        format.addItem(item("引用", "fmt:quote", key: "q", modifiers: [.command, .shift]))
+        format.addItem(item("无序列表", "fmt:ulist", key: "[", modifiers: [.command, .shift]))
+        format.addItem(item("有序列表", "fmt:olist", key: "]", modifiers: [.command, .shift]))
+        format.addItem(item("任务项", "fmt:task", key: "c", modifiers: [.command, .shift]))
+        formatItem.submenu = format
+
         let viewItem = NSMenuItem(); main.addItem(viewItem)
         let view = NSMenu(title: "视图")
         view.addItem(item("显示/隐藏侧边栏", "view:toggle-sidebar", key: "\\"))
@@ -1163,6 +1189,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             cell: st.doc.sliceString(head, head + 1)
           }
         }
+        // P2-1 格式化命令：菜单事件 → 渲染层 fmt.ts 的端到端回归。
+        // 在文末插一行受控文本，选中 alpha，发两次 fmt:bold，验证幂等
+        let formatProbe = null
+        {
+          const v = window.__cursive.view
+          v.dispatch({ changes: { from: v.state.doc.length, insert: '\\n\\nfmtprobe alpha beta' } })
+          const line = v.state.doc.line(v.state.doc.lines)
+          const start = line.text.indexOf('alpha')
+          v.dispatch({ selection: { anchor: line.from + start, head: line.from + start + 5 } })
+          window.__shellEmit('menu', 'fmt:bold')
+          await new Promise(r => setTimeout(r, 60))
+          const once = v.state.doc.line(v.state.doc.lines).text
+          window.__shellEmit('menu', 'fmt:bold')
+          await new Promise(r => setTimeout(r, 60))
+          const twice = v.state.doc.line(v.state.doc.lines).text
+          formatProbe = {
+            once,
+            bolded: once.includes('**alpha**'),
+            toggledBack: !twice.includes('**') && twice.includes('alpha')
+          }
+        }
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
@@ -1177,6 +1224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           tbHitPage,
           tbMidY,
           tableEdit,
+          formatProbe,
           math,
           mermaid,
           counts,

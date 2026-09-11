@@ -13,6 +13,7 @@ import { syntaxTree } from '@codemirror/language'
 import { livePreview, themeEffect } from './editor/live-preview'
 import { currentTheme } from './editor/live-preview/widgets'
 import { createState, livePreviewConf } from './editor/setup'
+import { applyFormat } from './editor/fmt'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline, type OutlineItem } from './ui/outline'
@@ -494,6 +495,10 @@ async function handleMenu(action: MenuAction): Promise<void> {
       syncMode()
       break
     }
+    default:
+      // P2-1 格式化命令：fmt:* 前缀统一走 fmt.ts 引擎
+      if (action.startsWith('fmt:')) applyFormat(view, action)
+      break
   }
 }
 

@@ -15,6 +15,25 @@ export type MenuAction =
   | 'view:theme-light'
   | 'view:theme-dark'
   | 'app:preferences'
+  // ---- P2-1 格式化命令（见 fmt.ts）----
+  | 'fmt:bold'
+  | 'fmt:italic'
+  | 'fmt:underline'
+  | 'fmt:strikethrough'
+  | 'fmt:code-inline'
+  | 'fmt:link'
+  | 'fmt:h1'
+  | 'fmt:h2'
+  | 'fmt:h3'
+  | 'fmt:h4'
+  | 'fmt:h5'
+  | 'fmt:h6'
+  | 'fmt:p'
+  | 'fmt:code-block'
+  | 'fmt:quote'
+  | 'fmt:ulist'
+  | 'fmt:olist'
+  | 'fmt:task'
 
 /** 一份从磁盘读到的文档 */
 export interface DocPayload {
