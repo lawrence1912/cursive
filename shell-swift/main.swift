@@ -286,7 +286,7 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
 
     private static let printCSS = """
     html, body { height: auto !important; overflow: visible !important; }
-    #drag-strip, #status-bar, #sidebar { display: none !important; }
+    #drag-strip, #status-bar, #sidebar, #tabbar { display: none !important; }
     body { display: block !important; background: #fff !important; color: #24292f !important; }
     :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb; --muted: #8b949e; --sel: transparent; }
     #workspace { display: block !important; }
@@ -742,7 +742,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           host: !!document.querySelector('#editor-host'),
           sidebar: !!document.querySelector('#sidebar'),
           status: (document.querySelector('#status-file') || {}).textContent || null,
-          sbRows: document.querySelectorAll('.sb-row').length
+          sbRows: document.querySelectorAll('.sb-row').length,
+          tabs: document.querySelectorAll('.tab-item').length
         }))()
         """
         webView.evaluateJavaScript(probe) { [weak self] result, _ in
