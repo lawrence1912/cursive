@@ -615,6 +615,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         edit.addItem(item("粘贴为纯文本", "edit:paste-plain", key: "v", modifiers: [.command, .option, .shift]))
         edit.addItem(.separator())
         edit.addItem(item("查找…", "edit:find", key: "f"))
+        edit.addItem(item("查找下一个", "edit:find-next", key: "g"))
+        edit.addItem(item("查找上一个", "edit:find-prev", key: "g", modifiers: [.command, .shift]))
         editItem.submenu = edit
 
         // P2-1：格式菜单 —— ⌘ 组合全部走原生菜单（判断 1），
@@ -1217,6 +1219,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             toggledBack: !twice.includes('**') && twice.includes('alpha')
           }
         }
+        // P2-7：查找面板中文化 + 状态栏匹配计数
+        let searchProbe = null
+        {
+          window.__shellEmit('menu', 'edit:find')
+          await new Promise(r => setTimeout(r, 80))
+          const panel = document.querySelector('.cm-search')
+          const nextBtn = panel ? panel.querySelector('button[name="next"]') : null
+          const input = panel ? panel.querySelector('input[name="search"]') : null
+          let matchText = ''
+          if (input) {
+            input.value = 'alpha'
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+            await new Promise(r => setTimeout(r, 120))
+            matchText = (document.getElementById('status-match') || {}).textContent || ''
+          }
+          searchProbe = {
+            open: !!panel,
+            nextLabel: nextBtn ? nextBtn.textContent : null,
+            matchText
+          }
+        }
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
@@ -1232,6 +1255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           tbMidY,
           tableEdit,
           formatProbe,
+          searchProbe,
           math,
           mermaid,
           counts,

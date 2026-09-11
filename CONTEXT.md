@@ -150,7 +150,9 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 - ~~P2-4 智能粘贴~~ ✅ `editor/paste.ts`（`EditorView.domEventHandlers.paste`）：网页/飞书/Notion 的 HTML → turndown 转 Markdown（强调符统一 `*`/`**`，补 `~~` 删除线规则）；选中文字粘 URL → 包成 `[文字](url)`；⇧⌥⌘V 粘贴为纯文本走原生菜单 + 壳读剪贴板
   - **「粘什么」的判定**：转换结果与 plain 一致就用 plain（本编辑器自复制时不往返、不损失），不同才用转换结果；convert 注入以便 node 单测
   - 契约 v4：`readClipboardText()`（`NSPasteboard.general.string`，剪贴板由壳读 — 判断 3）
-- **P2-6** 表格工具栏 · **P2-7** 查找替换本地化
+- ~~P2-7 查找替换本地化~~ ✅ 查找面板走 `EditorState.phrases` 中文化；⌘G/⇧⌘G 走原生「编辑」菜单（判断 1）→ `findNext`/`findPrevious`；状态栏加 `#status-match` 显示「第 n 处 / 共 N 处」
+  - **坑**：查找输入改的是 state **effect**，不是 docChanged/selectionSet —— 计数刷新必须挂在「每次 update」上，否则输完查询计数不更新
+- **P2-5** 图片粘贴落盘 · **P2-6** 表格工具栏（清单里最难一项）
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
 

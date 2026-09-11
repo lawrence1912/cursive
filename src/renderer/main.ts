@@ -2,7 +2,7 @@ import './themes/base.css'
 import './themes/live-preview.css'
 import 'katex/dist/katex.min.css'
 
-import { openSearchPanel } from '@codemirror/search'
+import { findNext, findPrevious, getSearchQuery, openSearchPanel } from '@codemirror/search'
 import { EditorView } from '@codemirror/view'
 import type { EditorState, Text } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
@@ -34,6 +34,7 @@ const elFile = document.getElementById('status-file')!
 const elCount = document.getElementById('status-count')!
 const elMode = document.getElementById('status-mode')!
 const elSaved = document.getElementById('status-saved')!
+const elMatch = document.getElementById('status-match')!
 
 let sourceMode = false
 
@@ -43,7 +44,36 @@ const listener = EditorView.updateListener.of((u) => {
     scheduleCount()
     scheduleAutosave()
   }
+  // 查找输入改的是 state effect（不是 doc/selection），所以每次 update 都刷计数
+  syncSearchCount()
 })
+
+/** P2-7：状态栏显示「第 n 处 / 共 N 处」（查找面板开着且有查询时） */
+function syncSearchCount(): void {
+  const q = getSearchQuery(view.state)
+  if (!q.valid || !q.search) {
+    elMatch.textContent = ''
+    return
+  }
+  let total = 0
+  let index = 0
+  const head = view.state.selection.main.from
+  try {
+    const cur = q.getCursor(view.state)
+    for (let r = cur.next(); !r.done; r = cur.next()) {
+      total++
+      if (index === 0 && r.value.from >= head) index = total
+    }
+  } catch {
+    elMatch.textContent = '正则无效'
+    return
+  }
+  if (!total) {
+    elMatch.textContent = '无匹配'
+    return
+  }
+  elMatch.textContent = `第 ${index || total} 处 / 共 ${total} 处`
+}
 
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
@@ -470,6 +500,12 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'edit:find':
       openSearchPanel(view)
+      break
+    case 'edit:find-next':
+      findNext(view)
+      break
+    case 'edit:find-prev':
+      findPrevious(view)
       break
     case 'edit:paste-plain': {
       // P2-4：⇧⌥⌘V 粘贴为纯文本

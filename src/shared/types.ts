@@ -8,6 +8,8 @@ export type MenuAction =
   | 'file:save-and-close'
   | 'file:open-folder'
   | 'edit:find'
+  | 'edit:find-next'
+  | 'edit:find-prev'
   | 'edit:paste-plain'
   | 'view:toggle-source'
   | 'view:toggle-sidebar'
