@@ -325,3 +325,44 @@ body.is-resizing {
 .ol-item:hover { background: var(--code-bg); }
 .ol-item.is-active { background: var(--sel); }
 .ol-l6 { font-size: 0.92em; color: var(--muted); }
+
+/* ---------- 面板显隐浮标 ---------- */
+#workspace { position: relative; }
+#sb-show,
+#ol-show {
+  position: absolute;
+  top: 8px;
+  z-index: 30;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--status-bg);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+#sb-show { left: 8px; }
+#ol-show { right: 8px; }
+#sb-show:hover,
+#ol-show:hover {
+  color: var(--fg);
+  background: var(--code-bg);
+}
+.ol-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ol-hide,
+.sb-hide {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 3px;
+}
+.ol-hide:hover,
+.sb-hide:hover { color: var(--fg); }

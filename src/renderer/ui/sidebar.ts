@@ -29,6 +29,7 @@ export class Sidebar {
     this.el.innerHTML = `
       <div class="sb-head">
         <span class="sb-title"></span>
+        <button class="sb-hide" title="隐藏文件树 (⌘\\)">«</button>
         <button class="sb-change" title="打开其他文件夹">⋯</button>
       </div>
       <div class="sb-tree" tabindex="-1"></div>
@@ -42,6 +43,7 @@ export class Sidebar {
     this.treeEl = this.el.querySelector('.sb-tree')!
     this.emptyEl = this.el.querySelector('.sb-empty')!
 
+    this.el.querySelector('.sb-hide')!.addEventListener('click', () => this.el.classList.add('is-hidden'))
     this.el.querySelector('.sb-change')!.addEventListener('click', () => void this.pick())
     this.el.querySelector('.sb-open-btn')!.addEventListener('click', () => void this.pick())
     this.treeEl.addEventListener('click', (e) => void this.onRowClick(e))

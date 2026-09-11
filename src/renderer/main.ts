@@ -47,6 +47,29 @@ view.scrollDOM.addEventListener('scroll', () => {
   outline.setActive(activeHeadingPos())
 })
 
+// 面板隐藏后的「唤回」浮标（不依赖快捷键/菜单）
+const sbShow = document.createElement('button')
+sbShow.id = 'sb-show'
+sbShow.textContent = '»'
+sbShow.title = '显示文件树 (⌘\\)'
+document.getElementById('workspace')!.insertBefore(sbShow, host)
+
+const olShow = document.createElement('button')
+olShow.id = 'ol-show'
+olShow.textContent = '«'
+olShow.title = '显示大纲 (⌘⇧T)'
+document.getElementById('workspace')!.appendChild(olShow)
+
+const syncPanels = (): void => {
+  sbShow.hidden = sidebar.visible
+  olShow.hidden = outline.visible
+}
+new MutationObserver(syncPanels).observe(sidebar.el, { attributes: true, attributeFilter: ['class'] })
+new MutationObserver(syncPanels).observe(outline.el, { attributes: true, attributeFilter: ['class'] })
+sbShow.addEventListener('click', () => sidebar.toggle())
+olShow.addEventListener('click', () => outline.toggle())
+syncPanels()
+
 // ---------- 标签页 ----------
 // 每个标签持有独立的完整 EditorState：切走时冻结，切回 setState 原样恢复
 // （装饰、撤销历史、光标都在 state 里）。shell 仍只感知「活动标签」的

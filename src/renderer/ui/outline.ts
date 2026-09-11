@@ -15,11 +15,12 @@ export class Outline {
     this.el = document.createElement('aside')
     this.el.id = 'outline'
     this.el.innerHTML = `
-      <div class="ol-head">大纲</div>
+      <div class="ol-head"><span>大纲</span><button class="ol-hide" title="隐藏大纲 (⌘⇧T)">»</button></div>
       <div class="ol-list"></div>
     `
     this.listEl = this.el.querySelector('.ol-list')!
 
+    this.el.querySelector('.ol-hide')!.addEventListener('click', () => this.el.classList.add('is-hidden'))
     this.el.addEventListener('click', (e) => {
       const row = (e.target as HTMLElement).closest<HTMLElement>('.ol-item')
       if (!row) return

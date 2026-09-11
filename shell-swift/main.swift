@@ -205,6 +205,17 @@ func findRendererRoot() -> URL {
     return exeDir.deletingLastPathComponent().appendingPathComponent("out/renderer")
 }
 
+// MARK: - 主 WebView
+// 关键：WKWebView 的 performKeyEquivalent 会把带 ⌘ 的按键吞掉转给网页进程，
+// 导致菜单快捷键（⌘\ ⌘S ⌘P ⌘W…）失灵 —— 这是「文件树隐藏不了」的真因。
+// 命令键组合全部交还给菜单系统处理。
+final class MainWebView: WKWebView {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) { return false }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 // MARK: - 原生拖拽条
 // `-webkit-app-region: drag` 是 Electron 专有扩展，WKWebView 不认识；
 // 且 WKWebView 把 mouseDownCanMoveWindow 重写为 false（自己要处理鼠标事件），
@@ -370,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         // DevTools：右键页面 →「检查元素」
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = MainWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.autoresizingMask = [.width, .height]
 
@@ -744,6 +755,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           sidebar: !!document.querySelector('#sidebar'),
           status: (document.querySelector('#status-file') || {}).textContent || null,
           sbRows: document.querySelectorAll('.sb-row').length,
+          sbDisplay: getComputedStyle(document.getElementById('sidebar')).display,
+          cmTextLen: (document.querySelector('.cm-content')?.textContent || '').length,
           tabs: document.querySelectorAll('.tab-item').length,
           outlineRows: document.querySelectorAll('.ol-item').length
         }))()
@@ -773,6 +786,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         const doc = await window.api.read(path)
         await window.api.save(outPath, doc.content, doc.fingerprint)
         const img = document.querySelector('.cm-lp-image img')
+        // 侧边栏开关回归验证：发两次菜单事件，查 computed display
+        window.__shellEmit('menu', 'view:toggle-sidebar')
+        await new Promise(r => setTimeout(r, 80))
+        const sb = document.getElementById('sidebar')
+        const sbAfterToggle = getComputedStyle(sb).display
+        const sbClassAfter = sb.className
+        window.__shellEmit('menu', 'view:toggle-sidebar')
+        await new Promise(r => setTimeout(r, 80))
+        const sbRestored = getComputedStyle(sb).display
         const counts = {}
         for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview'])
           counts[cls] = document.querySelectorAll('.' + cls).length
@@ -781,6 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           img: img
             ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
             : null,
+          sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           counts,
           cmLines: document.querySelectorAll('.cm-line').length
         }
