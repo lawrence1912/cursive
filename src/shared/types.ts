@@ -46,7 +46,7 @@ export interface ScratchDoc {
 }
 
 /** preload 通过 contextBridge 暴露给渲染进程的接口 */
-export interface TypmdApi {
+export interface CursiveApi {
   openDialog(): Promise<DocPayload | null>
   read(path: string): Promise<DocPayload>
   save(
@@ -72,7 +72,7 @@ export interface TypmdApi {
   lastFolder(): Promise<string | null>
 
   /** ---- P0 自动保存 / 崩溃恢复 / 外部变更（契约 v2，见 CONTEXT.md）---- */
-  /** 无路径文档的静默落盘：写 ~/Library/Application Support/typmd/scratch/<id>.json */
+  /** 无路径文档的静默落盘：写 ~/Library/Application Support/cursive/scratch/<id>.json */
   scratchSave(id: string, content: string, fp: FileFingerprint): Promise<void>
   scratchList(): Promise<ScratchDoc[]>
   /** 标签真正关闭或已另存为路径后，清掉对应 scratch */

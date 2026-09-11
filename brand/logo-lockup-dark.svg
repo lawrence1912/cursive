@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 128" width="440" height="128" role="img" aria-label="cursive">
+  <title>cursive logo (dark)</title>
+  <defs>
+    <linearGradient id="lkD-tile" x1=".14" y1="0" x2=".86" y2="1"><stop offset="0" stop-color="#434049"/><stop offset=".5" stop-color="#26242b"/><stop offset="1" stop-color="#141317"/></linearGradient>
+    <radialGradient id="lkD-sheen" cx=".24" cy=".1" r=".76"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <linearGradient id="lkD-edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".6" stop-color="#fff" stop-opacity=".02"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="lkD-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/><stop offset="1" stop-color="#ded7ca"/></linearGradient>
+    <linearGradient id="lkD-mk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7b8391"/><stop offset="1" stop-color="#5a616d"/></linearGradient>
+    <linearGradient id="lkD-car" x1=".2" y1="0" x2=".8" y2="1">
+      <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
+  </defs>
+  <g transform="scale(0.125)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-tile)"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-sheen)"/>
+    <rect x="316" y="394" width="58" height="58" rx="20" fill="url(#lkD-mk)"/>
+    <rect x="404" y="394" width="276" height="58" rx="29" fill="url(#lkD-ink)"/>
+    <rect x="316" y="490" width="392" height="58" rx="29" fill="url(#lkD-ink)"/>
+    <rect x="316" y="586" width="272" height="58" rx="29" fill="url(#lkD-ink)"/>
+    <rect x="694" y="380" width="42" height="86" rx="21" fill="url(#lkD-car)"/>
+    <rect x="703" y="391" width="12" height="60" rx="6" fill="#fff" opacity=".5"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="url(#lkD-edge)" stroke-width="3"/>
+  </g>
+  <g transform="translate(160 51.4) scale(0.655)" fill="none" stroke="#f2efe9" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M49.34 4.3 A28 28 0 1 0 49.34 51.7"/>
+    <path d="M77.5 0 V28 A28 28 0 0 0 133.5 28 V0"/>
+    <path d="M158.5 0 V56"/><path d="M158.5 26 A26 26 0 0 1 184.5 0"/>
+    <path d="M242.5 10 C239.5 3 232.5 0 223.5 0 C212.5 0 206.5 6 206.5 13 C206.5 20 213.5 24 224.5 27.5 C235.5 31 242.5 35 242.5 43 C242.5 50 235.5 56 224.5 56 C215.5 56 208.5 53 205.5 47"/>
+    <path d="M267.5 0 V56"/><path d="M267.5 -18 V-18"/>
+    <path d="M292.5 0 L316.5 56 L340.5 0"/>
+    <path d="M417.5 28 H361.5"/><path d="M417.5 28 A28 28 0 1 0 403.5 52.25"/>
+  </g>
+</svg>

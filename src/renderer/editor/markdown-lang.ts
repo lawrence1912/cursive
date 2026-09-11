@@ -2,21 +2,133 @@ import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
 import type { LanguageSupport } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { GFM } from '@lezer/markdown'
+import { tags as t } from '@lezer/highlight'
+import {
+  GFM,
+  type BlockContext,
+  type InlineContext,
+  type LeafBlock,
+  type Line,
+  type MarkdownConfig
+} from '@lezer/markdown'
 
 /**
- * typmd 的 markdown 方言：CommonMark + GFM + YAML front matter。
+ * cursive 的 markdown 方言：CommonMark + GFM + YAML front matter + 数学公式。
  *
  * 刻意不用 `markdownLanguage` —— 它在 GFM 之外还塞了上下标和 emoji 扩展，
  * 会把数学公式里的 `^` 当成 Superscript 解析（$e^{-x^2}$ 就废了）。
  * 这里用 commonmarkLanguage 打底、显式只加 GFM，方言范围跟计划一致。
  */
-export function typmdMarkdown(): LanguageSupport {
+export function cursiveMarkdown(): LanguageSupport {
   return yamlFrontmatter({
     content: markdown({
       base: commonmarkLanguage,
-      extensions: [...GFM],
+      extensions: [...GFM, math],
       codeLanguages: languages
     })
   })
+}
+
+// ---------- 数学公式（P1-1）----------
+//
+// 规则收紧到 pandoc tex_math_dollars 一档，防中文文档里的货币符号被吃：
+//   开定界符后必须紧跟非空白；闭定界符前必须非空白、后不能是数字。
+//   （「共计$5，优惠$2」里第二个 $ 后面是数字 → 不是公式；
+//     「$5 和 $8」里第二个 $ 前面是空格 → 也不是。）
+// 行内 $ / $$ 不跨行；跨行的 $$…$$ 走块级 parser。
+
+const DOLLAR = 36
+const NEWLINE = 10
+
+function isSpace(code: number): boolean {
+  return code === -1 ? false : /\s/.test(String.fromCharCode(code))
+}
+
+function isDigit(code: number): boolean {
+  return code >= 48 && code <= 57
+}
+
+/** 从 pos+len 往右找合法的闭定界符，返回其起点；找不到返回 -1 */
+function findInlineClose(cx: InlineContext, pos: number, len: number): number {
+  for (let i = pos + len; i < cx.end; i++) {
+    const ch = cx.char(i)
+    if (ch === NEWLINE) return -1 // 行内公式不跨行（跨行走 DisplayMath 块解析）
+    if (ch !== DOLLAR) continue
+    // 闭定界符长度必须与开定界符一致：$$…$$ 配对，$…$ 配对。
+    // 不校验的话 '$x$$y' 会把闭 $ 的终点算到行外去，内联装饰跨行直接把 CM 搞崩
+    if (len === 2 ? cx.char(i + 1) !== DOLLAR : cx.char(i + 1) === DOLLAR) continue
+    if (isSpace(cx.char(i - 1))) continue // 闭定界符前不能是空白
+    if (isDigit(cx.char(i + len))) continue // 闭定界符后不能是数字（$10 那种）
+    return i
+  }
+  return -1
+}
+
+function parseInlineMath(cx: InlineContext, next: number, pos: number): number {
+  if (next !== DOLLAR) return -1
+  // $$ 优先于 $：紧挨的第二个 $ 也存在时按 2 字符定界符算
+  const len = cx.char(pos + 1) === DOLLAR ? 2 : 1
+  const after = cx.char(pos + len)
+  if (after === -1 || isSpace(after) || after === DOLLAR) return -1
+  const close = findInlineClose(cx, pos, len)
+  if (close < 0) return -1
+  const end = close + len
+  return cx.addElement(
+    cx.elt('InlineMath', pos, end, [
+      cx.elt('MathMark', pos, pos + len),
+      cx.elt('MathMark', close, end)
+    ])
+  )
+}
+
+/**
+ * 块级数学：首行以 $$ 开，遇到「以 $$ 结尾且 $ 前非空白」的行闭合；
+ * 中间夹空行 / 到文档尾还没闭合 → 不是数学块，回落成普通段落。
+ * 全部逻辑放 finish()（照抄 GFM TableParser 的形态）：段落是逐行累积的，
+ * finish 拿到的 leaf.content 就是完整内容，一次判断最省心。
+ */
+class DisplayMathParser {
+  nextLine(_cx: BlockContext, _line: Line, _leaf: LeafBlock): boolean {
+    return false // 继续累积，闭合判断留给 finish
+  }
+
+  finish(cx: BlockContext, leaf: LeafBlock): boolean {
+    const lines = leaf.content.split('\n')
+    const first = lines[0].trimEnd()
+    if (!first.startsWith('$$')) return false
+
+    // 单行闭合：$$…$$，开定界符后与闭定界符前都必须是非空白
+    if (lines.length === 1) {
+      if (first.length < 4 || !first.endsWith('$$')) return false
+      const body = first.slice(2, -2)
+      if (!body || /^\s/.test(body) || /\s$/.test(body)) return false
+      cx.addLeafElement(leaf, cx.elt('DisplayMath', leaf.start, leaf.start + leaf.content.length))
+      return true
+    }
+
+    // 多行：首行必须是裸 $$，末行以 $$ 收（或整行就是 $$）
+    if (first !== '$$') return false
+    const last = lines[lines.length - 1].trimEnd()
+    const closes = last === '$$' || (last.endsWith('$$') && !/\s$/.test(last.slice(0, -2)))
+    if (!closes) return false
+    cx.addLeafElement(leaf, cx.elt('DisplayMath', leaf.start, leaf.start + leaf.content.length))
+    return true
+  }
+}
+
+const math: MarkdownConfig = {
+  defineNodes: [
+    { name: 'InlineMath' },
+    { name: 'MathMark', style: t.processingInstruction },
+    { name: 'DisplayMath', block: true, style: t.special(t.string) }
+  ],
+  parseInline: [{ name: 'Math', parse: parseInlineMath }],
+  parseBlock: [
+    {
+      name: 'DisplayMath',
+      // 抢在 SetextHeading 之前：否则 $$\nx\n$$ 下面的 --- 之类会把段落吃成标题
+      before: 'SetextHeading',
+      leaf: (_cx, leaf) => (/^\$\$/.test(leaf.content) ? new DisplayMathParser() : null)
+    }
+  ]
 }

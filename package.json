@@ -1,5 +1,5 @@
 {
-  "name": "typmd",
+  "name": "cursive",
   "version": "0.1.0",
   "description": "A Typora-like live-preview markdown editor",
   "type": "module",
@@ -25,7 +25,10 @@
     "@lezer/common": "^1.2.3",
     "@lezer/highlight": "^1.2.1",
     "@lezer/markdown": "^1.7.2",
+    "@types/katex": "^0.16.8",
     "@types/node": "^24.0.0",
+    "katex": "^0.18.7",
+    "mermaid": "^12.0.0",
     "typescript": "^5.7.0",
     "vite": "^7.3.6",
     "vitest": "^3.0.0"

@@ -3,7 +3,7 @@ import { Facet, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 import { Reveal, revealScope } from './reveal'
-import { BulletWidget, CheckboxWidget, ImageWidget, RuleWidget } from './widgets'
+import { BulletWidget, CheckboxWidget, ImageWidget, MathWidget, RuleWidget } from './widgets'
 
 /** 当前文档所在目录，用来把 `![](assets/a.png)` 这种相对路径解析成可加载的 URL */
 export const docDir = Facet.define<string | null, string | null>({
@@ -95,9 +95,15 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       return
 
     case 'Table': {
-      // 真表格渲染在 index.ts 的 tableField（块级装饰必须走 StateField）。
+      // 真表格渲染在 index.ts 的 blockField（块级装饰必须走 StateField）。
       // 这里只负责「光标碰到 → 回显管道符源码」的行样式。
       if (revealed) addLines(ctx, node.from, node.to, 'cm-lp-table')
+      return false
+    }
+
+    case 'DisplayMath': {
+      // 同表格：块渲染在 blockField，这里负责回显时的行样式
+      if (revealed) addLines(ctx, node.from, node.to, 'cm-lp-math')
       return false
     }
 
@@ -145,6 +151,20 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       return
 
     // ---------- 行内：换成组件 ----------
+    case 'InlineMath': {
+      // KaTeX 行内公式。MathMark 的样式交给 theme.ts（tags.processingInstruction），
+      // 不 revealed 时整个节点换成渲染结果 —— 光标碰到走上面的 revealed 提前返回
+      if (revealed) return
+      const text = doc.sliceString(node.from, node.to)
+      const delim = text.startsWith('$$') ? 2 : 1
+      const tex = text.slice(delim, text.length - delim)
+      if (!tex.trim()) return
+      out.push(
+        Decoration.replace({ widget: new MathWidget(tex, false) }).range(node.from, node.to)
+      )
+      return false
+    }
+
     case 'Image': {
       if (revealed) return
       const parsed = parseImage(doc.sliceString(node.from, node.to))

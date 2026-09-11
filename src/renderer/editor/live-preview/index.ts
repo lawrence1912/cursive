@@ -1,5 +1,5 @@
-import { syntaxTree } from '@codemirror/language'
-import { StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
+import { StateEffect, StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
 import {
   Decoration,
   EditorView,
@@ -9,10 +9,22 @@ import {
 } from '@codemirror/view'
 import { buildDecorations } from './decorate'
 import { Reveal, revealScope } from './reveal'
-import { cellSpan, parseTable, TableWidget } from './widgets'
+import {
+  cellSpan,
+  currentTheme,
+  extractFence,
+  MathWidget,
+  MermaidWidget,
+  parseTable,
+  TableWidget
+} from './widgets'
 
 export { docDir } from './decorate'
 export { revealScope, type RevealScope } from './reveal'
+export { currentTheme } from './widgets'
+
+/** 主题切换时发进编辑器：块级 widget（mermaid）跟着重渲染成对应配色 */
+export const themeEffect = StateEffect.define<'light' | 'dark'>()
 
 const livePreviewPlugin = ViewPlugin.fromClass(
   class {
@@ -103,42 +115,85 @@ const editTableOnClick = EditorView.domEventHandlers({
 })
 
 /**
- * 表格 → 真表格。
+ * 块级 widget（真表格 / 数学块 / mermaid）。
  * 块级（跨行）装饰不允许从 ViewPlugin 提供，必须走 StateField；
- * 光标碰到时由 decorate.ts 回显管道符源码（两个集合不会重叠：同一套 reveal 判定）。
+ * 光标碰到时由 decorate.ts 回显源码（两个集合不会重叠：同一套 reveal 判定）。
+ * 三种块共用一次全文遍历 —— 各开一个 StateField 就是白跑三遍语法树。
  */
-const tableField = StateField.define<DecorationSet>({
-  create: buildTables,
+const blockField = StateField.define<DecorationSet>({
+  create: buildBlocks,
   update(value, tr) {
-    if (!tr.docChanged && !tr.selection) return value.map(tr.changes)
-    return buildTables(tr.state)
+    const themeChanged = tr.effects.some((e) => e.is(themeEffect))
+    if (!tr.docChanged && !tr.selection && !themeChanged) return value.map(tr.changes)
+    return buildBlocks(tr.state)
   },
   provide: (f) => EditorView.decorations.from(f)
 })
 
-function buildTables(state: EditorState): DecorationSet {
+/**
+ * 块级装饰的唯一产出点。导出给单测：不依赖 DOM 就能断言
+ * 块级装饰的正确性（test/block.test.ts）。
+ */
+export function buildBlocks(state: EditorState): DecorationSet {
   const out: Range<Decoration>[] = []
   const reveal = new Reveal(state, state.facet(revealScope))
+  // 与 buildDecorations 同款坑：CM 的 parse 是异步分块的，而本字段的重建只挂在
+  // docChanged/selection/主题效应上 —— 「打开文件 / 外部重载 / 切标签」这类纯换
+  // state 的路径，字段初值是在空树上算的，之后没人再推它一把，表格/公式/图就
+  // 永远不出现（Context.md 里 ViewPlugin 那条的块级版，tableField 时代就潜伏着）。
+  // 块级装饰本来就是全文范围的，这里只能全文强制同步解析。
+  ensureSyntaxTree(state, state.doc.length)
   syntaxTree(state).iterate({
     from: 0,
     to: state.doc.length,
     enter: (node) => {
-      if (node.name !== 'Table') return
-      if (reveal.touches(node.from, node.to)) return false
-      const data = parseTable(state.doc.sliceString(node.from, node.to))
-      if (data) {
-        out.push(
-          Decoration.replace({ widget: new TableWidget(data), block: true }).range(node.from, node.to)
-        )
+      switch (node.name) {
+        case 'Table': {
+          if (reveal.touches(node.from, node.to)) return false
+          const data = parseTable(state.doc.sliceString(node.from, node.to))
+          if (data)
+            out.push(
+              Decoration.replace({ widget: new TableWidget(data), block: true }).range(
+                node.from,
+                node.to
+              )
+            )
+          return false
+        }
+        case 'DisplayMath': {
+          if (reveal.touches(node.from, node.to)) return false
+          const text = state.doc.sliceString(node.from, node.to)
+          const tex = text.slice(2, Math.max(2, text.length - 2))
+          if (tex.trim())
+            out.push(
+              Decoration.replace({ widget: new MathWidget(tex, true), block: true }).range(
+                node.from,
+                node.to
+              )
+            )
+          return false
+        }
+        case 'FencedCode': {
+          // 只有 mermaid 代码块换成图；其它语言的照旧走行级高亮
+          const fence = extractFence(state.doc.sliceString(node.from, node.to))
+          if (!fence || fence.lang !== 'mermaid' || !fence.src.trim()) return
+          if (reveal.touches(node.from, node.to)) return false
+          out.push(
+            Decoration.replace({
+              widget: new MermaidWidget(fence.src, currentTheme()),
+              block: true
+            }).range(node.from, node.to)
+          )
+          return false
+        }
       }
-      return false
     }
   })
   return Decoration.set(out, true)
 }
 
 export function livePreview(): Extension {
-  return [livePreviewPlugin, tableField, openLinkOnClick, editTableOnClick]
+  return [livePreviewPlugin, blockField, openLinkOnClick, editTableOnClick]
 }
 
 /** 源代码模式就是把上面这套整个撤掉 */

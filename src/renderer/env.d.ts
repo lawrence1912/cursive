@@ -1,9 +1,9 @@
 /// <reference types="vite/client" />
-import type { TypmdApi } from '../shared/types.js'
+import type { CursiveApi } from '../shared/types.js'
 
 declare global {
   interface Window {
-    api: TypmdApi
+    api: CursiveApi
   }
 }
 

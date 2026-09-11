@@ -1,6 +1,7 @@
-# typmd
+# cursive
 
-一个 Typora 风格的 macOS Markdown 编辑器：单窗格、无分屏、打字即渲染。
+macOS 上的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
+标记默认隐藏，光标移进哪一行，哪一行才回显源码。
 
 ## 当前进度
 
@@ -19,14 +20,15 @@
 | 最近文件 · Finder 双击 · Dock 菜单 | ✅ |
 | 导出 PDF | ✅ 单页长条，未分页 |
 | 主题切换（浅/深/系统）· 排版偏好（字号/行距/栏宽/衬线） | ✅ |
-| KaTeX 数学 · mermaid · 脚注 | ⬜ |
-| 格式化快捷键 · 输入规则 · 智能粘贴 · 图片落盘 | ⬜ |
+| KaTeX 数学公式（行内/块级）· mermaid 图表 | ✅ |
+| 脚注/高亮/上下标/TOC · 格式化快捷键 · 输入规则 · 智能粘贴 · 图片落盘 | ⬜ |
 | 跨文件全局搜索 · 专注/打字机模式 | ⬜ |
 | 导出 HTML / pandoc | ⬜ |
 
 **当前已渲染**：标题、粗体/斜体/删除线、行内代码、链接、图片、引用、分隔线、
 无序/有序列表、任务复选框（可点击）、代码块（嵌套语言高亮）、YAML front matter、
-GFM 表格。数学公式和 mermaid 还是源码。
+GFM 表格、KaTeX 数学公式（`$…$` / `$$…$$`，货币符号不吃，错误红色源码）、
+mermaid 图表（随主题配色，语法错误保留源码+报错）。
 
 ## 快捷键
 
@@ -41,7 +43,7 @@ GFM 表格。数学公式和 mermaid 还是源码。
 | ⌘F | 查找 |
 | ⌘ + 点击链接 | 用浏览器打开 |
 
-命令行：`typmd 文件.md` 打开文件，`typmd 目录/` 在侧边栏打开文件夹。
+命令行：`cursive 文件.md` 打开文件，`cursive 目录/` 在侧边栏打开文件夹。
 
 **接下来做什么见 [`ROADMAP.md`](ROADMAP.md)**（现状盘点 + 对标 Typora/MarkText + P0–P4 清单）；
 开发上下文与踩坑记录见 [`CONTEXT.md`](CONTEXT.md)。
@@ -51,8 +53,8 @@ GFM 表格。数学公式和 mermaid 还是源码。
 ```bash
 npm install
 npm run build                     # 构建 renderer 到 out/renderer
-./shell-swift/build.sh            # 编译原生壳 → shell-swift/typmd-shell
-./shell-swift/typmd-shell a.md    # 开发运行（资源查找 Bundle → cwd → exe 相对）
+./shell-swift/build.sh            # 编译原生壳 → shell-swift/cursive-shell
+./shell-swift/cursive-shell a.md    # 开发运行（资源查找 Bundle → cwd → exe 相对）
 ```
 
 其他脚本：
@@ -73,7 +75,7 @@ src/
 shell-swift/      Swift + AppKit + WKWebView 原生壳（单文件渐进，优先 AppKit）
 ```
 
-渲染层只认 `window.api`（签名见 `src/shared/types.ts` 的 `TypmdApi`），不碰任何原生能力 ——
+渲染层只认 `window.api`（签名见 `src/shared/types.ts` 的 `CursiveApi`），不碰任何原生能力 ——
 这正是把 Electron 换成 Swift 壳时 renderer 零改动的原因。壳侧 1:1 实现该契约，
 新增通道要三处同步：`types.ts` ↔ `main.swift` ↔ `CONTEXT.md`。
 
@@ -127,12 +129,13 @@ Superscript。`scripts/dump-tree.mjs` 可以打印任意文档的节点名，改
 ## 打包成 .app
 
 ```bash
-./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/typmd.app
-TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/typmd-<version>.dmg
+./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/cursive.app
+CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/cursive-<version>.dmg
 ```
 
-`release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 4 个 E2E 用例 +
-崩溃恢复竞态 → `make-app.sh` 组装 bundle。产物约 3.5 MB（app）/ 1.7 MB（DMG）。
+`release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 6 个 E2E 用例
+（图片/表格/全家桶/CRLF/数学/mermaid）+ 崩溃恢复竞态 → `make-app.sh` 组装 bundle。
+产物约 9.5 MB（app，含 KaTeX 与 mermaid）。
 
 `make-app.sh` 把 `out/renderer` 塞进 `Contents/Resources/renderer`，写入 `Info.plist`
 （`.md` 关联 rank=Alternate，不抢默认打开方式），再做 ad-hoc 签名
@@ -147,21 +150,20 @@ TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/typmd-<version>.
 没法手动点界面时（沙箱、自动化），壳内置探针：
 
 ```bash
-TYPMD_SMOKE=1 ./shell-swift/typmd-shell test/fixtures/kitchen-sink.md
-# +3s 写 /tmp/typmd-shell-check.json  （DOM：api/cm/侧栏/状态栏/标题栏/拖拽条）
-# +4s 写 /tmp/typmd-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后退出
+CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
+# +3s 写 /tmp/cursive-shell-check.json  （DOM：api/cm/侧栏/状态栏/标题栏/拖拽条）
+# +4s 写 /tmp/cursive-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后退出
 ```
 
-`TYPMD_SMOKE` 之外启动就是正常交互应用，绝不自动退出。可选：
-`TYPMD_SMOKE_SHOT=<png>` 截图、`TYPMD_SMOKE_THEME=dark|light|system` 切主题后截图、
-`TYPMD_SMOKE_PDF=<路径>` 顺带导出 PDF、`TYPMD_SMOKE_SCRATCH_DELAY=<ms>` 逼出崩溃恢复竞态。
+`CURSIVE_SMOKE` 之外启动就是正常交互应用，绝不自动退出。可选：
+`CURSIVE_SMOKE_SHOT=<png>` 截图、`CURSIVE_SMOKE_THEME=dark|light|system` 切主题后截图、
+`CURSIVE_SMOKE_PDF=<路径>` 顺带导出 PDF、`CURSIVE_SMOKE_SCRATCH_DELAY=<ms>` 逼出崩溃恢复竞态。
 
 细节见 `CONTEXT.md` 的「自检探针 / E2E」一节。
 
 ## 已知限制
 
-- 数学公式（`$...$`）和 mermaid 还显示为源码，排在 P1
 - 表格能点进单元格改字，但还没有增删行列的浮动工具栏，排在 P2-6
 - 代码块的 ``` 围栏保留可见（藏掉会剩一个空行，更难看）
 - 导出 PDF 是单页长条，不是真分页
-- 尚无跨文件搜索、专注/打字机模式、导出 HTML
+- 尚无脚注/高亮/上下标/TOC、跨文件搜索、专注/打字机模式、导出 HTML

@@ -1,9 +1,131 @@
+import katex from 'katex'
 import { WidgetType, type EditorView } from '@codemirror/view'
 
 /**
  * 每个 widget 都必须实现 eq()：CodeMirror 靠它判断能否复用 DOM。
  * 不实现的话每次按键都会把所有 widget 重建一遍（图片重新解码、图表重画）。
  */
+
+// ---------- 数学公式（KaTeX） ----------
+
+/**
+ * KaTeX 渲染成 HTML。throwOnError: false = 语法错误不抛异常，
+ * 而是把原始 TeX 套在 .katex-error 里（katex.css 给它红色）——
+ * 公式写错只会难看，不能把编辑器搞崩。
+ * renderToString 是同步的，widget 的 toDOM 才能直接用（mermaid 那套异步占位模式不需要）。
+ */
+export function renderMath(tex: string, display: boolean): string {
+  return katex.renderToString(tex, {
+    displayMode: display,
+    throwOnError: false,
+    strict: false,
+    output: 'html'
+  })
+}
+
+/** 行内 `$x^2$`（display=false，挂 .cm-lp-math-inline）与块级 `$$…$$`（display=true，挂 .cm-lp-mathview） */
+export class MathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly display: boolean
+  ) {
+    super()
+  }
+  eq(other: MathWidget): boolean {
+    return other.tex === this.tex && other.display === this.display
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement(this.display ? 'div' : 'span')
+    el.className = this.display ? 'cm-lp-mathview' : 'cm-lp-math-inline'
+    el.innerHTML = renderMath(this.tex, this.display)
+    return el
+  }
+}
+
+// ---------- mermaid 图表 ----------
+
+export type ThemeName = 'light' | 'dark'
+
+/** 当前解析后的主题（data-theme 由 ui/prefs.ts 钉成确定的 light/dark，不含 system） */
+export function currentTheme(): ThemeName {
+  return document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light'
+}
+
+let mermaidPromise: Promise<(typeof import('mermaid'))['default']> | null = null
+/** mermaid 约 1MB，动态 import 让 Vite 切成独立 chunk，打开普通文档不背这个成本 */
+function loadMermaid() {
+  mermaidPromise ??= import('mermaid').then((m) => m.default)
+  return mermaidPromise
+}
+
+let renderSeq = 0
+const cancelRender = new WeakMap<HTMLElement, () => void>()
+
+/**
+ * ```mermaid 代码块 → 图。异步渲染三件套：
+ * 先占位、拿到 SVG 再填充；eq() 按源码+主题比较（改一个字符只重绘那一张）；
+ * destroy() 取消未完成的渲染（widget 被滚动出视口/删掉时别再往死 DOM 里写）。
+ * 页面 CSP 是 script-src 'self'：mindmap/cytoscape 系依赖 new Function 会被拦，
+ * 常用的 flowchart/sequence/gantt/class/state 都不碰它。
+ */
+export class MermaidWidget extends WidgetType {
+  constructor(
+    readonly src: string,
+    readonly theme: ThemeName
+  ) {
+    super()
+  }
+  eq(other: MermaidWidget): boolean {
+    return other.src === this.src && other.theme === this.theme
+  }
+  override destroy(dom: HTMLElement): void {
+    cancelRender.get(dom)?.()
+    cancelRender.delete(dom)
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('div')
+    el.className = 'cm-lp-mermaid'
+    let cancelled = false
+    cancelRender.set(el, () => {
+      cancelled = true
+    })
+    void loadMermaid()
+      .then(async (m) => {
+        if (cancelled) return
+        m.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: this.theme === 'dark' ? 'dark' : 'default'
+        })
+        // render 对语法错误不抛异常，而是把错误信息嵌进 SVG 返回 ——
+        // 要走「保留源码 + 错误提示」就必须用 parse() 显式预校验
+        await m.parse(this.src)
+        const { svg } = await m.render(`cursive-mmd-${renderSeq++}`, this.src)
+        if (cancelled) return
+        el.innerHTML = svg
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        // 渲染失败：保留源码 + 错误信息，不白屏
+        el.classList.add('is-error')
+        el.textContent = `${this.src}\n\n${err instanceof Error ? err.message : String(err)}`
+      })
+    return el
+  }
+}
+
+/** 从 FencedCode 的源码文本里拆出语言与代码体（闭围栏存在则去掉） */
+export function extractFence(text: string): { lang: string; src: string } | null {
+  const nl = text.indexOf('\n')
+  if (nl < 0) return null
+  const open = /^(`{3,}|~{3,})[ \t]*(.*)$/.exec(text.slice(0, nl))
+  if (!open) return null
+  const lang = (open[2] ?? '').trim().split(/\s+/)[0] ?? ''
+  const lines = text.slice(nl + 1).split('\n')
+  const last = lines[lines.length - 1]
+  if (last !== undefined && /^\s*(`{3,}|~{3,})\s*$/.test(last)) lines.pop()
+  return { lang, src: lines.join('\n') }
+}
 
 /** 无序列表的 `-` `*` `+` → 圆点 */
 export class BulletWidget extends WidgetType {

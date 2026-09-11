@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="cursive">
+  <title>cursive</title>
+  <defs>
+    <linearGradient id="f-t" x1=".15" y1="0" x2=".85" y2="1"><stop offset="0" stop-color="#faf8f3"/><stop offset="1" stop-color="#d8d0c1"/></linearGradient>
+    <linearGradient id="f-c" x1=".2" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#8cc6ff"/><stop offset=".5" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7.5" fill="url(#f-t)"/>
+  <g fill="#272420">
+    <rect x="6" y="9" width="13" height="4.5" rx="2.25"/>
+    <rect x="6" y="18.5" width="17" height="4.5" rx="2.25"/>
+  </g>
+  <rect x="21.5" y="7.5" width="4" height="7.5" rx="2" fill="url(#f-c)"/>
+</svg>

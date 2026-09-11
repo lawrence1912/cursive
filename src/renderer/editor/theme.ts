@@ -55,7 +55,7 @@ const editorTheme = EditorView.theme({
   '.cm-selectionMatch': { backgroundColor: 'transparent', boxShadow: 'inset 0 -1px 0 var(--mark-idle)' },
   // 语法标记：源码模式下恢复正常对比度
   '.cm-md-mark': { color: 'var(--mark-reveal)' },
-  '&.typmd-source .cm-md-mark': { color: 'var(--accent)', opacity: '1' },
+  '&.cursive-source .cm-md-mark': { color: 'var(--accent)', opacity: '1' },
   '.cm-panels': {
     backgroundColor: 'var(--surface)',
     color: 'var(--fg)',
@@ -67,4 +67,4 @@ const editorTheme = EditorView.theme({
   '.cm-searchMatch-selected': { backgroundColor: 'rgba(255, 160, 0, 0.6)' }
 })
 
-export const typmdTheme: Extension = [editorTheme, syntaxHighlighting(markdownHighlight)]
+export const cursiveTheme: Extension = [editorTheme, syntaxHighlighting(markdownHighlight)]

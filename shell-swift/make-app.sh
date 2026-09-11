@@ -1,14 +1,14 @@
 #!/bin/sh
-# 打包 typmd.app（+ 可选 DMG）：原生壳 + out/renderer 全部塞进标准 bundle
+# 打包 cursive.app（+ 可选 DMG）：原生壳 + out/renderer 全部塞进标准 bundle
 #
 # 用法：
-#   ./shell-swift/make-app.sh            # 产出 dist/typmd.app
-#   TYPMD_DMG=1 ./shell-swift/make-app.sh  # 额外产出 dist/typmd-<version>.dmg
+#   ./shell-swift/make-app.sh            # 产出 dist/cursive.app
+#   CURSIVE_DMG=1 ./shell-swift/make-app.sh  # 额外产出 dist/cursive-<version>.dmg
 set -e
 cd "$(dirname "$0")/.."
 
 VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])" 2>/dev/null || echo "0.1.0")
-APP="dist/typmd.app"
+APP="dist/cursive.app"
 
 echo "==> 构建 renderer"
 npm run build --silent
@@ -18,7 +18,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/renderer"
 
 # 二进制
-swiftc -O -swift-version 5 shell-swift/main.swift -o "$APP/Contents/MacOS/typmd"
+swiftc -O -swift-version 5 shell-swift/main.swift -o "$APP/Contents/MacOS/cursive"
 
 # renderer 资源（壳经 Bundle.main.resourceURL 找到这里）
 ditto out/renderer "$APP/Contents/Resources/renderer"
@@ -32,10 +32,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>					<string>typmd</string>
-	<key>CFBundleDisplayName</key>			<string>typmd</string>
-	<key>CFBundleExecutable</key>			<string>typmd</string>
-	<key>CFBundleIdentifier</key>			<string>dev.lawrence.typmd</string>
+	<key>CFBundleName</key>					<string>cursive</string>
+	<key>CFBundleDisplayName</key>			<string>cursive</string>
+	<key>CFBundleExecutable</key>			<string>cursive</string>
+	<key>CFBundleIdentifier</key>			<string>dev.lawrence.cursive</string>
 	<key>CFBundleVersion</key>				<string>$VERSION</string>
 	<key>CFBundleShortVersionString</key>	<string>$VERSION</string>
 	<key>CFBundlePackageType</key>			<string>APPL</string>
@@ -73,11 +73,11 @@ echo "==> ad-hoc 签名"
 codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP" && echo "    签名校验通过"
 
-if [ "${TYPMD_DMG:-0}" = "1" ]; then
-    DMG="dist/typmd-$VERSION.dmg"
+if [ "${CURSIVE_DMG:-0}" = "1" ]; then
+    DMG="dist/cursive-$VERSION.dmg"
     echo "==> 打 DMG $DMG"
     rm -f "$DMG"
-    hdiutil create -volname typmd -srcfolder "$APP" -ov -format UDZO "$DMG" | tail -1
+    hdiutil create -volname cursive -srcfolder "$APP" -ov -format UDZO "$DMG" | tail -1
 fi
 
 SIZE=$(du -sh "$APP" | cut -f1 | tr -d ' ')

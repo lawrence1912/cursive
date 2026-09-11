@@ -1,6 +1,6 @@
-# typmd 路线图
+# cursive 路线图
 
-> 基准 `3c16409`（2026-09-11，**P0 已全部完成**）。现状盘点 + 对标 Typora / MarkText + 按依赖顺序排的 P0–P4 清单。
+> 基准 `73da752`（2026-09-11，**P0 全部完成；P1-1/P1-2 已完成**）。现状盘点 + 对标 Typora / MarkText + 按依赖顺序排的 P0–P4 清单。
 > 在线版（同一份内容，带样式）：<https://claude.ai/code/artifact/462ed29a-cc2f-4026-8e01-e4fa47e104a0>
 >
 > 开发上下文、契约、已踩的坑见 `CONTEXT.md`；这份只管「接下来做什么」。
@@ -27,7 +27,7 @@ E2E 一条龙 —— 这些都是「做错一次要返工一周」的部分，�
 
 | 类别 | 内容 | 后果 |
 |---|---|---|
-| **内容缺口** | 数学公式、mermaid、脚注、`==高亮==`、上下标、`[TOC]` | 写技术笔记会立刻看到裸源码 |
+| **内容缺口** | 脚注、`==高亮==`、上下标、`[TOC]`、emoji（数学/mermaid 已补） | 写技术笔记会立刻看到裸源码 |
 | **手感缺口** | 格式化快捷键、输入规则、智能粘贴、图片落盘、表格只读 | 写作时手要离开键盘 |
 | **工作区缺口** | 跨文件搜索、文件树可写、专注/打字机、多窗口、大纲增强 | 当主力工具还差一口气（最近文件 / 自动保存 / 外部变更 / 主题切换 / 排版偏好已补齐） |
 
@@ -46,7 +46,7 @@ E2E 一条龙 —— 这些都是「做错一次要返工一周」的部分，�
 无论实测结果如何，⌘B / ⌘1 这类命令都应该做成「格式」菜单项 + 扩 `MenuAction` 契约：
 Typora 和 MarkText 都有格式菜单，可发现性本身就是需求。
 
-> **先验证**：在 `setup.ts` 临时绑一个 `Mod-b` 打日志，用 `TYPMD_SMOKE` 探针发一次 ⌘B，
+> **先验证**：在 `setup.ts` 临时绑一个 `Mod-b` 打日志，用 `CURSIVE_SMOKE` 探针发一次 ⌘B，
 > 看 console 通道有没有收到。顺带确认 ⌘← ⌘→ ⌘↑ ⌘↓ 这些 macOS 行首行尾/文档首尾导航键
 > 在编辑器里还活着 —— 它们走同一条命令键路径。
 
@@ -71,12 +71,12 @@ ViewPlugin 不能提供跨行装饰（抛 `Block decorations may not be specifie
 
 `●` 有 · `◐` 部分 / 有限 · `○` 无
 
-| 能力 | typmd | Typora | MarkText | 取舍 |
+| 能力 | cursive | Typora | MarkText | 取舍 |
 |---|:--:|:--:|:--:|---|
 | 单窗格实时预览 | ● | ● | ● | 核心已追平 |
 | 源码模式 / 多标签 / 文件树 / 大纲 | ● | ● | ● | 已追平 |
-| 数学公式（KaTeX） | ○ | ● | ● | P1，必做 |
-| mermaid 等图表 | ○ | ● | ● | P1，只做 mermaid 就够 |
+| 数学公式（KaTeX） | ● | ● | ● | 已追平，含货币符号收紧规则 |
+| mermaid 等图表 | ● | ● | ● | 已追平，随主题配色 + 错误保留源码 |
 | 脚注 / 高亮 / 上下标 / TOC | ○ | ● | ◐ | P1，方言层一次性补 |
 | 格式化快捷键（⌘B/⌘1-6…） | ○ | ● | ● | P2，手感第一位 |
 | Markdown 输入规则 | ○ | ● | ● | P2 |
@@ -121,7 +121,7 @@ P2 的手感项如果放在 P1 前面，会在数学/图表落地时和格式化
 #### ✅ P0-2 自动保存 + 崩溃恢复
 
 - **需求**：有路径的文档在停止输入 2 秒 / 窗口失焦 / 切标签时静默落盘；未命名文档写进
-  `~/Library/Application Support/typmd/scratch/`，下次启动恢复成未命名标签。
+  `~/Library/Application Support/cursive/scratch/`，下次启动恢复成未命名标签。
   状态栏显示「已保存 14:32」。偏好可关
 - **实现**：必须复用 `encodeDoc` 的指纹路径 —— 自动保存是最容易悄悄破坏「保存零损耗」的地方。
   渲染层已有 `savedDoc` 对比，加一个防抖即可
@@ -146,12 +146,12 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 纯 `sips`+`iconutil`。README / CONTEXT.md 已同步。验收：干净 clone 不装 electron，
 `npm run build` + `release.sh` 全绿。
 
-### P1 内容能力（约 6 天）—— 让文档「渲染得出来」
+### P1 内容能力 —— P1-1/P1-2 ✅，剩 P1-3～P1-5
 
 目标：任何一份正常的技术 Markdown 打开都不会看到裸源码。
-这一层做完，「看起来像 Typora」这件事才算真正完成。
+数学与图表已落地，「看起来像 Typora」视觉部分到此完成。
 
-#### P1-1 KaTeX 数学公式（2 天）
+#### ✅ P1-1 KaTeX 数学公式
 
 - **需求**：行内 `$x^2$` 与块级 `$$…$$` 渲染为公式，光标进入回落源码（Reveal 已有）；
   解析失败显示红色源码而不是崩掉
@@ -165,7 +165,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 - **验收**：`dialect.test.ts` 加 InlineMath/BlockMath 节点断言；`release.sh` 加 `math.md`
   用例断言 `.katex` 计数非零；CSP 下字体确实加载（否则公式会用系统字体凑合，肉眼不一定看得出）
 
-#### P1-2 mermaid 图表（1.5 天）
+#### ✅ P1-2 mermaid 图表
 
 - **需求**：` ```mermaid ` 代码块渲染成图；渲染失败保留源码并显示错误行；跟随深浅色主题
 - **实现**：块级 StateField + 懒加载 `import('mermaid')`（约 1 MB，Vite 自动分 chunk，壳的
@@ -269,7 +269,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 | P3-1 | 文件树可写 | 右键新建/重命名/删除/在 Finder 显示、拖拽移动。删除一律 `NSFileManager.trashItem`，不要 `removeItem`；每个新通道都要校验路径在树根内（沿用 `FileSchemeHandler` 的防穿越写法） | 1.5 天 |
 | P3-2 | 跨文件全局搜索 | **必须在壳侧实现**，渲染层递归 `readDir` 会让 IPC 往返爆炸。`searchFiles(root, query, opts)` 流式回推，用可取消的 Operation | 1.5 天 |
 | P3-3 | 专注 + 打字机模式 | 专注的行级装饰放进 `live-preview` 同一个 plugin，省一次语法树遍历；打字机的地基已有 —— `theme.ts` 里 `.cm-scroller` 的 `paddingBottom: 40vh` 就是为它留的 | 0.5 天 |
-| P3-4 | 主题系统 | 内置浅/深/跟随系统/护眼 + 扫描 `~/Library/Application Support/typmd/themes/*.css`。CSS 变量已就位，缺的只是开关和持久化；壳侧要同步 `NSAppearance`，否则标题栏还是系统色 | 1 天 |
+| P3-4 | 主题系统 | 内置浅/深/跟随系统/护眼 + 扫描 `~/Library/Application Support/cursive/themes/*.css`。CSS 变量已就位，缺的只是开关和持久化；壳侧要同步 `NSAppearance`，否则标题栏还是系统色 | 1 天 |
 | P3-5 | 排版偏好面板 | 字号/行距/栏宽（`--column` 现硬编码 46rem）/衬线切换。**投入产出比最高**：全是现成变量，做的其实是一个面板，而这恰是 Typora 用户改得最勤的东西 | 1 天 |
 | P3-6 | 大纲增强 | 折叠、层级过滤、拖拽重排章节（= 整段文本移动，撤销兼容）、每节字数 | 1 天 |
 | P3-7 | 多窗口 | 要把 `AppDelegate` 里的单 window/webView 抽成 `DocumentWindowController`。越早做越便宜，但有了多标签后紧迫性不高 | 1.5 天 |
@@ -277,7 +277,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 
 ### P4 导出与分发（约 6 天）
 
-目标：文档能离开 typmd。只有在需要把东西交给别人时才值得做 —— 自用场景下优先级最低。
+目标：文档能离开 cursive。只有在需要把东西交给别人时才值得做 —— 自用场景下优先级最低。
 
 | 编号 | 功能 | 要点 | 估时 |
 |---|---|---|:--:|
@@ -318,7 +318,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 | 阶段 | 内容 | 做完的标志 |
 |---|---|---|
 | 第 1 段 | P0 全部 | ✅ 完成：仓库里没有 Electron，崩溃能恢复，外部改文件会同步 |
-| 第 2 段 | P1-1 + P1-2 数学与图表 | 随便打开一份技术笔记不再看到裸的 `$$` 和 mermaid 源码。视觉上「像 Typora」到此为止 |
+| 第 2 段 | P1-1 + P1-2 数学与图表 | ✅ 完成：随便打开一份技术笔记不再看到裸的 `$$` 和 mermaid 源码。视觉上「像 Typora」到此为止 |
 | 第 3 段 | P2-1 → P2-5 手感五件套 | 从网页抄一段带图的资料，全程不用碰鼠标。体验从「能用」跳到「顺手」 |
 | 第 4 段 | P2-6 表格编辑 + P1-3 方言补齐 | 两个「难但影响面窄」的项目放一起收 |
 | 随后 | P3 按需挑，P4 等要交付给别人再说 | P3-5 排版偏好、P3-3 专注/打字机各半天到一天，性价比最高，可随时插队 |

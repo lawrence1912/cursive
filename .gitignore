@@ -4,4 +4,4 @@ dist/
 .DS_Store
 *.tsbuildinfo
 .shots/
-shell-swift/typmd-shell
+shell-swift/cursive-shell

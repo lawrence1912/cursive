@@ -1,13 +1,13 @@
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
-import { typmdMarkdown } from '../src/renderer/editor/markdown-lang'
+import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 import { Reveal, type RevealScope } from '../src/renderer/editor/live-preview/reveal'
 
 const DOC = ['# 标题', '', '带 **粗体** 的一段。', '第二段。'].join('\n')
 
 function revealAt(pos: number, scope: RevealScope): Reveal {
   return new Reveal(
-    EditorState.create({ doc: DOC, selection: { anchor: pos }, extensions: [typmdMarkdown()] }),
+    EditorState.create({ doc: DOC, selection: { anchor: pos }, extensions: [cursiveMarkdown()] }),
     scope
   )
 }
@@ -46,7 +46,7 @@ describe('光标回显范围', () => {
         EditorSelection.cursor(line4Start + 1)
       ]),
       // 不开这个 facet 的话 CodeMirror 会把多光标折叠成一个
-      extensions: [typmdMarkdown(), EditorState.allowMultipleSelections.of(true)]
+      extensions: [cursiveMarkdown(), EditorState.allowMultipleSelections.of(true)]
     })
     const r = new Reveal(state, 'line')
     expect(r.touches(0, 3)).toBe(true)
@@ -58,7 +58,7 @@ describe('光标回显范围', () => {
     const state = EditorState.create({
       doc: DOC,
       selection: { anchor: line3Start + 1, head: line4Start + 2 },
-      extensions: [typmdMarkdown()]
+      extensions: [cursiveMarkdown()]
     })
     const r = new Reveal(state, 'line')
     expect(r.touches(line3Start, line3Start + 1)).toBe(true)

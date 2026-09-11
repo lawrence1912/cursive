@@ -8,14 +8,14 @@
 
    中文强调用着重号，不用斜体：PingFang / Songti 都没有真斜体字形，
    font-style: italic 得到的是浏览器机械倾斜（synthetic oblique），
-   在中文排印里是错的。拉丁文场景想换回斜体：给 <body> 加 typmd-em-italic。 */
+   在中文排印里是错的。拉丁文场景想换回斜体：给 <body> 加 cursive-em-italic。 */
 .cm-md-em {
   -webkit-text-emphasis: dot currentColor;
   text-emphasis: dot currentColor;
   -webkit-text-emphasis-position: under right;
   text-emphasis-position: under right;
 }
-body.typmd-em-italic .cm-md-em {
+body.cursive-em-italic .cm-md-em {
   font-style: italic;
   -webkit-text-emphasis: none;
   text-emphasis: none;
@@ -167,4 +167,64 @@ body.typmd-em-italic .cm-md-em {
   border: 1px dashed var(--border);
   border-radius: 6px;
   padding: 0.3em 0.6em;
+}
+
+/* ---------- 数学公式 ----------
+   KaTeX 自己的字体/间距由 katex.min.css 负责，这里只管它在版面里的位置。
+   光标碰到回显源码时的行样式是 .cm-lp-math（与 .cm-lp-table 同一模式）。 */
+.cm-lp-math {
+  font-family: var(--mono);
+  font-size: 0.95em;
+  color: var(--fg);
+  background: var(--code-bg);
+}
+.cm-lp-math-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+.cm-lp-math-inline .katex {
+  font-size: 1.06em;
+}
+.cm-lp-mathview {
+  display: block;
+  margin: 10px 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+.cm-lp-mathview .katex-display {
+  margin: 0;
+}
+/* KaTeX 语法错误回退：throwOnError:false 产出 .katex-error（原始 TeX），
+   深浅两套主题下都压到足够的对比度 */
+.cm-lp-math-inline .katex-error,
+.cm-lp-mathview .katex-error {
+  color: #e5534b;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+/* ---------- mermaid ---------- */
+.cm-lp-mermaid {
+  display: block;
+  margin: 10px 0;
+  padding: 10px;
+  overflow-x: auto;
+  text-align: center;
+  background: var(--bg);
+  border-radius: 6px;
+}
+.cm-lp-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.cm-lp-mermaid.is-error {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: #e5534b;
+  white-space: pre-wrap;
+  text-align: left;
+  background: var(--code-bg);
+  border: 1px dashed var(--border);
 }

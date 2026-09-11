@@ -8,7 +8,7 @@ interface Node {
   children: Node[] | null
 }
 
-const WIDTH_KEY = 'typmd.sidebarWidth'
+const WIDTH_KEY = 'cursive.sidebarWidth'
 const MIN_WIDTH = 180
 const MAX_WIDTH = 560
 

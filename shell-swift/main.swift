@@ -1,12 +1,12 @@
-// typmd 的原生 macOS 壳（spike → 可用的路线图起点）
+// cursive 的原生 macOS 壳（spike → 可用的路线图起点）
 //
 // 目标：WKWebView 承载现有 out/renderer，window.api 的 15 个通道在 Swift 侧 1:1 实现，
 // 渲染进程（CodeMirror 6 编辑器）零改动。
 //
 // 编译（无需 Xcode.app，CLT 即可）：
-//   swiftc -O -swift-version 5 shell-swift/main.swift -o shell-swift/typmd-shell
+//   swiftc -O -swift-version 5 shell-swift/main.swift -o shell-swift/cursive-shell
 // 运行（项目根目录）：
-//   ./shell-swift/typmd-shell [file.md]
+//   ./shell-swift/cursive-shell [file.md]
 
 import AppKit
 import WebKit
@@ -178,9 +178,22 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
             return fail(task)
         }
         let ext = file.pathExtension.lowercased()
-        let resp = URLResponse(url: url,
-                               mimeType: Self.mime[ext] ?? "application/octet-stream",
-                               expectedContentLength: data.count, textEncodingName: ext == "js" || ext == "css" || ext == "html" ? "utf-8" : nil)
+        // 必须用 HTTPURLResponse 显式带 Cache-Control: no-store ——
+        // 裸 URLResponse 不带任何缓存指令时，WKWebView 会把 app://r 的响应持久缓存，
+        // 重新构建后浏览器还在跑旧 bundle（症状极其感拐：改了代码却永远不生效，
+        // 因为 index.html 是固定文件名，永远是同一个缓存键）。本地磁盘读取便宜，
+        // 换取「每次启动都拿到当前产物」是唯一正确的取舍。
+        // Content-Type 必须显式给：.js 不是 text/javascript 的话 ES module 会被拒载。
+        let mime = Self.mime[ext] ?? "application/octet-stream"
+        let charset = ext == "js" || ext == "css" || ext == "html" ? "; charset=utf-8" : ""
+        let resp = HTTPURLResponse(url: url,
+                                   statusCode: 200,
+                                   httpVersion: "HTTP/1.1",
+                                   headerFields: [
+                                    "Cache-Control": "no-store",
+                                    "Content-Type": "\(mime)\(charset)",
+                                    "Content-Length": String(data.count)
+                                   ])!
         task.didReceive(resp)
         task.didReceive(data)
         task.didFinish()
@@ -198,7 +211,7 @@ func jsonLiteral(_ v: Any) -> String {
     return String(s.dropFirst().dropLast())   // 去掉数组包装 [ ]
 }
 
-/// renderer 资源根：① 打包态 Bundle Resources（typmd.app/Contents/Resources/renderer）
+/// renderer 资源根：① 打包态 Bundle Resources（cursive.app/Contents/Resources/renderer）
 /// ② cwd/out/renderer（项目根开发）③ 可执行位置回退
 func findRendererRoot() -> URL {
     if let res = Bundle.main.resourceURL {
@@ -279,7 +292,7 @@ final class DragStripView: NSView {
 }
 
 // MARK: - PDF 导出：离屏 A4 视图复用同一 renderer 渲染，createPDF 落盘
-// 不改 renderer：加载 app://r/index.html，等 __typmd 就绪后用 __shellEmit 注入文档，
+// 不改 renderer：加载 app://r/index.html，等 __cursive 就绪后用 __shellEmit 注入文档，
 // 注入打印 CSS（隐 UI/白底/高度自适应），等字体+图片稳定后 capture。
 
 final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -309,6 +322,10 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 595, height: 842), configuration: config)
         wv.navigationDelegate = self
         self.wv = wv
+        // 清掉历史版本留下的 scheme 缓存：老版本响应没带 Cache-Control，
+        // 旧 bundle 会一直盖住新产物（升级后第一次启动必须自愈一次）
+        let stale: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        WKWebsiteDataStore.default().removeData(ofTypes: stale, modifiedSince: .distantPast) {}
         wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
     }
 
@@ -317,14 +334,14 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
     }
 
     private func fail(_ msg: String) {
-        completion?(.failure(NSError(domain: "typmd.export", code: 1,
+        completion?(.failure(NSError(domain: "cursive.export", code: 1,
                                      userInfo: [NSLocalizedDescriptionKey: msg])))
         completion = nil
     }
 
     private func waitForEditor(attempt: Int = 0, then: @escaping () -> Void) {
         guard attempt < 100 else { return fail("渲染层初始化超时") }
-        wv?.evaluateJavaScript("typeof window.__typmd === 'object'") { [weak self] ready, _ in
+        wv?.evaluateJavaScript("typeof window.__cursive === 'object'") { [weak self] ready, _ in
             guard let self else { return }
             if (ready as? Bool) == true { then() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -426,9 +443,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     var lastNotify: [String: Date] = [:]
 
     var scratchDir: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("typmd/scratch", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("cursive/scratch", isDirectory: true)
+        // 改名 typmd → cursive：旧目录还在、新的还没建过，就把崩溃恢复的暂存整个挪过来
+        let legacy = base.appendingPathComponent("typmd", isDirectory: true)
+        if fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.moveItem(at: legacy.appendingPathComponent("scratch"), to: dir)
+            try? fm.removeItem(at: legacy)
+        }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
@@ -483,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        window.title = "typmd"
+        window.title = "cursive"
         window.titlebarAppearsTransparent = true          // ≈ Electron hiddenInset
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true         // 替代 -webkit-app-region: drag
@@ -515,9 +540,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         NSApp.activate(ignoringOtherApps: true)
 
         buildMenu()
+        let staleCache: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        WKWebsiteDataStore.default().removeData(ofTypes: staleCache, modifiedSince: .distantPast) {}
         webView.load(URLRequest(url: URL(string: "app://r/index.html")!))
 
-        // argv 打开文档：typmd-shell /path/to/file.md
+        // argv 打开文档：cursive-shell /path/to/file.md
         if let arg = CommandLine.arguments.dropFirst().first(where: {
             !$0.hasPrefix("-") && FileManager.default.fileExists(atPath: $0)
         }) {
@@ -541,14 +568,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let main = NSMenu()
 
         let appItem = NSMenuItem(); main.addItem(appItem)
-        let appMenu = NSMenu(title: "typmd")
-        appMenu.addItem(NSMenuItem(title: "关于 typmd", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        let appMenu = NSMenu(title: "cursive")
+        appMenu.addItem(NSMenuItem(title: "关于 cursive", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
         appMenu.addItem(.separator())
         appMenu.addItem(item("设置…", "app:preferences", key: ","))
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "隐藏 typmd", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        appMenu.addItem(NSMenuItem(title: "隐藏 cursive", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem(title: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h"))
-        appMenu.addItem(NSMenuItem(title: "退出 typmd", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "退出 cursive", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
 
         let fileItem = NSMenuItem(); main.addItem(fileItem)
@@ -685,7 +712,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     private func fetchLiveContent(_ then: @escaping (String) -> Void) {
-        webView.evaluateJavaScript("(window.__typmd ? window.__typmd.view.state.doc.toString() : '')") {
+        webView.evaluateJavaScript("(window.__cursive ? window.__cursive.view.state.doc.toString() : '')") {
             content, _ in
             if let text = content as? String { then(text) }
         }
@@ -804,7 +831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             if let p = path { updateWatchers([p]) }
             dirty = st["dirty"] as? Bool ?? false
             let name = path.map { ($0 as NSString).lastPathComponent } ?? "未命名"
-            window.title = "\(dirty ? "• " : "")\(name) — typmd"
+            window.title = "\(dirty ? "• " : "")\(name) — cursive"
             window.isDocumentEdited = dirty
             if let p = path { window.representedFilename = p }
             respond(id, NSNull())
@@ -895,7 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             }
             // 冒烟用：拖慢恢复的应答，制造「文件先到、崩溃恢复后到」的竞态 ——
             // 正常顺序下 scratchList 几毫秒就回来了，那条路永远测不到
-            if let d = ProcessInfo.processInfo.environment["TYPMD_SMOKE_SCRATCH_DELAY"],
+            if let d = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SCRATCH_DELAY"],
                let ms = Double(d) {
                 let payload = list
                 DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000) { self.respond(id, payload) }
@@ -961,10 +988,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     /// didFinish 可能早于渲染层模块执行完（监听器未注册时 emit 会静默丢失），
-    /// 轮询 window.__typmd（main.js 末尾暴露的就绪标记）就绪后再发 file:opened
+    /// 轮询 window.__cursive（main.js 末尾暴露的就绪标记）就绪后再发 file:opened
     private func flushPendingOpen(attempt: Int = 0) {
         guard let p = pendingOpen, attempt < 100 else { return }
-        webView.evaluateJavaScript("typeof window.__typmd === 'object'") { [weak self] ready, _ in
+        webView.evaluateJavaScript("typeof window.__cursive === 'object'") { [weak self] ready, _ in
             guard let self else { return }
             if (ready as? Bool) == true {
                 self.pendingOpen = nil
@@ -982,8 +1009,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     private func runProbe() {
-        // 探针/E2E 只在 TYPMD_SMOKE 下运行；普通启动是正常交互应用，绝不自动退出
-        guard ProcessInfo.processInfo.environment["TYPMD_SMOKE"] != nil else { return }
+        // 探针/E2E 只在 CURSIVE_SMOKE 下运行；普通启动是正常交互应用，绝不自动退出
+        guard ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil else { return }
         let probe = """
         (() => ({
           title: document.title,
@@ -1043,22 +1070,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             } else {
                 obj["dragStripHit"] = false
             }
-            self.writeJSON(obj, to: "/tmp/typmd-shell-check.json")
+            self.writeJSON(obj, to: "/tmp/cursive-shell-check.json")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runE2E() }
         }
     }
 
     /// E2E：read → save 逐字节往返（验证 BOM/EOL 指纹）+ live-preview 图片加载检测。
-    /// 仅 TYPMD_SMOKE 模式；完成后自动退出（自动化验收用）
+    /// 仅 CURSIVE_SMOKE 模式；完成后自动退出（自动化验收用）
     private func runE2E() {
-        let source = lastDocPath ?? "/tmp/typmd-e2e/img.md"
-        let outPath = "/tmp/typmd-e2e/roundtrip.out"
+        let source = lastDocPath ?? "/tmp/cursive-e2e/img.md"
+        let outPath = "/tmp/cursive-e2e/roundtrip.out"
         let body = """
         try {
         const doc = await window.api.read(path)
-        const reloaded = window.__typmd.view.state.doc.toString().includes('external-append-marker')
+        const reloaded = window.__cursive.view.state.doc.toString().includes('external-append-marker')
         // P0-2 验收：编辑器追加标记 → 2s 防抖自动保存应落盘
-        const v = window.__typmd.view
+        const v = window.__cursive.view
         v.dispatch({ changes: { from: v.state.doc.length, insert: '\\nautosave-check-marker' } })
         await new Promise(r => setTimeout(r, 2600))
         await window.api.save(outPath, v.state.doc.toString(), doc.fingerprint)
@@ -1097,8 +1124,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         await new Promise(r => setTimeout(r, 60))
         const tbBack = getComputedStyle(sb).display
         const counts = {}
-        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview'])
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid'])
           counts[cls] = document.querySelectorAll('.' + cls).length
+        // P1-1：KaTeX 字体必须真的加载了（CSP 拦掉的话公式会用系统字体凑合，
+        // 肉眼不一定看得出）。fonts.ready 之后任一 KaTeX_* 字体到位即算过
+        await document.fonts.ready
+        const math = {
+          inline: counts['cm-lp-math-inline'],
+          block: counts['cm-lp-mathview'],
+          font: [...document.fonts].some((f) => /^['"]?KaTeX_/.test(f.family) && f.status === 'loaded')
+        }
+        // P1-2：mermaid 异步渲染（动态 import + render），多等一会儿
+        await new Promise((r) => setTimeout(r, 700))
+        const mermaidEls = [...document.querySelectorAll('.cm-lp-mermaid')]
+        const mermaid = {
+          count: mermaidEls.length,
+          svg: mermaidEls.filter((el) => el.querySelector('svg')).length,
+          error: mermaidEls.filter((el) => el.classList.contains('is-error')).length
+        }
         // 表格可编辑回归（counts 之后做 —— 这一点会把 tableview 换回源码）：
         // 点第一个正文单元格的左半边，光标必须落在源码里那一格的开头
         let tableEdit = null
@@ -1108,7 +1151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           td.dispatchEvent(new MouseEvent('mousedown',
             { bubbles: true, clientX: box.left + 4, clientY: box.top + box.height / 2 }))
           await new Promise(done => setTimeout(done, 80))
-          const st = window.__typmd.view.state
+          const st = window.__cursive.view.state
           const head = st.selection.main.head
           tableEdit = {
             revealed: !document.querySelector('.cm-lp-tableview'),
@@ -1130,6 +1173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           tbHitPage,
           tbMidY,
           tableEdit,
+          math,
+          mermaid,
           counts,
           cmLines: document.querySelectorAll('.cm-line').length
         }
@@ -1158,10 +1203,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 out["error"] = e.localizedDescription
                 out["bytesEqual"] = false
             }
-            self.writeJSON(out, to: "/tmp/typmd-shell-e2e.json")
+            self.writeJSON(out, to: "/tmp/cursive-shell-e2e.json")
             self.captureShot {
-            // TYPMD_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板）
-            if let pdfOut = ProcessInfo.processInfo.environment["TYPMD_SMOKE_PDF"] {
+            // CURSIVE_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板）
+            if let pdfOut = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PDF"] {
                 self.fetchLiveContent { text in
                     let exporter = PDFExporter(
                         content: text, docPath: self.lastDocPath,
@@ -1176,7 +1221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                         case .failure(let e):
                             pdfResult["error"] = e.localizedDescription
                         }
-                        self.writeJSON(pdfResult, to: "/tmp/typmd-shell-pdf.json")
+                        self.writeJSON(pdfResult, to: "/tmp/cursive-shell-pdf.json")
                         NSApp.terminate(nil)
                     }
                 }
@@ -1187,13 +1232,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
 
-    /// TYPMD_SMOKE_SHOT=<路径>：整窗截图（含 sidebar / tabbar / outline / status-bar）。
+    /// CURSIVE_SMOKE_SHOT=<路径>：整窗截图（含 sidebar / tabbar / outline / status-bar）。
     /// 目检 chrome 必须走这条 —— PDF 那条路的 printCSS 第一行就把这些面板全 display:none 了。
     private func captureShot(then next: @escaping () -> Void) {
-        guard let out = ProcessInfo.processInfo.environment["TYPMD_SMOKE_SHOT"] else { return next() }
-        // TYPMD_SMOKE_THEME=dark|light|system：截图前先切主题（视觉走查两套配色用；
+        guard let out = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT"] else { return next() }
+        // CURSIVE_SMOKE_THEME=dark|light|system：截图前先切主题（视觉走查两套配色用；
         // 它会写进 localStorage，走查完记得用 system 复位）
-        if let theme = ProcessInfo.processInfo.environment["TYPMD_SMOKE_THEME"],
+        if let theme = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_THEME"],
            ["dark", "light", "system"].contains(theme) {
             webView.evaluateJavaScript("window.__shellEmit('menu', 'view:theme-\(theme)')")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.snapshot(to: out, then: next) }
@@ -1216,7 +1261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             } else {
                 res["error"] = err?.localizedDescription ?? "snapshot failed"
             }
-            self?.writeJSON(res, to: "/tmp/typmd-shell-shot.json")
+            self?.writeJSON(res, to: "/tmp/cursive-shell-shot.json")
             next()
         }
     }

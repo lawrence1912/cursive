@@ -1,21 +1,31 @@
 import './themes/base.css'
 import './themes/live-preview.css'
+import 'katex/dist/katex.min.css'
 
 import { openSearchPanel } from '@codemirror/search'
-import { syntaxTree } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import type { EditorState, Text } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
 import type { DocPayload, MenuAction } from '../shared/types'
 import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
 import { count } from '../shared/wordcount'
-import { livePreview } from './editor/live-preview'
+import { syntaxTree } from '@codemirror/language'
+import { livePreview, themeEffect } from './editor/live-preview'
+import { currentTheme } from './editor/live-preview/widgets'
 import { createState, livePreviewConf } from './editor/setup'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline, type OutlineItem } from './ui/outline'
 import { icon } from './ui/icons'
 import { Prefs } from './ui/prefs'
+
+// 改名 typmd → cursive：老 localStorage key 一次性搬过来，搬完就删（下个大版本可以拿掉这一段）
+for (const k of ['outlineVisible', 'sidebarWidth', 'prefs']) {
+  const old = localStorage.getItem(`typmd.${k}`)
+  if (old === null) continue
+  if (localStorage.getItem(`cursive.${k}`) === null) localStorage.setItem(`cursive.${k}`, old)
+  localStorage.removeItem(`typmd.${k}`)
+}
 
 const host = document.getElementById('editor-host')!
 const elFile = document.getElementById('status-file')!
@@ -51,7 +61,7 @@ const outline = new Outline((pos) => {
   view.focus()
 })
 document.getElementById('main')!.appendChild(outline.el)
-outline.el.classList.toggle('is-hidden', localStorage.getItem('typmd.outlineVisible') === '0')
+outline.el.classList.toggle('is-hidden', localStorage.getItem('cursive.outlineVisible') === '0')
 view.scrollDOM.addEventListener('scroll', () => {
   outline.setActive(activeHeadingPos())
 })
@@ -87,7 +97,7 @@ function toggleSidebar(): void {
 
 function toggleOutline(): void {
   outline.toggle()
-  localStorage.setItem('typmd.outlineVisible', outline.visible ? '1' : '0')
+  localStorage.setItem('cursive.outlineVisible', outline.visible ? '1' : '0')
   if (outline.visible) updateOutline()
   syncTitlebar()
 }
@@ -318,7 +328,7 @@ function syncMode(): void {
   view.dispatch({
     effects: livePreviewConf.reconfigure(sourceMode ? [] : livePreview())
   })
-  view.dom.classList.toggle('typmd-source', sourceMode)
+  view.dom.classList.toggle('cursive-source', sourceMode)
   elMode.textContent = sourceMode ? '源代码' : '预览'
 }
 
@@ -571,7 +581,7 @@ async function handleExternalChange(path: string): Promise<void> {
 }
 
 // 暴露给冒烟脚本和开发者控制台，方便在没法手点界面时驱动编辑器
-;(window as unknown as { __typmd: { view: EditorView; sidebar: Sidebar } }).__typmd = {
+;(window as unknown as { __cursive: { view: EditorView; sidebar: Sidebar } }).__cursive = {
   view,
   sidebar
 }
@@ -583,8 +593,25 @@ syncStatus(true)
 scheduleCount()
 view.focus()
 
+// 主题 → 块级 widget：mermaid 的配色烘在 SVG 里，切主题必须重渲染。
+// data-theme 由 ui/prefs.ts 钉成确定的 light/dark，这里监听它：活动标签实时
+// 重渲染；冻结标签把 state 重建一遍 —— widget DOM 会被 CM 按 eq() 缓存，
+// 不重建 state 的话切回标签还是旧配色的图
+function syncThemeToTabs(): void {
+  const theme = currentTheme()
+  for (const t of tabs) {
+    if (t.id === activeId) view.dispatch({ effects: themeEffect.of(theme) })
+    // 冻结标签：state.update 返回 Transaction，新 state 在 .state 上
+    else t.state = t.state.update({ effects: themeEffect.of(theme) }).state
+  }
+}
+new MutationObserver(syncThemeToTabs).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ['data-theme']
+})
+
 // P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签。
-// 整段是异步的，而 argv/Finder 那份文件是壳轮询 __typmd 就绪后推过来的 ——
+// 整段是异步的，而 argv/Finder 那份文件是壳轮询 __cursive 就绪后推过来的 ——
 // 两边谁先到都有可能，所以这里必须假设「等 scratchList 的工夫文件已经开好了」
 void (async () => {
   const list = await window.api.scratchList()

@@ -14,7 +14,7 @@ export interface PrefValues {
   column: number
 }
 
-const KEY = 'typmd.prefs'
+const KEY = 'cursive.prefs'
 const DEFAULTS: PrefValues = { theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42 }
 
 const FONT_LABEL: Record<BodyFont, string> = { serif: '衬线', sans: '无衬线' }

@@ -13,8 +13,8 @@ import {
   rectangularSelection
 } from '@codemirror/view'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
-import { typmdMarkdown } from './markdown-lang'
-import { typmdTheme } from './theme'
+import { cursiveMarkdown } from './markdown-lang'
+import { cursiveTheme } from './theme'
 
 /** 源代码模式 = 把实时预览插件从这个 compartment 里撤掉 */
 export const livePreviewConf = new Compartment()
@@ -48,10 +48,10 @@ export function createState(
       search({ top: false }),
       EditorState.allowMultipleSelections.of(true),
       EditorView.lineWrapping,
-      typmdMarkdown(),
+      cursiveMarkdown(),
       docDir.of(options.dir ?? null),
       revealScope.of(options.reveal ?? 'line'),
-      typmdTheme,
+      cursiveTheme,
       livePreviewConf.of(options.sourceMode ? [] : livePreview()),
       keymap.of([
         ...closeBracketsKeymap,

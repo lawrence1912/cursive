@@ -12,7 +12,7 @@ import { promisify } from 'node:util'
 const run = promisify(execFile)
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const master = join(root, 'build', 'icon.png')
-const iconset = join(root, 'build', 'typmd.iconset')
+const iconset = join(root, 'build', 'cursive.iconset')
 
 // .icns 需要的全套尺寸
 const SIZES = [16, 32, 32, 64, 128, 256, 256, 512, 512, 1024]
