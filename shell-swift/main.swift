@@ -109,20 +109,41 @@ let BRIDGE_JS = """
 })()
 """
 
-// MARK: - app:// 协议：把 out/renderer 当源站服务（绕开 file:// opaque origin 下
-// <script type="module" crossorigin> 拉不到资源的问题，等价于 Electron 的 registerSafeFileProtocol）
+// MARK: - 文件协议：app://r（服务 out/renderer）与 safe-file://local（绝对路径图片）共用
+//
+// app:// 必须存在：<script type="module" crossorigin> 在 WKWebView 的 file:// 下
+// 因 opaque origin 静默失败（等价于 Electron 的 registerSafeFileProtocol 思路）。
+// safe-file://local<encodeURI(绝对路径)> 由渲染层 live-preview/decorate.ts 生成。
 
-final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
-    let root: URL  // out/renderer
-    private static let mime = [
+final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
+    /// nil = safe-file 模式：path 本身是绝对文件路径；非 nil = app 模式：相对该目录
+    let root: URL?
+
+    static let mime = [
         "html": "text/html", "js": "text/javascript", "mjs": "text/javascript",
         "css": "text/css", "json": "application/json", "svg": "image/svg+xml",
         "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "gif": "image/gif", "webp": "image/webp", "ico": "image/x-icon",
+        "gif": "image/gif", "webp": "image/webp", "avif": "image/avif",
+        "bmp": "image/bmp", "ico": "image/x-icon",
         "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf"
     ]
 
-    init(root: URL) { self.root = root }
+    init(root: URL?) { self.root = root }
+
+    /// 按模式解析出目标文件：root 模式（app://r）相对目录 + 防穿越；nil（safe-file）绝对路径
+    private func resolvedFile(path: String) -> URL? {
+        if let root {
+            let rel = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let parts = rel.split(separator: "/").map(String.init)
+            guard !parts.isEmpty, !parts.contains(".."), !rel.contains("//") else { return nil }
+            let candidate = root.appendingPathComponent(rel).standardizedFileURL
+            guard candidate.path.hasPrefix(root.standardizedFileURL.path) else { return nil }
+            return candidate
+        }
+        guard path.hasPrefix("/"),
+              !path.contains("/../"), !path.hasSuffix("/.."), path != "/.." else { return nil }
+        return URL(fileURLWithPath: path).standardizedFileURL
+    }
 
     private func fail(_ task: WKURLSchemeTask) {
         let resp = URLResponse(url: task.request.url!, mimeType: nil, expectedContentLength: 0, textEncodingName: nil)
@@ -132,12 +153,23 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return fail(task) }
-        let rel = (url.path.removingPercentEncoding ?? url.path).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let parts = rel.split(separator: "/").map(String.init)
-        guard !parts.isEmpty, !parts.contains(".."), !rel.contains("//") else { return fail(task) }
-        let file = root.appendingPathComponent(rel).standardizedFileURL
-        guard file.path.hasPrefix(root.standardizedFileURL.path),
-              let data = try? Data(contentsOf: file) else { return fail(task) }
+        // ⚠️ WebKit 会对自定义 scheme 的 URL 再做一次百分号编码（% → %25），
+        // 而渲染层拼 safe-file URL 时已经 encodeURI 过了 —— 所以这里要
+        // 逐级解码：先解一次，文件不存在再解一次（两种情况都对字面 % 文件名成立）
+        let raw = url.path(percentEncoded: true)
+        var path = raw.removingPercentEncoding ?? raw
+        var file: URL?
+        for _ in 0..<2 {
+            file = resolvedFile(path: path)
+            if file != nil, let f = file, FileManager.default.fileExists(atPath: f.path) { break }
+            guard let next = path.removingPercentEncoding, next != path else { break }
+            path = next
+            file = nil
+        }
+        guard let file, let data = try? Data(contentsOf: file) else {
+            FileHandle.standardError.write("[scheme] 404 \(url.absoluteString)\n".data(using: .utf8)!)
+            return fail(task)
+        }
         let ext = file.pathExtension.lowercased()
         let resp = URLResponse(url: url,
                                mimeType: Self.mime[ext] ?? "application/octet-stream",
@@ -158,13 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     var dirty = false
     var forceClose = false
     var pendingOpen: String?
+    var lastDocPath: String?
 
     // ---- 启动 ----
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
         let cwd = FileManager.default.currentDirectoryPath
-        config.setURLSchemeHandler(AppSchemeHandler(root: URL(fileURLWithPath: "\(cwd)/out/renderer")), forURLScheme: "app")
+        config.setURLSchemeHandler(FileSchemeHandler(root: URL(fileURLWithPath: "\(cwd)/out/renderer")), forURLScheme: "app")
+        config.setURLSchemeHandler(FileSchemeHandler(root: nil), forURLScheme: "safe-file")
         config.userContentController.add(self, name: "shell")
         config.userContentController.addUserScript(
             WKUserScript(source: BRIDGE_JS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -192,6 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
         buildMenu()
         webView.load(URLRequest(url: URL(string: "app://r/index.html")!))
+
+        // argv 打开文档：typmd-shell /path/to/file.md
+        if let arg = CommandLine.arguments.dropFirst().first(where: {
+            !$0.hasPrefix("-") && FileManager.default.fileExists(atPath: $0)
+        }) {
+            pendingOpen = URL(fileURLWithPath: arg).standardizedFileURL.path
+        }
     }
 
     /// Finder 双击 .md
@@ -295,8 +336,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     private func openPath(_ path: String) {
         do {
+            lastDocPath = path
             let doc = try readDoc(path)
-            webView.evaluateJavaScript("window.__shellEmit('file:opened', \(jsValue(doc)))")
+            let js = "window.__shellEmit('file:opened', \(jsValue(doc)))"
+            webView.evaluateJavaScript(js) { _, err in
+                if let err {
+                    let msg = "[openPath] emit error: \(err)\n"
+                    FileHandle.standardError.write(msg.data(using: .utf8)!)
+                }
+            }
         } catch { showError("打不开文件", error.localizedDescription) }
     }
 
@@ -430,9 +478,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     // ---- 加载完成后：写入自检结果 + 处理 Finder 打开 ----
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // 延迟探针：给编辑器异步初始化留时间
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.runProbe() }
-        if let p = pendingOpen { pendingOpen = nil; openPath(p) }
+        flushPendingOpen()
+    }
+
+    /// didFinish 可能早于渲染层模块执行完（监听器未注册时 emit 会静默丢失），
+    /// 轮询 window.__typmd（main.js 末尾暴露的就绪标记）就绪后再发 file:opened
+    private func flushPendingOpen(attempt: Int = 0) {
+        guard let p = pendingOpen, attempt < 100 else { return }
+        webView.evaluateJavaScript("typeof window.__typmd === 'object'") { [weak self] ready, _ in
+            guard let self else { return }
+            if (ready as? Bool) == true {
+                self.pendingOpen = nil
+                self.openPath(p)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.flushPendingOpen(attempt: attempt + 1) }
+            }
+        }
+    }
+
+    private func writeJSON(_ obj: Any, to path: String) {
+        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
     }
 
     private func runProbe() {
@@ -448,11 +516,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           status: (document.querySelector('#status-file') || {}).textContent || null
         }))()
         """
-        webView.evaluateJavaScript(probe) { result, _ in
-            if let data = try? JSONSerialization.data(withJSONObject: result ?? "-", options: [.prettyPrinted, .sortedKeys]) {
-                try? data.write(to: URL(fileURLWithPath: "/tmp/typmd-shell-check.json"))
+        webView.evaluateJavaScript(probe) { [weak self] result, _ in
+            guard let self, let obj = result else { return }
+            self.writeJSON(obj, to: "/tmp/typmd-shell-check.json")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runE2E() }
+        }
+    }
+
+    /// E2E：read → save 逐字节往返（验证 BOM/EOL 指纹）+ live-preview 图片加载检测
+    private func runE2E() {
+        let source = lastDocPath ?? "/tmp/typmd-e2e/img.md"
+        let outPath = "/tmp/typmd-e2e/roundtrip.out"
+        let body = """
+        const doc = await window.api.read(path)
+        await window.api.save(outPath, doc.content, doc.fingerprint)
+        const img = document.querySelector('.cm-lp-image img')
+        const counts = {}
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule'])
+          counts[cls] = document.querySelectorAll('.' + cls).length
+        return {
+          fingerprint: doc.fingerprint,
+          img: img
+            ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
+            : null,
+          counts,
+          cmLines: document.querySelectorAll('.cm-line').length
+        }
+        """
+        webView.callAsyncJavaScript(
+            body,
+            arguments: ["path": source, "outPath": outPath],
+            in: nil, in: .page
+        ) { [weak self] result in
+            guard let self else { return }
+            var out: [String: Any] = ["source": source, "roundtrip": outPath]
+            switch result {
+            case .success(let v):
+                out["result"] = v
+                if let a = try? Data(contentsOf: URL(fileURLWithPath: source)),
+                   let b = try? Data(contentsOf: URL(fileURLWithPath: outPath)) {
+                    out["bytesEqual"] = a == b
+                } else { out["bytesEqual"] = false }
+            case .failure(let e):
+                out["error"] = e.localizedDescription
+                out["bytesEqual"] = false
             }
-            NSApp.terminate(nil)   // 自检完自动退出，便于脚本化验证
+            self.writeJSON(out, to: "/tmp/typmd-shell-e2e.json")
+            NSApp.terminate(nil)
         }
     }
 }

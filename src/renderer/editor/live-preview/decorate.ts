@@ -1,4 +1,4 @@
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { Facet, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
@@ -49,7 +49,13 @@ export function buildDecorations(view: EditorView): DecorationSet {
     visFrom: 0,
     visTo: 0
   }
-  const tree = syntaxTree(state)
+  // parse 是异步分块的：只用 syntaxTree(state) 的话，首次打开长文档时
+  // 深处的节点拿不到树，装饰会缺失直到用户交互触发重建。
+  // 这里把可视范围强制同步解析到位（有界：不超视口 + 1KB 余量）。
+  const ranges = view.visibleRanges
+  const visEnd = ranges.length ? ranges[ranges.length - 1].to : state.doc.length
+  const tree =
+    ensureSyntaxTree(state, Math.min(visEnd + 1000, state.doc.length)) ?? syntaxTree(state)
 
   for (const { from, to } of view.visibleRanges) {
     ctx.visFrom = from
