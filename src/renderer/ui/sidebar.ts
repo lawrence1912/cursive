@@ -1,4 +1,4 @@
-import { basename } from '../../shared/path'
+import { basename, dirname } from '../../shared/path'
 import type { DirEntry } from '../../shared/types'
 
 interface Node {
@@ -86,6 +86,11 @@ export class Sidebar {
   /** 标记当前正在编辑的文件，并展开沿途的目录 */
   async setActive(path: string | null): Promise<void> {
     this.activePath = path
+    // 没开过文件夹时，把文档所在目录挂为树根 —— 打开单个 .md 也能立刻看到文件树
+    if (path && !this.root) {
+      const dir = dirname(path)
+      if (dir) await this.open(dir)
+    }
     if (path && this.root && path.startsWith(`${this.root}/`)) {
       // 逐级展开，让这个文件在树里可见
       const rel = path.slice(this.root.length + 1).split('/')

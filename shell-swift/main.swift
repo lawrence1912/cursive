@@ -741,7 +741,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           cmState: !!document.querySelector('.cm-content'),
           host: !!document.querySelector('#editor-host'),
           sidebar: !!document.querySelector('#sidebar'),
-          status: (document.querySelector('#status-file') || {}).textContent || null
+          status: (document.querySelector('#status-file') || {}).textContent || null,
+          sbRows: document.querySelectorAll('.sb-row').length
         }))()
         """
         webView.evaluateJavaScript(probe) { [weak self] result, _ in
@@ -770,7 +771,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         await window.api.save(outPath, doc.content, doc.fingerprint)
         const img = document.querySelector('.cm-lp-image img')
         const counts = {}
-        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule'])
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview'])
           counts[cls] = document.querySelectorAll('.' + cls).length
         return {
           fingerprint: doc.fingerprint,

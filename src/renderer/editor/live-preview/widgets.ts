@@ -95,3 +95,83 @@ export class ImageWidget extends WidgetType {
     return wrap
   }
 }
+
+// ---------- GFM 表格 ----------
+// 光标碰到时回显管道符源码（decorate.ts 的 .cm-lp-table），
+// 否则整个块替换成真表格。块级装饰必须由 StateField 提供（见 index.ts 的 tableField）。
+
+export interface TableData {
+  aligns: ('left' | 'center' | 'right')[]
+  header: string[]
+  rows: string[][]
+}
+
+/** 单元格里的 `\|` 转义先换成占位符再切列，避免被当成边界 */
+const ESC = '\u0000'
+
+function splitRow(line: string): string[] {
+  const body = line
+    .trim()
+    .replace(/\\\|/g, ESC)
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+  return body.split('|').map((c) => c.trim().split(ESC).join('|'))
+}
+
+/** 解析 GFM 管道表格；结构不合法（少于 2 行 / 分隔行不合规）返回 null */
+export function parseTable(text: string): TableData | null {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+  if (lines.length < 2) return null
+  const delimCells = splitRow(lines[1])
+  if (delimCells.length === 0 || !delimCells.every((c) => /^:?-+:?$/.test(c))) return null
+  const aligns = delimCells.map((c) => {
+    const left = c.startsWith(':')
+    const right = c.endsWith(':')
+    if (left && right) return 'center' as const
+    if (right) return 'right' as const
+    return 'left' as const
+  })
+  const header = splitRow(lines[0])
+  if (header.length === 0) return null
+  const rows = lines.slice(2).map((l) => splitRow(l))
+  return { aligns, header, rows }
+}
+
+export class TableWidget extends WidgetType {
+  constructor(readonly data: TableData) {
+    super()
+  }
+  eq(other: TableWidget): boolean {
+    return JSON.stringify(other.data) === JSON.stringify(this.data)
+  }
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-lp-tableview'
+    const table = document.createElement('table')
+
+    const thead = table.createTHead()
+    const hr = thead.insertRow()
+    this.data.header.forEach((cell, i) => {
+      const th = document.createElement('th')
+      th.textContent = cell
+      th.style.textAlign = this.data.aligns[i] ?? 'left'
+      hr.appendChild(th)
+    })
+
+    const tbody = table.createTBody()
+    for (const row of this.data.rows) {
+      const tr = tbody.insertRow()
+      this.data.header.forEach((_, i) => {
+        const td = tr.insertCell()
+        td.style.textAlign = this.data.aligns[i] ?? 'left'
+        td.textContent = row[i] ?? ''
+      })
+    }
+
+    wrap.appendChild(table)
+    return wrap
+  }
+}

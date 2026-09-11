@@ -94,10 +94,12 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       addLines(ctx, node.from, node.to, 'cm-lp-code')
       return
 
-    case 'Table':
-      // 等宽字体让管道符对齐；真正的表格渲染是 M2
-      addLines(ctx, node.from, node.to, 'cm-lp-table')
-      return
+    case 'Table': {
+      // 真表格渲染在 index.ts 的 tableField（块级装饰必须走 StateField）。
+      // 这里只负责「光标碰到 → 回显管道符源码」的行样式。
+      if (revealed) addLines(ctx, node.from, node.to, 'cm-lp-table')
+      return false
+    }
 
     // ---------- 块级：整行换成组件 ----------
     case 'HorizontalRule': {

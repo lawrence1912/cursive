@@ -4,7 +4,7 @@
 # 用法：
 #   ./shell-swift/release.sh              # 测试 + 打包 dist/typmd.app
 #   TYPMD_DMG=1 ./shell-swift/release.sh  # 额外出 dist/typmd-<version>.dmg
-set -e
+set -e -o pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> [1/4] 单元测试 + 构建 renderer"
@@ -19,6 +19,7 @@ rm -rf "$FIX"; mkdir -p "$FIX/assets"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md "$FIX/"
 cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
 printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n' > "$FIX/img.md"
+printf '# 表格测试\n\n| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| a | b | c |\n| **粗体** | `code` | d |\n' > "$FIX/table.md"
 
 run_case() {
     rm -f /tmp/typmd-shell-check.json /tmp/typmd-shell-e2e.json
@@ -29,12 +30,15 @@ c = json.load(open('/tmp/typmd-shell-check.json'))
 e = json.load(open('/tmp/typmd-shell-e2e.json'))
 r = e['result']; img = r.get('img')
 ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
-      and e['bytesEqual'] and (img is None or img['loaded']))
+      and e['bytesEqual'] and (img is None or img['loaded']) and c.get('sbRows', 0) >= 1)
+if sys.argv[1] == 'table.md':
+    ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
 print(('PASS ' if ok else 'FAIL ') + sys.argv[1])
 sys.exit(0 if ok else 1)
 PY
 }
 run_case img.md
+run_case table.md
 run_case kitchen-sink.md
 run_case crlf.md
 

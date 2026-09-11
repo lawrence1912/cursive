@@ -1,5 +1,5 @@
 import { syntaxTree } from '@codemirror/language'
-import type { Extension } from '@codemirror/state'
+import { StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
 import {
   Decoration,
   EditorView,
@@ -8,6 +8,8 @@ import {
   type ViewUpdate
 } from '@codemirror/view'
 import { buildDecorations } from './decorate'
+import { Reveal, revealScope } from './reveal'
+import { parseTable, TableWidget } from './widgets'
 
 export { docDir } from './decorate'
 export { revealScope, type RevealScope } from './reveal'
@@ -58,8 +60,43 @@ const openLinkOnClick = EditorView.domEventHandlers({
   }
 })
 
+/**
+ * 表格 → 真表格。
+ * 块级（跨行）装饰不允许从 ViewPlugin 提供，必须走 StateField；
+ * 光标碰到时由 decorate.ts 回显管道符源码（两个集合不会重叠：同一套 reveal 判定）。
+ */
+const tableField = StateField.define<DecorationSet>({
+  create: buildTables,
+  update(value, tr) {
+    if (!tr.docChanged && !tr.selection) return value.map(tr.changes)
+    return buildTables(tr.state)
+  },
+  provide: (f) => EditorView.decorations.from(f)
+})
+
+function buildTables(state: EditorState): DecorationSet {
+  const out: Range<Decoration>[] = []
+  const reveal = new Reveal(state, state.facet(revealScope))
+  syntaxTree(state).iterate({
+    from: 0,
+    to: state.doc.length,
+    enter: (node) => {
+      if (node.name !== 'Table') return
+      if (reveal.touches(node.from, node.to)) return false
+      const data = parseTable(state.doc.sliceString(node.from, node.to))
+      if (data) {
+        out.push(
+          Decoration.replace({ widget: new TableWidget(data), block: true }).range(node.from, node.to)
+        )
+      }
+      return false
+    }
+  })
+  return Decoration.set(out, true)
+}
+
 export function livePreview(): Extension {
-  return [livePreviewPlugin, openLinkOnClick]
+  return [livePreviewPlugin, tableField, openLinkOnClick]
 }
 
 /** 源代码模式就是把上面这套整个撤掉 */
