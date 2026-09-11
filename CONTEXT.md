@@ -152,7 +152,10 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
   - 契约 v4：`readClipboardText()`（`NSPasteboard.general.string`，剪贴板由壳读 — 判断 3）
 - ~~P2-7 查找替换本地化~~ ✅ 查找面板走 `EditorState.phrases` 中文化；⌘G/⇧⌘G 走原生「编辑」菜单（判断 1）→ `findNext`/`findPrevious`；状态栏加 `#status-match` 显示「第 n 处 / 共 N 处」
   - **坑**：查找输入改的是 state **effect**，不是 docChanged/selectionSet —— 计数刷新必须挂在「每次 update」上，否则输完查询计数不更新
-- **P2-5** 图片粘贴落盘 · **P2-6** 表格工具栏（清单里最难一项）
+- ~~P2-5 图片粘贴落盘（粘贴部分）~~ ✅ 截图 ⌘V → 壳从 `NSPasteboard` 取图（PNG，退化走 TIFF）落盘到 `<docDir>/assets/<文档名>-<时间戳>.png`，只回相对路径，渲染层插 `![名](assets/…)`。契约 v5 `pasteImage(docDir)`
+  - **坑（新增 API 必查）**：壳注入的 `window.api` 是 `callMethods` **白名单**，Swift 的 `switch` 加了 case 还不够 —— 漏加白名单时渲染层调用报 “not a function”，且只在真正触发时才发现。`readClipboardText` 当初就漏了，是 E2E 抓出来的
+  - 图数据不过 IPC 桥（判断 3）；拖拽落盘 + 拖 .md 开新标签仍待做
+- **P2-6** 表格工具栏（清单里最难一项）
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
 

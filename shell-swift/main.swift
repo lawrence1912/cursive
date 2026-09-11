@@ -81,6 +81,8 @@ let BRIDGE_JS = """
     pickFolder: () => call('pickFolder'),
     readDir: (path) => call('readDir', [path]),
     lastFolder: () => call('lastFolder'),
+    readClipboardText: () => call('readClipboardText'),
+    pasteImage: (dir) => call('pasteImage', [dir]),
     setAppearance: (mode) => call('setAppearance', [mode]),
     scratchSave: (id, content, fp) => call('scratchSave', [id, content, fp]),
     scratchList: () => call('scratchList'),
@@ -929,6 +931,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             // ⇧⌥⌘V 粘贴为纯文本：剪贴板由壳侧读（判断 3：渲染层不碰原生）
             respond(id, NSPasteboard.general.string(forType: .string) ?? "")
 
+        case "pasteImage":
+            // P2-5：剪贴板里的图落盘到 <docDir>/assets/，只回一个相对路径
+            let dirArg = args[0] as? String
+            let baseDir: String = (dirArg?.isEmpty == false ? dirArg! : FileManager.default.currentDirectoryPath)
+            let pb = NSPasteboard.general
+            var png: Data? = pb.data(forType: .png)
+            if png == nil, let tiff = pb.data(forType: .tiff),
+               let rep = NSBitmapImageRep(data: tiff) {
+                png = rep.representation(using: .png, properties: [:])
+            }
+            guard let data = png else { respond(id, NSNull()); break }
+            let assets = (baseDir as NSString).appendingPathComponent("assets")
+            try? FileManager.default.createDirectory(atPath: assets, withIntermediateDirectories: true)
+            // 文件名 = <文档名>-<时间戳>.png（文档名从当前文档路径推，避免多文档撞名）
+            let docName = (self.lastDocPath as NSString?)?.lastPathComponent ?? "image"
+            let stem = (docName as NSString).deletingPathExtension
+            let stamp = Int(Date().timeIntervalSince1970)
+            let file = "\(stem.isEmpty ? "image" : stem)-\(stamp).png"
+            let full = (assets as NSString).appendingPathComponent(file)
+            do {
+                try data.write(to: URL(fileURLWithPath: full))
+            } catch {
+                respond(id, NSNull()); break
+            }
+            respond(id, ["relPath": "assets/\(file)"])
+
         case "scratchSave":
             guard let sid = args[0] as? String, let content = args[1] as? String,
                   let fpDict = args[2] as? [String: Any] else { respond(id, NSNull()); break }
@@ -1119,6 +1147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private func runE2E() {
         let source = lastDocPath ?? "/tmp/cursive-e2e/img.md"
         let outPath = "/tmp/cursive-e2e/roundtrip.out"
+        let docDir = (source as NSString).deletingLastPathComponent
+        // P2-5：往剪贴板放一张图，供「粘贴落盘」E2E 调用 pasteImage
+        let seedImg = "\(docDir)/assets/中文 图.png"
+        if let img = try? Data(contentsOf: URL(fileURLWithPath: seedImg)) {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setData(img, forType: .png)
+        }
         let body = """
         try {
         const doc = await window.api.read(path)
@@ -1240,6 +1276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             matchText
           }
         }
+        const pasteRes = await window.api.pasteImage(docDir)
+        const pasteProbe = pasteRes ? pasteRes.relPath : null
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
@@ -1256,6 +1294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           tableEdit,
           formatProbe,
           searchProbe,
+          pasteProbe,
           math,
           mermaid,
           counts,
@@ -1267,7 +1306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         """
         webView.callAsyncJavaScript(
             body,
-            arguments: ["path": source, "outPath": outPath],
+            arguments: ["path": source, "outPath": outPath, "docDir": docDir],
             in: nil, in: .page
         ) { [weak self] result in
             guard let self else { return }

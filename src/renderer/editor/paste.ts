@@ -1,6 +1,7 @@
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import TurndownService from 'turndown'
+import { docDir } from './live-preview'
 
 /**
  * P2-4 智能粘贴。
@@ -73,11 +74,28 @@ function wrapSelectionAsLink(view: EditorView, url: string): void {
   })
 }
 
+/** P2-5：剪贴板里是图片 → 让壳落盘到 <docDir>/assets/，只插一条相对链接 */
+async function pasteClipboardImage(view: EditorView): Promise<void> {
+  const dir = view.state.facet(docDir)
+  const res = await window.api.pasteImage(dir)
+  if (!res) return
+  const alt = res.relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
+  insertText(view, `![${alt}](${res.relPath})`)
+}
+
 export function smartPaste(): Extension {
   return EditorView.domEventHandlers({
     paste(event, view) {
       const dt = event.clipboardData
       if (!dt) return false
+      // 剪贴板里是图片（截图）→ 落盘插链接（判断 3：数据由壳从 NSPasteboard 取）
+      const items = Array.from(dt.items ?? [])
+      if (items.some((i) => i.kind === 'file' && i.type.startsWith('image/'))) {
+        event.preventDefault()
+        void pasteClipboardImage(view)
+        return true
+      }
+
       const plain = dt.getData('text/plain')
       const html = dt.getData('text/html') || null
 

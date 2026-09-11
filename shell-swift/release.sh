@@ -29,7 +29,7 @@ run_case() {
     rm -f /tmp/cursive-shell-check.json /tmp/cursive-shell-e2e.json
     CURSIVE_SMOKE=1 ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
-import json, sys
+import json, sys, os
 c = json.load(open('/tmp/cursive-shell-check.json'))
 e = json.load(open('/tmp/cursive-shell-e2e.json'))
 r = e['result']; img = r.get('img')
@@ -61,7 +61,10 @@ if sys.argv[1] == 'kitchen-sink.md':
     fp = r.get('formatProbe') or {}   # P2-1：格式化命令幂等（加粗再加粗=原文）
     ok = ok and fp.get('bolded') is True and fp.get('toggledBack') is True
     sp = r.get('searchProbe') or {}   # P2-7：查找面板中文 + 匹配计数
-    ok = ok and sp.get('open') is True and sp.get('nextLabel') == '下一个' and '处' in (sp.get('matchText') or '')   # P0-1：打开过的文件进了系统最近列表
+    ok = ok and sp.get('open') is True and sp.get('nextLabel') == '下一个' and '处' in (sp.get('matchText') or '')
+    # P2-5：粘贴的图真落盘到 <docDir>/assets/（壳读剪贴板写的文件）
+    pp = r.get('pasteProbe') or ''
+    ok = ok and pp.startswith('assets/') and os.path.exists(os.path.join('/tmp/cursive-e2e', pp))   # P0-1：打开过的文件进了系统最近列表
 if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}
@@ -97,7 +100,7 @@ printf '{"content":"# 崩溃前的草稿","fingerprint":{"eol":"\\n","bom":false
 rm -f /tmp/cursive-shell-check.json
 CURSIVE_SMOKE=1 CURSIVE_SMOKE_SCRATCH_DELAY=1200 ./shell-swift/cursive-shell "$FIX/img.md" 2>/dev/null
 python3 - <<'RECOVERY'
-import json, sys
+import json, sys, os
 c = json.load(open('/tmp/cursive-shell-check.json'))
 tabs = c.get('tabList') or []
 ok = c.get('status') == 'img.md' and '未命名' in tabs

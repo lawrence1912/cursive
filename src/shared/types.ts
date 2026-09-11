@@ -94,6 +94,10 @@ export interface CursiveApi {
   lastFolder(): Promise<string | null>
   /** 读系统剪贴板的纯文本（⇧⌥⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
   readClipboardText(): Promise<string>
+  /** ---- 图片粘贴（契约 v5）----
+   * 把剪贴板里的图片落盘到 <docDir>/assets/，返回相对路径（不含 docDir）。
+   * 渲染层只发一个请求、只收一个字符串 —— 图片数据不过 IPC 桥（判断 3）。 */
+  pasteImage(docDir: string | null): Promise<{ relPath: string } | null>
 
   /** ---- P0 自动保存 / 崩溃恢复 / 外部变更（契约 v2，见 CONTEXT.md）---- */
   /** 无路径文档的静默落盘：写 ~/Library/Application Support/cursive/scratch/<id>.json */
