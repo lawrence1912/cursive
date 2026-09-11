@@ -298,6 +298,7 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
     private static let printCSS = """
     html, body { height: auto !important; overflow: visible !important; }
     #drag-strip, #status-bar, #sidebar, #tabbar, #outline { display: none !important; }
+    #main, #center { display: block !important; height: auto !important; overflow: visible !important; }
     body { display: block !important; background: #fff !important; color: #24292f !important; }
     :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb; --muted: #8b949e; --sel: transparent; }
     #workspace { display: block !important; }

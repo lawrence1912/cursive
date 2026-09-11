@@ -7,7 +7,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 ## 功能要点（renderer）
 
 - **文件树**：`sidebar.ts` 懒加载树。打开单个 .md 且未开过文件夹时，`setActive` 自动把文档目录挂为树根（sbRows E2E 断言把关）
-- **大纲视图**：`ui/outline.ts`，右侧 200px 面板。标题来自 syntaxTree 的 ATX/SetextHeading 节点（250ms 防抖重建）；点击 `scrollIntoView(y:'start')` 跳转；滚动时按「视口顶部行之前最近的标题」跟随高亮。显隐 = 菜单 `view:toggle-outline`（⌘⇧T，新增 MenuAction——契约已同步 types.ts），状态存 localStorage `typmd.outlineVisible`。**布局总览**：drag-strip(38) → tabbar(32) → workspace(左 sidebar | 中 editor | 右 outline) → status-bar
+- **大纲视图**：`ui/outline.ts`，右侧 200px 面板。标题来自 syntaxTree 的 ATX/SetextHeading 节点（250ms 防抖重建）；点击 `scrollIntoView(y:'start')` 跳转；滚动时按「视口顶部行之前最近的标题」跟随高亮。显隐 = 菜单 `view:toggle-outline`（⌘⇧T，新增 MenuAction——契约已同步 types.ts），状态存 localStorage `typmd.outlineVisible`。**布局总览**：drag-strip(38) → **main(左 sidebar 通栏 | center=tabbar+editor | 右 outline 通栏)** → status-bar。标签栏只属于中间编辑器列（在文件树/大纲的右侧），不横贯全宽；DOM：index.html 静态 #main/#center 骨架，sidebar/tabbar/outline 由 main.ts 插入对应槽位
 - **标签页**：`main.ts` + `ui/tabbar.ts`。每标签持有完整 EditorState（切走冻结/切回 setState，装饰+撤销历史+光标随 tab 走）；`setDocState` 的 dirty 聚合为「任意标签脏」，`file:save-and-close` = 所有脏标签落盘（任一取消即中止关窗）；关闭最后标签自动开新空白标签；开新标签**不**触发 dirty 守卫（不会丢内容）。布局：#tabbar 在 drag-strip 之下 32px，打印时隐藏
 - **表格真渲染**：`index.ts tableField`（StateField）+ `widgets.ts TableWidget/parseTable`。块级（跨行）装饰**只能走 StateField**，ViewPlugin 的会直接报错；光标碰到由 decorate.ts 回显源码（同一套 reveal 判定，两个集合不重叠）。样式 `.cm-lp-tableview`
 
@@ -82,14 +82,30 @@ TYPMD_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 
 ## 路线图
 
+**完整清单见 `ROADMAP.md`** —— 现状盘点 + 对标 Typora/MarkText + P0–P4 共 26 项，带验收标准与坑。
+本节只留「已完成（含踩坑记录）」和「当前这一轮」。
+
+### 已完成（勿重做）
+
 1. ~~safe-file://local SchemeHandler（图片）~~ ✅ 含双重解码坑
 2. ~~argv 打开文档 + E2E 验证（read→save 往返/装饰/图片）~~ ✅；**待手动验证**：打开/另存为面板、脏标记关闭拦截、Finder 双击 .md（`application(_:openFile:)` 已有雏形）
 3. ~~PDF 导出~~ ✅ 文件 →「导出为 PDF…」（⌘P）：离屏 595pt(A4) WKWebView 加载同一 renderer，`__shellEmit` 注入实时内容（含未保存修改），注入打印 CSS（隐 sidebar/状态栏/drag-strip、白底、高度自适应），等 `document.fonts.ready` + 图片 `decode()` 后 `createPDF`。输出为**单页长条 PDF**（页高=内容高），打印样式在 `PDFExporter.printCSS`
-4. 最近文件（`NSDocumentController`）/ 拖拽 .md / Dock 菜单
-5. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `TYPMD_DMG=1` 连 DMG 一起出）：组装 dist/typmd.app（Info.plist 含 .md 关联 rank=Alternate/NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG。产物 ~3.4MB / DMG ~1.7MB。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
-6. （可选）Sparkle 自动更新（Typora macOS 同款）
-7. 显示质量打磨（引擎无关、全部随迁）：Shiki 高亮、`text-wrap: pretty`、`hyphens: auto`、暗色主题、`-webkit-font-smoothing`
-8. 收尾：删除 Electron 依赖（保留 `src/renderer`、`src/shared`），更新 README
+4. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `TYPMD_DMG=1` 连 DMG 一起出）：组装 dist/typmd.app（Info.plist 含 .md 关联 rank=Alternate/NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG。产物 ~3.4MB / DMG ~1.7MB。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
+
+### 当前这一轮：P0 迁移收尾
+
+- **P0-1** 最近文件（`NSDocumentController.noteNewRecentDocumentURL`）/ 拖拽 .md / Dock 菜单
+- **P0-2** 自动保存 + 崩溃恢复 —— 必须复用 `encodeDoc` 的指纹路径，否则破坏「保存零损耗」
+- **P0-3** 外部变更监听（`DispatchSource`）—— **rename-replace 后 fd 失效必须重注册**，否则第二次外部修改静默丢失。新推送通道 `file:changed-externally`，先补契约
+- **P0-4** 删除 Electron 依赖（保留 `src/renderer`、`src/shared`），更新 README。前置：P0-1 做完 + 上面第 2 条的手动验证清单全过，再删退路
+
+### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
+
+1. **⌘ 快捷键走原生菜单，不要走 CM keymap** —— `MainWebView.performKeyEquivalent` 对所有 ⌘ 事件返回 false。菜单里没有的 ⌘ 组合能否落回 CodeMirror 未实测；⌘B/⌘1-6 一律做成「格式」菜单项 + 扩 `MenuAction`
+2. **块级组件一律照抄 `tableField`** —— StateField 提供块级装饰，ViewPlugin 会直接报错
+3. **大数据不过 IPC 桥** —— 图片落盘由壳读 `NSPasteboard` 返回相对路径，别把 base64 塞进 `evaluateJavaScript`
+
+原第 6/7 条（Sparkle 自动更新、显示质量打磨）已并入 `ROADMAP.md` 的 P4-5 / P3-4。
 
 ## 约定
 

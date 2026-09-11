@@ -32,7 +32,8 @@ const listener = EditorView.updateListener.of((u) => {
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
 const sidebar = new Sidebar((path) => void openPath(path))
-document.getElementById('workspace')!.insertBefore(sidebar.el, host)
+const center = document.getElementById('center')!
+document.getElementById('main')!.insertBefore(sidebar.el, center)
 
 const outline = new Outline((pos) => {
   view.dispatch({
@@ -41,7 +42,7 @@ const outline = new Outline((pos) => {
   })
   view.focus()
 })
-document.getElementById('workspace')!.appendChild(outline.el)
+document.getElementById('main')!.appendChild(outline.el)
 outline.el.classList.toggle('is-hidden', localStorage.getItem('typmd.outlineVisible') === '0')
 view.scrollDOM.addEventListener('scroll', () => {
   outline.setActive(activeHeadingPos())
@@ -52,13 +53,13 @@ const sbShow = document.createElement('button')
 sbShow.id = 'sb-show'
 sbShow.textContent = '»'
 sbShow.title = '显示文件树 (⌘\\)'
-document.getElementById('workspace')!.insertBefore(sbShow, host)
+document.getElementById('main')!.insertBefore(sbShow, center)
 
 const olShow = document.createElement('button')
 olShow.id = 'ol-show'
 olShow.textContent = '«'
 olShow.title = '显示大纲 (⌘⇧T)'
-document.getElementById('workspace')!.appendChild(olShow)
+document.getElementById('main')!.appendChild(olShow)
 
 const syncPanels = (): void => {
   sbShow.hidden = sidebar.visible
@@ -116,7 +117,7 @@ const tabbar = new TabBar(
   },
   (id) => void closeTab(id)
 )
-document.getElementById('drag-strip')!.after(tabbar.el)
+center.prepend(tabbar.el)
 
 function newUntitledTab(): void {
   spawnTab(createState('', listener), null, DEFAULT_FINGERPRINT)

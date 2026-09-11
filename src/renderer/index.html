@@ -10,9 +10,12 @@
   </head>
   <body>
     <div id="drag-strip"></div>
-    <div id="workspace">
-      <!-- #sidebar 由 ui/sidebar.ts 插到这里 -->
-      <main id="editor-host"></main>
+    <div id="main">
+      <!-- #sidebar / #outline 由 main.ts 插到这里 -->
+      <div id="center">
+        <!-- #tabbar 由 main.ts 插到这里 -->
+        <main id="editor-host"></main>
+      </div>
     </div>
     <footer id="status-bar">
       <span id="status-file">未命名</span>
