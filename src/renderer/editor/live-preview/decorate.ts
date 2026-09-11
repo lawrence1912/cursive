@@ -7,7 +7,9 @@ import { Reveal, revealScope } from './reveal'
 import {
   BulletWidget,
   CheckboxWidget,
+  CodeBarWidget,
   EmojiWidget,
+  extractFence,
   FootnoteRefWidget,
   ImageWidget,
   MathWidget,
@@ -99,9 +101,18 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       addLines(ctx, node.from, node.to, 'cm-lp-quote')
       return
 
-    case 'FencedCode':
+    case 'FencedCode': {
       addLines(ctx, node.from, node.to, 'cm-lp-code')
-      return
+      // P1-4：右上角语言标签 + 复制按钮（挂首行，float 到右上）
+      if (!revealed) {
+        const fence = extractFence(doc.sliceString(node.from, node.to))
+        if (fence?.lang)
+          out.push(
+            Decoration.widget({ widget: new CodeBarWidget(fence.lang, fence.src) }).range(node.from)
+          )
+      }
+      return false
+    }
 
     case 'Table': {
       // 真表格渲染在 index.ts 的 blockField（块级装饰必须走 StateField）。
@@ -219,7 +230,9 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       const src = resolveSrc(parsed.src, ctx.dir)
       if (!src) return
       out.push(
-        Decoration.replace({ widget: new ImageWidget(src, parsed.alt) }).range(node.from, node.to)
+        Decoration.replace({
+          widget: new ImageWidget(src, parsed.alt, parsed.width, parsed.height)
+        }).range(node.from, node.to)
       )
       return false
     }
@@ -307,9 +320,23 @@ function bulletDepth(item: SyntaxNode): number {
   return Math.max(0, depth - 1)
 }
 
-function parseImage(text: string): { alt: string; src: string } | null {
-  const m = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+["'(][^)]*)?\s*\)$/.exec(text)
-  return m ? { alt: m[1] ?? '', src: m[2] ?? '' } : null
+/** 解析图片：alt、src、可选 `=宽x高` 尺寸语法（Typora 兼容，不写高则按比例） */
+export function parseImage(text: string): {
+  alt: string
+  src: string
+  width?: number
+  height?: number
+} | null {
+  const m = /^!\[([^\]]*)\]\(\s*<?([^)\s]+)>?(?:\s+=[ \t]*(\d+)[xX](?:\s*(\d+))?)?(?:\s+["'(][^)]*)?\s*\)$/.exec(
+    text
+  )
+  if (!m) return null
+  return {
+    alt: m[1] ?? '',
+    src: m[2] ?? '',
+    width: m[3] ? Number(m[3]) : undefined,
+    height: m[4] ? Number(m[4]) : undefined
+  }
 }
 
 function resolveSrc(src: string, dir: string | null): string | null {

@@ -1128,7 +1128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         await new Promise(r => setTimeout(r, 60))
         const tbBack = getComputedStyle(sb).display
         const counts = {}
-        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub'])
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-codebar', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub'])
           counts[cls] = document.querySelectorAll('.' + cls).length
         // P1-1：KaTeX 字体必须真的加载了（CSP 拦掉的话公式会用系统字体凑合，
         // 肉眼不一定看得出）。fonts.ready 之后任一 KaTeX_* 字体到位即算过

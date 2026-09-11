@@ -132,9 +132,13 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
   - **坑 2**：eager parse 落完元素后必须 `cx.nextLine()` 把当前行推过块，否则 parsedPos 不前进，解析器原地重试直到超时（ensureSyntaxTree 拿不到全树）
   - **坑 3**：行内定界符长度必须与开定界符匹配（数学踩过，P1-3 的 == 复用同一扫描器）
 
-### 当前这一轮：P1 收尾
+- ~~P1-4 代码块增强~~ ✅ `CodeBarWidget`（语言标签 + 复制按钮，`Decoration.widget` 挂块首行，`float:right` 到右上）。复制走 `navigator.clipboard`，WKWebView 非安全上下文会失败 → 兜底 textarea + `execCommand('copy')`。副本按钮点击即刻 e.preventDefault/stopPropagation，别让 widget 默认吞事件
+- ~~P1-5 图片显示增强~~ ✅ `parseImage` 支持 Typora `=宽x高` 尺寸语法；点击图片开灯箱（body 级遮罩 + Escape 关闭，复刻 Prefs 面板叠层模式）；加载失败显示**解析后的完整路径**（decodeURI + 剥掉 safe-file://local 前缀），而不是只给 alt —— 只给 alt 排查不了是路径错还是文件缺
 
-- **P1-4** 代码块增强（语言标签 + 复制）· **P1-5** 图片显示增强（放大/尺寸语法/失败路径）
+### 当前这一轮：P1 全部完成（第 2 段目标达成）
+
+- P1-1 数学 / P1-2 mermaid / P1-3 方言 / P1-4 代码块 / P1-5 图片 —— 内容层五个全落地，视觉上「像 Typora」到此为止
+- 下一轮：P2 手感（格式化快捷键 / 输入规则 / 智能粘贴 / 图片落盘 / 表格工具栏）
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）
 

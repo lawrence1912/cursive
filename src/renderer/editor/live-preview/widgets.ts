@@ -116,6 +116,48 @@ export class MermaidWidget extends WidgetType {
   }
 }
 
+/**
+ * 代码块右上角语言标签 + 复制按钮（P1-4）。挂在代码块首行，float 到右上。
+ * 复制的是代码体源码（不含围栏）。
+ */
+export class CodeBarWidget extends WidgetType {
+  constructor(
+    readonly lang: string,
+    readonly src: string
+  ) {
+    super()
+  }
+  eq(other: CodeBarWidget): boolean {
+    return other.lang === this.lang && other.src === this.src
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(): HTMLElement {
+    const bar = document.createElement('span')
+    bar.className = 'cm-lp-codebar'
+    const lang = document.createElement('span')
+    lang.className = 'cm-lp-codebar-lang'
+    lang.textContent = this.lang || 'code'
+    const copy = document.createElement('button')
+    copy.className = 'cm-lp-codebar-copy'
+    copy.type = 'button'
+    copy.textContent = '复制'
+    copy.title = '复制代码'
+    copy.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      copyText(this.src)
+      copy.textContent = '已复制'
+      setTimeout(() => {
+        copy.textContent = '复制'
+      }, 1200)
+    })
+    bar.append(lang, copy)
+    return bar
+  }
+}
+
 /** 从 FencedCode 的源码文本里拆出语言与代码体（闭围栏存在则去掉） */
 export function extractFence(text: string): { lang: string; src: string } | null {
   const nl = text.indexOf('\n')
@@ -338,16 +380,87 @@ export class RuleWidget extends WidgetType {
   }
 }
 
-/** `![alt](src)` → 真图片，加载失败退回显示 alt */
+/**
+ * 点击放大预览的灯箱（body 级全屏遮罩）。
+ * 复刻 Prefs 面板的叠层思路：backdrop 点击 / Escape 关闭。
+ */
+let viewer: HTMLElement | null = null
+
+export function closeImageView(): void {
+  viewer?.remove()
+  viewer = null
+}
+
+function openImageView(src: string, alt: string): void {
+  closeImageView()
+  const viewerEl = document.createElement('div')
+  viewerEl.id = 'image-viewer'
+  const backdrop = document.createElement('div')
+  backdrop.className = 'img-viewer-backdrop'
+  backdrop.addEventListener('click', closeImageView)
+  const panel = document.createElement('div')
+  panel.className = 'img-viewer-panel'
+  const img = document.createElement('img')
+  img.src = src
+  const cap = document.createElement('div')
+  cap.className = 'img-viewer-caption'
+  cap.textContent = alt || ''
+  panel.append(img, cap)
+  viewerEl.append(backdrop, panel)
+  document.body.appendChild(viewerEl)
+  viewer = viewerEl
+}
+
+// 灯箱开着时 Escape 关闭（常驻监听，开着才有效果）。
+// node 测试环境没 document，跳过（只有浏览器挂监听）
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeImageView()
+  })
+}
+
+/** 复制文本：优先 Clipboard API，失败退 textarea + execCommand('copy')（WKWebView 非安全上下文） */
+export function copyText(text: string): void {
+  const done = () => {}
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(fallbackCopy)
+    done()
+    return
+  }
+  fallbackCopy()
+  function fallbackCopy() {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+    } catch {
+      /* 复制失败就算了 */
+    }
+    ta.remove()
+  }
+}
+
+/** `![alt](src)` → 真图片：点击放大预览；失败显示解析后的完整路径；支持 `=宽x高` 尺寸语法 */
 export class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
-    readonly alt: string
+    readonly alt: string,
+    readonly width?: number,
+    readonly height?: number
   ) {
     super()
   }
   eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt
+    return (
+      other.src === this.src && other.alt === this.alt && other.width === this.width && other.height === this.height
+    )
+  }
+  override ignoreEvent(): boolean {
+    return false
   }
   toDOM(): HTMLElement {
     const wrap = document.createElement('span')
@@ -355,9 +468,22 @@ export class ImageWidget extends WidgetType {
     const img = document.createElement('img')
     img.src = this.src
     img.alt = this.alt
+    if (this.width) img.style.width = `${this.width}px`
+    if (this.height) img.style.height = `${this.height}px`
+    img.addEventListener('click', (e) => {
+      e.preventDefault()
+      openImageView(this.src, this.alt)
+    })
     img.addEventListener('error', () => {
+      // 失败时显示解析后的完整路径（不是只给 alt —— alt 排查不了是路径错还是文件缺）
       wrap.classList.add('is-broken')
-      wrap.textContent = this.alt || '图片加载失败'
+      let path = this.src
+      try {
+        path = decodeURI(this.src).replace(/^safe-file:\/\/local/, '')
+      } catch {
+        /* 保底原样 */
+      }
+      wrap.textContent = `${path}\n(${this.alt || '图片加载失败'})`
     })
     wrap.appendChild(img)
     return wrap

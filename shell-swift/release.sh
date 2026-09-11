@@ -56,7 +56,8 @@ if sys.argv[1] == 'table.md':
     ok = ok and te.get('revealed') is True and te.get('cell') == 'a' and '|' in (te.get('line') or '')
 if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and c.get('outlineRows', 0) >= 3
-    ok = ok and e.get('recents', 0) >= 1   # P0-1：打开过的文件进了系统最近列表
+    ok = ok and e.get('recents', 0) >= 1
+    ok = ok and r['counts'].get('cm-lp-codebar', 0) >= 1   # P1-4：代码块右上角语言标签+复制   # P0-1：打开过的文件进了系统最近列表
 if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}
