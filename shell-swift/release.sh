@@ -49,6 +49,11 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
 # 双击拖拽条 = 缩放（系统偏好非 Maximize 时该项不产出，跳过）
 if c.get('dblClickAction') == 'Maximize':
     ok = ok and c.get('dblClickZoomed') is True
+if sys.argv[1] == 'img.md':
+    # P2-5：截图粘贴 + 拖拽落盘都写到 <docDir>/assets/
+    pp = r.get('pasteProbe') or ''
+    ok = ok and pp.startswith('assets/') and os.path.exists(os.path.join('/tmp/cursive-e2e', pp))
+    ok = ok and r.get('dropProbe') is True
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
     # 点单元格 → 真表格让位给源码，光标正好落在那一格（历史 bug：widget 吞事件，表格改不了）
@@ -62,9 +67,7 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and fp.get('bolded') is True and fp.get('toggledBack') is True
     sp = r.get('searchProbe') or {}   # P2-7：查找面板中文 + 匹配计数
     ok = ok and sp.get('open') is True and sp.get('nextLabel') == '下一个' and '处' in (sp.get('matchText') or '')
-    # P2-5：粘贴的图真落盘到 <docDir>/assets/（壳读剪贴板写的文件）
-    pp = r.get('pasteProbe') or ''
-    ok = ok and pp.startswith('assets/') and os.path.exists(os.path.join('/tmp/cursive-e2e', pp))   # P0-1：打开过的文件进了系统最近列表
+    ok = ok and e.get('recents', 0) >= 1   # P0-1：打开过的文件进了系统最近列表
 if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}

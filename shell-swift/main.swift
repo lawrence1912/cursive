@@ -59,7 +59,7 @@ let BRIDGE_JS = """
 (() => {
   const pending = new Map()
   let seq = 0
-  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [], 'file:changed-externally': [] }
+  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [], 'file:changed-externally': [], 'image:dropped': [] }
 
   function call(method, args = []) {
     return new Promise((resolve, reject) => {
@@ -102,6 +102,7 @@ let BRIDGE_JS = """
     onFileOpened: (fn) => subscribe('file:opened', fn),
     onFolderOpened: (fn) => subscribe('folder:opened', fn),
     onFileChangedExternal: (fn) => subscribe('file:changed-externally', fn),
+    onImageDropped: (fn) => subscribe('image:dropped', fn),
 
     // —— 以下供原生侧回调 ——
     _resolve: (id, value) => {
@@ -232,9 +233,32 @@ func findRendererRoot() -> URL {
 // 导致菜单快捷键（⌘\ ⌘S ⌘P ⌘W…）失灵 —— 这是「文件树隐藏不了」的真因。
 // 命令键组合全部交还给菜单系统处理。
 final class MainWebView: WKWebView {
+    /// P2-5：Finder 拖入文件（图片落盘 / .md 开新标签）。由 AppDelegate 处理。
+    var dropHandler: (([URL]) -> Bool)?
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command) { return false }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// 注册文件 URL 拖入（判断 3：渲染层拿不到真实路径，拖拽由壳接管）
+    func enableFileDrop() {
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        return droppedURLs(sender).isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = droppedURLs(sender)
+        return urls.isEmpty ? false : (dropHandler?(urls) ?? false)
+    }
+
+    private func droppedURLs(_ sender: NSDraggingInfo) -> [URL] {
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: opts)
+        return (items as? [URL]) ?? []
     }
 }
 
@@ -505,6 +529,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
         webView = MainWebView(frame: .zero, configuration: config)
+        if let main = webView as? MainWebView {
+            main.enableFileDrop()
+            main.dropHandler = { [weak self] urls in self?.handleDroppedFiles(urls) ?? false }
+        }
         webView.navigationDelegate = self
         webView.autoresizingMask = [.width, .height]
 
@@ -796,6 +824,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     private func jsValue(_ v: Any) -> String { jsonLiteral(v) }
 
+    /// 向渲染层推事件（与 openPath 里的内联写法等价，供拖拽等回调使用）
+    private func emit(_ event: String, _ payload: Any) {
+        let js = "window.__shellEmit('\(event)', \(jsonLiteral(payload)))"
+        webView.evaluateJavaScript(js)
+    }
+
     private func openPath(_ path: String) {
         do {
             lastDocPath = path
@@ -809,6 +843,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
                 }
             }
         } catch { showError("打不开文件", error.localizedDescription) }
+    }
+
+    /// P2-5：Finder 拖入。.md → 开新标签（openPath）；图片 → 复制进 <docDir>/assets/ 并通知渲染层插链接
+    private func handleDroppedFiles(_ urls: [URL]) -> Bool {
+        var handled = false
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            if ["md", "markdown", "mdown", "mkd"].contains(ext) {
+                openPath(url.path)
+                handled = true
+            } else if ["png", "jpg", "jpeg", "gif", "webp", "avif", "tiff", "tif", "heic", "bmp"].contains(ext),
+                      let rel = copyImageToAssets(from: url) {
+                emit("image:dropped", rel)
+                handled = true
+            }
+        }
+        return handled
+    }
+
+    /// 把外部图片复制进当前文档目录的 assets/，重名自动加序号，返回相对路径
+    private func copyImageToAssets(from url: URL) -> String? {
+        let baseDir = (lastDocPath as NSString?)?.deletingLastPathComponent
+            ?? FileManager.default.currentDirectoryPath
+        let assets = (baseDir as NSString).appendingPathComponent("assets")
+        try? FileManager.default.createDirectory(atPath: assets, withIntermediateDirectories: true)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        var name = url.lastPathComponent
+        var n = 1
+        while FileManager.default.fileExists(atPath: (assets as NSString).appendingPathComponent(name)) {
+            name = "\(stem)-\(n).\(ext)"
+            n += 1
+        }
+        let full = (assets as NSString).appendingPathComponent(name)
+        do { try FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: full)) } catch { return nil }
+        return "assets/\(name)"
     }
 
     private func showError(_ title: String, _ msg: String) {
@@ -1154,6 +1224,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setData(img, forType: .png)
+            // P2-5 拖拽：只对 img.md 用例模拟（其它用例插了图片会触发通用的 img.loaded 断言）
+            if (source as NSString).lastPathComponent == "img.md" {
+                let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("cursive-drop-test.png")
+                try? img.write(to: tmp)
+                _ = handleDroppedFiles([tmp])
+            }
         }
         let body = """
         try {
@@ -1276,6 +1353,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             matchText
           }
         }
+        // P2-5：拖拽插入的链接应已在文里
+        const dropProbe = window.__cursive.view.state.doc.toString().includes('](assets/cursive-drop-test')
         const pasteRes = await window.api.pasteImage(docDir)
         const pasteProbe = pasteRes ? pasteRes.relPath : null
         return {
@@ -1295,6 +1374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           formatProbe,
           searchProbe,
           pasteProbe,
+          dropProbe,
           math,
           mermaid,
           counts,

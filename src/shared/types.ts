@@ -110,6 +110,10 @@ export interface CursiveApi {
   /** 当前打开的全部文档路径（壳侧据此注册外部变更监听） */
   openTabs(paths: string[]): void
   onFileChangedExternal(fn: (path: string) => void): () => void
+  /** ---- 拖拽落盘（契约 v6）----
+   * Finder 拖图片进窗口：壳已把图复制到 <docDir>/assets/，渲染层只收到相对路径，
+   * 在当前光标处插入 ![名](assets/…)。 */
+  onImageDropped(fn: (relPath: string) => void): () => void
 
   /** ---- 主题（契约 v3）----
    * 渲染层切主题后同步原生外观：标题栏、红绿灯、NSAlert、NSOpenPanel 都吃这个。

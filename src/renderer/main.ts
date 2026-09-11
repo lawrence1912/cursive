@@ -547,6 +547,12 @@ async function handleMenu(action: MenuAction): Promise<void> {
 
 window.api.onMenu((action) => void handleMenu(action))
 
+// P2-5：Finder 拖图片进窗口 → 壳落盘后推相对路径 → 光标处插链接
+window.api.onImageDropped((relPath) => {
+  const alt = relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
+  insertText(view, `![${alt}](${relPath})`)
+})
+
 // 主进程推来的文档（最近文件 / Finder 双击 / 命令行）
 window.api.onFileOpened((doc: DocPayload) => {
   openTab(doc.content, doc.path, doc.fingerprint)
