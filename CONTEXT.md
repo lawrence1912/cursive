@@ -46,10 +46,14 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 ## 自检探针 / E2E（每次改壳必跑）
 
 ```sh
-./shell-swift/typmd-shell <file.md>
+TYPMD_SMOKE=1 ./shell-swift/typmd-shell <file.md>
 # +3s 写 /tmp/typmd-shell-check.json   （DOM：hasApi/cm/sidebar/status）
 # +4s 写 /tmp/typmd-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后自动退出
 ```
+
+⚠️ 探针/E2E **只在 `TYPMD_SMOKE` 环境变量下运行**；不带该变量启动是正常交互应用，绝不自动退出。
+（历史教训：曾把 `NSApp.terminate()` 编进默认路径，导致「启动几秒后闪退」。）
+从 Finder/非项目根目录启动时，cwd 不是项目根 —— renderer 资源路径按可执行文件位置向上回退（shell-swift/ 的上级）。
 
 PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹还原）；`counts.cm-lp-*` 视口内非零；图片用例 `img.loaded=true`。
 测试夹具生成：见 `/tmp/typmd-e2e/`（kitchen-sink.md / crlf.md / img.md + assets），图片 URL 里的空格/中文要百分号编码（渲染层 parseImage 不接受裸空格）。

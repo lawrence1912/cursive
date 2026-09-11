@@ -197,7 +197,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
         let cwd = FileManager.default.currentDirectoryPath
-        config.setURLSchemeHandler(FileSchemeHandler(root: URL(fileURLWithPath: "\(cwd)/out/renderer")), forURLScheme: "app")
+        let rendererRoot = URL(fileURLWithPath: "\(cwd)/out/renderer")
+        // 从 Finder/其他目录启动时 cwd 不是项目根，按可执行文件位置回退（shell-swift/ 的上级）
+        let exeDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        let fallback = exeDir.deletingLastPathComponent().appendingPathComponent("out/renderer")
+        let root = FileManager.default.fileExists(atPath: rendererRoot.path) ? rendererRoot : fallback
+        config.setURLSchemeHandler(FileSchemeHandler(root: root), forURLScheme: "app")
         config.setURLSchemeHandler(FileSchemeHandler(root: nil), forURLScheme: "safe-file")
         config.userContentController.add(self, name: "shell")
         config.userContentController.addUserScript(
@@ -504,6 +509,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     private func runProbe() {
+        // 探针/E2E 只在 TYPMD_SMOKE 下运行；普通启动是正常交互应用，绝不自动退出
+        guard ProcessInfo.processInfo.environment["TYPMD_SMOKE"] != nil else { return }
         let probe = """
         (() => ({
           title: document.title,
@@ -523,7 +530,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         }
     }
 
-    /// E2E：read → save 逐字节往返（验证 BOM/EOL 指纹）+ live-preview 图片加载检测
+    /// E2E：read → save 逐字节往返（验证 BOM/EOL 指纹）+ live-preview 图片加载检测。
+    /// 仅 TYPMD_SMOKE 模式；完成后自动退出（自动化验收用）
     private func runE2E() {
         let source = lastDocPath ?? "/tmp/typmd-e2e/img.md"
         let outPath = "/tmp/typmd-e2e/roundtrip.out"
