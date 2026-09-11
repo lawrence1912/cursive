@@ -191,8 +191,13 @@ func jsonLiteral(_ v: Any) -> String {
     return String(s.dropFirst().dropLast())   // 去掉数组包装 [ ]
 }
 
-/// renderer 资源根：优先 cwd/out/renderer（项目根运行），否则按可执行位置回退
+/// renderer 资源根：① 打包态 Bundle Resources（typmd.app/Contents/Resources/renderer）
+/// ② cwd/out/renderer（项目根开发）③ 可执行位置回退
 func findRendererRoot() -> URL {
+    if let res = Bundle.main.resourceURL {
+        let inBundle = res.appendingPathComponent("renderer")
+        if FileManager.default.fileExists(atPath: inBundle.path) { return inBundle }
+    }
     let cwd = FileManager.default.currentDirectoryPath
     let byCwd = URL(fileURLWithPath: "\(cwd)/out/renderer")
     if FileManager.default.fileExists(atPath: byCwd.path) { return byCwd }

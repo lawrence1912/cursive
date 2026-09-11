@@ -76,7 +76,7 @@ PASS 标准：`status`=打开的文件名；`bytesEqual=true`（BOM/CRLF 指纹�
 2. ~~argv 打开文档 + E2E 验证（read→save 往返/装饰/图片）~~ ✅；**待手动验证**：打开/另存为面板、脏标记关闭拦截、Finder 双击 .md（`application(_:openFile:)` 已有雏形）
 3. ~~PDF 导出~~ ✅ 文件 →「导出为 PDF…」（⌘P）：离屏 595pt(A4) WKWebView 加载同一 renderer，`__shellEmit` 注入实时内容（含未保存修改），注入打印 CSS（隐 sidebar/状态栏/drag-strip、白底、高度自适应），等 `document.fonts.ready` + 图片 `decode()` 后 `createPDF`。输出为**单页长条 PDF**（页高=内容高），打印样式在 `PDFExporter.printCSS`
 4. 最近文件（`NSDocumentController`）/ 拖拽 .md / Dock 菜单
-5. 打包脚本：`.app` bundle（Info.plist：CFBundleDocumentTypes `.md` 关联 rank=Alternate、NSHighResolutionCapable）+ `codesign --force --deep --sign -` + `create-dmg`
+5. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `TYPMD_DMG=1` 连 DMG 一起出）：组装 dist/typmd.app（Info.plist 含 .md 关联 rank=Alternate/NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG。产物 ~3.4MB / DMG ~1.7MB。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
 6. （可选）Sparkle 自动更新（Typora macOS 同款）
 7. 显示质量打磨（引擎无关、全部随迁）：Shiki 高亮、`text-wrap: pretty`、`hyphens: auto`、暗色主题、`-webkit-font-smoothing`
 8. 收尾：删除 Electron 依赖（保留 `src/renderer`、`src/shared`），更新 README
