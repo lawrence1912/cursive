@@ -144,8 +144,9 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
   - **无选区**：光标落在词内才作用于该词（`Intl.Segmenter` 分词，中文按词切）；词外（空格/标点）→ 插空对，不偷偷包旁边的词
   - **测试坑**：纯 `EditorState.create` 默认**关多选区**，多光标用例必须显式 `EditorState.allowMultipleSelections.of(true)`，否则 `selection.ranges` 被折成单个
   - 代码块围栏摘除要连**闭围栏前的换行**一起吃掉，否则留下 `code\n`
-- **P2-2** Markdown 输入规则（行首 `## ` / `- ` / `> ` / ```` ``` ```` / `---` / 表格骨架，一次撤销）
-- **P2-3** 列表智能（Tab 升降级、有序重编号、空项退出）
+- ~~P2-2 输入规则~~ ✅ `editor/input-rules.ts`：Enter 时表格骨架（`| a | b |` → 补分隔行+空行）与围栏骨架（` ```ts ` → 补空行+闭合围栏）；标题/引用/列表/分隔线的即时渲染由 live-preview 负责、续行由 markdownKeymap 负责，不重复造。一次事务 → ⌘Z 一步撤销
+  - 围栏「是否已闭合」判定要 `gm` 正则逐行数围栏（无 `m` 时 `^` 只匹配串首，永远数不到第二个）
+- ~~P2-3 列表智能~~ ✅ `editor/list-ops.ts`：Tab/⇧Tab 升降级（列表上下文优先于 indentWithTab），有序列表**向前向后扩到段边界**后整段重编号（只向后找会漏前半段），保留 `)` 分隔符风格；每行一条前缀替换 change → 缩进与重编号同一事务、不重叠。回车续行/空项退出/任务项续 `[ ]` 仍归 markdownKeymap
 - **P2-4** 智能粘贴（HTML→MD / URL 包链接 / ⇧⌘V 纯文本）· **P2-5** 图片粘贴落盘
 - **P2-6** 表格工具栏 · **P2-7** 查找替换本地化
 

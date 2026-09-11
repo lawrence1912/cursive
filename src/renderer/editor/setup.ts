@@ -12,6 +12,8 @@ import {
   keymap,
   rectangularSelection
 } from '@codemirror/view'
+import { expandOnEnter } from './input-rules'
+import { changeListIndent } from './list-ops'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
 import { cursiveMarkdown } from './markdown-lang'
 import { cursiveTheme } from './theme'
@@ -57,9 +59,38 @@ export function createState(
         ...closeBracketsKeymap,
         ...searchKeymap,
         ...historyKeymap,
+        // P2-2：表格/围栏骨架优先于 markdownKeymap 的续行
+        {
+          key: 'Enter',
+          run: (view) => {
+            const spec = expandOnEnter(view.state)
+            if (!spec) return false
+            view.dispatch(spec)
+            return true
+          }
+        },
         // 必须排在 defaultKeymap 之前：回车续列表、退格删标记
         ...markdownKeymap,
         ...defaultKeymap,
+        // P2-3：列表里 Tab/⇧Tab 升降级（先于 indentWithTab 接管）；不在列表则回退
+        {
+          key: 'Tab',
+          run: (view) => {
+            const spec = changeListIndent(view.state, 1)
+            if (!spec) return false
+            view.dispatch(spec)
+            return true
+          }
+        },
+        {
+          key: 'Shift-Tab',
+          run: (view) => {
+            const spec = changeListIndent(view.state, -1)
+            if (!spec) return false
+            view.dispatch(spec)
+            return true
+          }
+        },
         indentWithTab
       ]),
       extras
