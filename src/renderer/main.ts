@@ -2,6 +2,7 @@ import './themes/base.css'
 import './themes/live-preview.css'
 
 import { openSearchPanel } from '@codemirror/search'
+import { syntaxTree } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import type { EditorState, Text } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
@@ -12,6 +13,7 @@ import { livePreview } from './editor/live-preview'
 import { createState, livePreviewConf } from './editor/setup'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
+import { Outline, type OutlineItem } from './ui/outline'
 
 const host = document.getElementById('editor-host')!
 const elFile = document.getElementById('status-file')!
@@ -31,6 +33,19 @@ const view = new EditorView({ parent: host, state: createState('', listener) })
 
 const sidebar = new Sidebar((path) => void openPath(path))
 document.getElementById('workspace')!.insertBefore(sidebar.el, host)
+
+const outline = new Outline((pos) => {
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })
+  })
+  view.focus()
+})
+document.getElementById('workspace')!.appendChild(outline.el)
+outline.el.classList.toggle('is-hidden', localStorage.getItem('typmd.outlineVisible') === '0')
+view.scrollDOM.addEventListener('scroll', () => {
+  outline.setActive(activeHeadingPos())
+})
 
 // ---------- 标签页 ----------
 // 每个标签持有独立的完整 EditorState：切走时冻结，切回 setState 原样恢复
@@ -85,6 +100,18 @@ function newUntitledTab(): void {
 }
 
 function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint): void {
+  // 启动时的空白首标签直接复用，避免「打开一个文件却多出一个空标签」
+  const pristine = tabs.find(
+    (t) => !t.path && !isTabDirty(t) && t.state.doc.length === 0
+  )
+  if (pristine) {
+    pristine.state = state
+    pristine.path = path
+    pristine.fp = fp
+    pristine.savedDoc = state.doc
+    activate(pristine.id)
+    return
+  }
   tabs.push({ id: nextId++, path, fp, state, savedDoc: state.doc, scroll: 0, sourceMode })
   activate(tabs[tabs.length - 1]!.id)
 }
@@ -109,6 +136,7 @@ function activate(id: number): void {
   syncMode()
   syncStatus(true)
   scheduleCount()
+  updateOutline()
   void sidebar.setActive(t.path)
   view.focus()
 }
@@ -172,7 +200,51 @@ function scheduleCount(): void {
   countTimer = window.setTimeout(() => {
     const { words, chars } = count(view.state.doc.toString())
     elCount.textContent = `${words} 词 · ${chars} 字符`
+    scheduleOutline()
   }, 200)
+}
+
+// ---------- 大纲视图 ----------
+
+let outlineTimer: number | undefined
+function scheduleOutline(): void {
+  clearTimeout(outlineTimer)
+  outlineTimer = window.setTimeout(updateOutline, 250)
+}
+
+function updateOutline(): void {
+  const items: OutlineItem[] = []
+  syntaxTree(view.state).iterate({
+    from: 0,
+    to: view.state.doc.length,
+    enter: (node) => {
+      const m = /^(?:ATXHeading|SetextHeading)([1-6])$/.exec(node.name)
+      if (!m) return
+      const level = Number(m[1])
+      const text = view.state.doc
+        .sliceString(node.from, node.to)
+        .replace(/^#{1,6}\s+/, '')
+        .replace(/\s+#+\s*$/, '')
+        .trim()
+      items.push({ level, text: text || '（空标题）', pos: node.from })
+    }
+  })
+  outline.setItems(items)
+  outline.setActive(activeHeadingPos())
+}
+
+/** 视口顶部所在行 → 它之前最近的一个标题位置（滚动跟随高亮） */
+function activeHeadingPos(): number | null {
+  const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop)
+  let pos: number | null = null
+  syntaxTree(view.state).iterate({
+    from: 0,
+    to: Math.min(block.from + 1, view.state.doc.length),
+    enter: (node) => {
+      if (/^(?:ATXHeading|SetextHeading)[1-6]$/.test(node.name)) pos = node.from
+    }
+  })
+  return pos
 }
 
 function syncMode(): void {
@@ -275,6 +347,12 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'view:toggle-sidebar':
       sidebar.toggle()
       break
+    case 'view:toggle-outline': {
+      outline.toggle()
+      localStorage.setItem('typmd.outlineVisible', outline.visible ? '1' : '0')
+      if (outline.visible) updateOutline()
+      break
+    }
     case 'view:toggle-source': {
       sourceMode = !sourceMode
       const cur = activeTab()

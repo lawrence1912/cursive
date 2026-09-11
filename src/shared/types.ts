@@ -10,6 +10,7 @@ export type MenuAction =
   | 'edit:find'
   | 'view:toggle-source'
   | 'view:toggle-sidebar'
+  | 'view:toggle-outline'
 
 /** 一份从磁盘读到的文档 */
 export interface DocPayload {

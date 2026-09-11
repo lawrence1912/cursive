@@ -286,7 +286,7 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
 
     private static let printCSS = """
     html, body { height: auto !important; overflow: visible !important; }
-    #drag-strip, #status-bar, #sidebar, #tabbar { display: none !important; }
+    #drag-strip, #status-bar, #sidebar, #tabbar, #outline { display: none !important; }
     body { display: block !important; background: #fff !important; color: #24292f !important; }
     :root { --bg: #ffffff; --fg: #24292f; --code-bg: #f4f5f7; --border: #e6e8eb; --muted: #8b949e; --sel: transparent; }
     #workspace { display: block !important; }
@@ -474,6 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let viewItem = NSMenuItem(); main.addItem(viewItem)
         let view = NSMenu(title: "视图")
         view.addItem(item("显示/隐藏侧边栏", "view:toggle-sidebar", key: "\\"))
+        view.addItem(item("显示/隐藏大纲", "view:toggle-outline", key: "t", modifiers: [.command, .shift]))
         view.addItem(item("源代码模式", "view:toggle-source", key: "/"))
         view.addItem(.separator())
         view.addItem(NSMenuItem(title: "实际大小", action: #selector(resetZoom(_:)), keyEquivalent: "0"))
@@ -743,7 +744,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
           sidebar: !!document.querySelector('#sidebar'),
           status: (document.querySelector('#status-file') || {}).textContent || null,
           sbRows: document.querySelectorAll('.sb-row').length,
-          tabs: document.querySelectorAll('.tab-item').length
+          tabs: document.querySelectorAll('.tab-item').length,
+          outlineRows: document.querySelectorAll('.ol-item').length
         }))()
         """
         webView.evaluateJavaScript(probe) { [weak self] result, _ in

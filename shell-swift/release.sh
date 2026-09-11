@@ -34,6 +34,8 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and c.get('sbRows', 0) >= 1 and c.get('tabs', 0) >= 1)
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
+if sys.argv[1] == 'kitchen-sink.md':
+    ok = ok and c.get('outlineRows', 0) >= 3
 print(('PASS ' if ok else 'FAIL ') + sys.argv[1])
 sys.exit(0 if ok else 1)
 PY

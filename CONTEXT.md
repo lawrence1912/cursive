@@ -7,6 +7,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 ## 功能要点（renderer）
 
 - **文件树**：`sidebar.ts` 懒加载树。打开单个 .md 且未开过文件夹时，`setActive` 自动把文档目录挂为树根（sbRows E2E 断言把关）
+- **大纲视图**：`ui/outline.ts`，右侧 200px 面板。标题来自 syntaxTree 的 ATX/SetextHeading 节点（250ms 防抖重建）；点击 `scrollIntoView(y:'start')` 跳转；滚动时按「视口顶部行之前最近的标题」跟随高亮。显隐 = 菜单 `view:toggle-outline`（⌘⇧T，新增 MenuAction——契约已同步 types.ts），状态存 localStorage `typmd.outlineVisible`。**布局总览**：drag-strip(38) → tabbar(32) → workspace(左 sidebar | 中 editor | 右 outline) → status-bar
 - **标签页**：`main.ts` + `ui/tabbar.ts`。每标签持有完整 EditorState（切走冻结/切回 setState，装饰+撤销历史+光标随 tab 走）；`setDocState` 的 dirty 聚合为「任意标签脏」，`file:save-and-close` = 所有脏标签落盘（任一取消即中止关窗）；关闭最后标签自动开新空白标签；开新标签**不**触发 dirty 守卫（不会丢内容）。布局：#tabbar 在 drag-strip 之下 32px，打印时隐藏
 - **表格真渲染**：`index.ts tableField`（StateField）+ `widgets.ts TableWidget/parseTable`。块级（跨行）装饰**只能走 StateField**，ViewPlugin 的会直接报错；光标碰到由 decorate.ts 回显源码（同一套 reveal 判定，两个集合不重叠）。样式 `.cm-lp-tableview`
 
