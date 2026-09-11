@@ -182,6 +182,16 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
+// MARK: - 原生拖拽条
+// `-webkit-app-region: drag` 是 Electron 专有扩展，WKWebView 不认识；
+// 且 WKWebView 把 mouseDownCanMoveWindow 重写为 false（自己要处理鼠标事件），
+// 所以窗口拖拽必须用一个透明的原生 NSView 叠在顶部实现。
+// 高度对应 src/renderer/themes/base.css 的 --drag-strip: 38px，改那边记得同步这里。
+final class DragStripView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
@@ -224,6 +234,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         window.isMovableByWindowBackground = true         // 替代 -webkit-app-region: drag
         window.minSize = NSSize(width: 480, height: 360)
         window.contentView = webView
+
+        // 顶部拖拽条（叠在 webview 上方，与渲染层的 #drag-strip 重合）
+        let dragStrip = DragStripView(frame: .zero)
+        dragStrip.translatesAutoresizingMaskIntoConstraints = false
+        window.contentView?.addSubview(dragStrip, positioned: .above, relativeTo: webView)
+        NSLayoutConstraint.activate([
+            dragStrip.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
+            dragStrip.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
+            dragStrip.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
+            dragStrip.heightAnchor.constraint(equalToConstant: 38)
+        ])
+
         window.delegate = self
         _ = window.setFrameAutosaveName("Main")           // 记住窗口位置（≈ windowBounds）
         window.makeKeyAndOrderFront(nil)

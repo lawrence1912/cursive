@@ -40,7 +40,7 @@ Typora 风格的 macOS Markdown 编辑器。Electron 版完整可用；**已决�
 - `NSWindow` 脏标记是 `isDocumentEdited` 属性（没有 `setDocumentEdited()`）
 - `NSAlert.runModal()` 返回 `ModalResponse`，做数组下标要 `.rawValue` 运算
 - 大字符串回传：`evaluateJavaScript("window.api._resolve(\(id), <json>)")`，JSON 用 `JSONSerialization` 生成，别手拼；异步通道用 `callAsyncJavaScript(body, arguments:, in: nil, in: .page)`（body 是第一个无标签参数）
-- `#drag-strip` 是 Electron 的 `-webkit-app-region` 拖拽区，原生壳用 `window.isMovableByWindowBackground = true` 替代；该 CSS 在 WKWebView 无效（无害）
+- `#drag-strip` 是 Electron 的 `-webkit-app-region` 拖拽区 —— **WKWebView 不认识，且 WKWebView 把 `mouseDownCanMoveWindow` 重写为 false**，`isMovableByWindowBackground` 形同虚设。壳用原生 `DragStripView`（38px 透明 NSView 叠在 webview 顶部）实现拖拽；**高度与 base.css 的 `--drag-strip: 38px` 强耦合，改 CSS 记得同步壳**
 - 本机 agent 环境里 Electron 起不来（GPU/network service 崩溃循环），renderer 行为用壳内探针 + vitest 验证，不要浪费时间去修 Electron 的环境问题
 
 ## 自检探针 / E2E（每次改壳必跑）
