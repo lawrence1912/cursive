@@ -169,6 +169,81 @@ body.cursive-em-italic .cm-md-em {
   padding: 0.3em 0.6em;
 }
 
+/* ---------- 方言补齐：高亮 / 上下标 / 脚注 / TOC ---------- */
+.cm-lp-highlight {
+  background: color-mix(in srgb, #ffd60a 38%, transparent);
+  border-radius: 3px;
+  padding: 0 0.1em;
+}
+.cm-lp-sup {
+  font-size: 0.72em;
+  vertical-align: super;
+  line-height: 0;
+}
+.cm-lp-sub {
+  font-size: 0.72em;
+  vertical-align: sub;
+  line-height: 0;
+}
+.cm-lp-footnote-ref {
+  color: var(--accent);
+  font-size: 0.78em;
+  vertical-align: super;
+  line-height: 0;
+  cursor: pointer;
+  font-family: var(--sans);
+}
+.cm-lp-footnote-ref:hover {
+  text-decoration: underline;
+}
+.cm-lp-footnote-def {
+  display: block;
+  margin: 6px 0;
+  padding: 4px 10px;
+  font-size: 0.85em;
+  color: var(--muted);
+  background: var(--code-bg);
+  border-left: 2px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-lp-footnote-def-label {
+  color: var(--accent);
+  font-family: var(--mono);
+  margin-right: 6px;
+}
+.cm-lp-toc {
+  display: block;
+  margin: 10px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+}
+.cm-lp-toc-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--fg);
+}
+.cm-lp-toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cm-lp-toc li {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-lp-toc li:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 /* ---------- 数学公式 ----------
    KaTeX 自己的字体/间距由 katex.min.css 负责，这里只管它在版面里的位置。
    光标碰到回显源码时的行样式是 .cm-lp-math（与 .cm-lp-table 同一模式）。 */

@@ -2,8 +2,17 @@ import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { Facet, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
+import { EMOJI } from '../emoji'
 import { Reveal, revealScope } from './reveal'
-import { BulletWidget, CheckboxWidget, ImageWidget, MathWidget, RuleWidget } from './widgets'
+import {
+  BulletWidget,
+  CheckboxWidget,
+  EmojiWidget,
+  FootnoteRefWidget,
+  ImageWidget,
+  MathWidget,
+  RuleWidget
+} from './widgets'
 
 /** 当前文档所在目录，用来把 `![](assets/a.png)` 这种相对路径解析成可加载的 URL */
 export const docDir = Facet.define<string | null, string | null>({
@@ -149,6 +158,44 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       // `\,` → 藏掉反斜杠，只显示被转义的字符
       if (!revealed) pushHide(ctx, node.from, node.from + 1)
       return
+
+    case 'Highlight':
+      out.push(markDeco('cm-lp-highlight').range(node.from, node.to))
+      return
+
+    case 'HighlightMark':
+    case 'SuperscriptMark':
+    case 'SubscriptMark':
+      if (!revealed) pushHide(ctx, node.from, node.to)
+      return
+
+    case 'Superscript':
+      out.push(markDeco('cm-lp-sup').range(node.from, node.to))
+      return
+
+    case 'Subscript':
+      out.push(markDeco('cm-lp-sub').range(node.from, node.to))
+      return
+
+    case 'FootnoteRef': {
+      if (revealed) return
+      const label = /^\[\^([^\s\]]+)\]$/.exec(doc.sliceString(node.from, node.to))?.[1]
+      if (!label) return
+      out.push(
+        Decoration.replace({ widget: new FootnoteRefWidget(label) }).range(node.from, node.to)
+      )
+      return false
+    }
+
+    case 'Emoji': {
+      // 表里没有的短代码解析器根本不会产出节点，所以这里必有字符
+      if (revealed) return
+      const name = doc.sliceString(node.from + 1, node.to - 1)
+      const char = EMOJI[name]
+      if (!char) return
+      out.push(Decoration.replace({ widget: new EmojiWidget(char) }).range(node.from, node.to))
+      return false
+    }
 
     // ---------- 行内：换成组件 ----------
     case 'InlineMath': {

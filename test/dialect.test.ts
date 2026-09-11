@@ -24,11 +24,15 @@ describe('cursive 的 markdown 方言', () => {
     expect(n).not.toContain('SetextHeading2')
   })
 
-  it('数学公式里的 ^ 不会被当成上标', () => {
+  it('数学公式的 ^ 归 math，正文 ^ 归上标（P1-3 后各归各）', () => {
     // markdownLanguage 自带 Superscript 扩展，会把 $e^{-x^2}$ 拆坏，
-    // 所以方言是 commonmark + 显式 GFM 而非 markdownLanguage
-    expect(nodes('行内公式 $e^{-x^2}$ 结束\n')).not.toContain('Superscript')
-    expect(nodes('a^2^ b\n')).not.toContain('Superscript')
+    // 所以方言是 commonmark + 显式 GFM 而非 markdownLanguage。
+    // P1-3 加了自己的上下标后：math 元素内容原子，^ 仍不会漏进 Superscript
+    const inline = nodes('行内公式 $e^{-x^2}$ 结束\n')
+    expect(inline).toContain('InlineMath')
+    expect(inline).not.toContain('Superscript')
+    // 正文里的成对 ^ 现在就是上标（P1-3 预期行为）
+    expect(nodes('a^2^ b\n')).toContain('Superscript')
   })
 
   it('数学公式：行内 $ 与块级 $$ 都有节点，且 ^ 仍是上标天敌', () => {
@@ -67,6 +71,29 @@ describe('cursive 的 markdown 方言', () => {
     const task = nodes('- [x] 完成\n')
     expect(task).toContain('Task')
     expect(task).toContain('TaskMarker')
+  })
+
+  it('P1-3 方言：高亮 / 上下标 / emoji / 脚注 / TOC 各自成节点', () => {
+    expect(nodes('==亮==\n')).toContain('Highlight')
+    const ss = nodes('x^2^ 和 H~2~O\n')
+    expect(ss).toContain('Superscript')
+    expect(ss).toContain('Subscript')
+    // 下标不与删除线打架（GFM 只认 ~~）
+    expect(ss).not.toContain('Strikethrough')
+    expect(nodes('发 :smile: 了\n')).toContain('Emoji')
+    const fn = nodes('文[^1]字\n\n[^1]: 定义内容\n')
+    expect(fn).toContain('FootnoteRef')
+    expect(fn).toContain('FootnoteDefinition')
+    expect(nodes('[TOC]\n\n# 标题\n')).toContain('TocBlock')
+  })
+
+  it('P1-3 反例：不成对 / 不认识的保持字面量', () => {
+    expect(nodes('时间 10:30:45 啊\n')).not.toContain('Emoji')
+    expect(nodes('发 :notanemoji: 了\n')).not.toContain('Emoji')
+    expect(nodes('温度 100 度 ^ 了\n')).not.toContain('Superscript')
+    expect(nodes('波浪 ~ 号\n')).not.toContain('Subscript')
+    // 引用无定义 → 不产出定义节点
+    expect(nodes('引用 [^1] 无定义\n')).not.toContain('FootnoteDefinition')
   })
 
   it('CommonMark 基本结构正常', () => {

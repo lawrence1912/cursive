@@ -127,9 +127,13 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 - ~~P1-1 KaTeX 数学公式~~ ✅ 方言层 `InlineMath`/`DisplayMath`（pandoc 收紧定界规则：开后非空白、闭前非空白且后非数字，货币符号不吃）；行内走 decorate（ViewPlugin）、块级走 `blockField`（StateField）；`MathWidget` 用 `katex.renderToString`（同步，`throwOnError:false` 错误红色源码不崩）；CSS/字体已进产物；E2E `math.md` 断言行内/块级计数 + **KaTeX 字体真加载**（CSP 拦掉时肉眼看不出）
 - ~~P1-2 mermaid~~ ✅ `blockField` 里 FencedCode(mermaid) → `MermaidWidget`：动态 import 独立 chunk、`eq()` 按源码+主题、`destroy()` 取消未完渲染；**render 对语法错误不抛异常而是内嵌错误 SVG —— 必须先 `parse()` 预校验**才能走「保留源码+错误提示」分支；主题切换经 `themeEffect` 派发到所有标签（冻结标签也要 `state.update` 重建，否则 widget DOM 缓存导致切回还是旧配色）；E2E `mermaid.md` 断言 svg≥1 + error≥1
 
+- ~~P1-3 方言补齐~~ ✅ 高亮 `==…==`、上下标 `^…^`/`~…~`（GFM 删除线只认 `~~`，单 `~` 归下标，互不打架；math 元素内容原子，`$e^{-x^2}$` 不受影响）、emoji `:smile:`（EMOJI 表外的短代码保持字面量，`10:30:45` 安全）、脚注 `[^1]`（引用=上标角标，悬停显示定义、点击跳转；定义区折叠成一行，光标进入回落）、`[TOC]` 目录组件（点击跳标题）。dialect.md E2E 断言六类组件计数
+  - **坑 1**：`[^1]: 文字` 同时是合法的链接引用定义形状，LinkReference 会抢 —— 必须用 eager `parse` + `before: 'LinkReference'` 抢先
+  - **坑 2**：eager parse 落完元素后必须 `cx.nextLine()` 把当前行推过块，否则 parsedPos 不前进，解析器原地重试直到超时（ensureSyntaxTree 拿不到全树）
+  - **坑 3**：行内定界符长度必须与开定界符匹配（数学踩过，P1-3 的 == 复用同一扫描器）
+
 ### 当前这一轮：P1 收尾
 
-- **P1-3** 方言补齐：脚注 / `==高亮==` / 上下标 / emoji / `[TOC]`（注意与 math 抢 `^`）
 - **P1-4** 代码块增强（语言标签 + 复制）· **P1-5** 图片显示增强（放大/尺寸语法/失败路径）
 
 ### 动手前必读的三个判断（`ROADMAP.md` 第二节展开）

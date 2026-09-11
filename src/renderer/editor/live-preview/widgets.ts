@@ -1,5 +1,7 @@
 import katex from 'katex'
-import { WidgetType, type EditorView } from '@codemirror/view'
+import { syntaxTree } from '@codemirror/language'
+import type { EditorState } from '@codemirror/state'
+import { EditorView, WidgetType } from '@codemirror/view'
 
 /**
  * 每个 widget 都必须实现 eq()：CodeMirror 靠它判断能否复用 DOM。
@@ -125,6 +127,150 @@ export function extractFence(text: string): { lang: string; src: string } | null
   const last = lines[lines.length - 1]
   if (last !== undefined && /^\s*(`{3,}|~{3,})\s*$/.test(last)) lines.pop()
   return { lang, src: lines.join('\n') }
+}
+
+// ---------- 方言补齐（P1-3）：脚注 / emoji / TOC ----------
+
+export interface TocEntry {
+  level: number
+  text: string
+  pos: number
+}
+
+/** 收集全文 ATX 标题（调前需保证语法树已就绪，blockField 已全文 ensure） */
+export function collectHeadings(state: EditorState): TocEntry[] {
+  const out: TocEntry[] = []
+  syntaxTree(state).iterate({
+    enter(n) {
+      const m = /^ATXHeading([1-6])$/.exec(n.name)
+      if (!m) return
+      out.push({
+        level: Number(m[1]),
+        text: state.doc.sliceString(n.from, n.to).replace(/^#+\s*/, ''),
+        pos: n.from
+      })
+    }
+  })
+  return out
+}
+
+/** 在全文找脚注定义 [^label]: 的位置与内容 */
+export function findFootnoteDef(state: EditorState, label: string): { pos: number; text: string } | null {
+  const needle = `[^${label}]:`
+  for (let i = 1; i <= state.doc.lines; i++) {
+    const line = state.doc.line(i)
+    if (line.text.startsWith(needle))
+      return { pos: line.from, text: line.text.slice(needle.length).trim() }
+  }
+  return null
+}
+
+/** 脚注引用 [^label] → 上标角标，悬停显示定义、点击跳到定义处 */
+export class FootnoteRefWidget extends WidgetType {
+  constructor(readonly label: string) {
+    super()
+  }
+  eq(other: FootnoteRefWidget): boolean {
+    return other.label === this.label
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const sup = document.createElement('sup')
+    sup.className = 'cm-lp-footnote-ref'
+    sup.textContent = this.label
+    const def = findFootnoteDef(view.state, this.label)
+    if (def?.text) sup.title = def.text
+    sup.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      // 位置在编辑后会漂移，点击时现查（同 CheckboxWidget 的做法）
+      const now = findFootnoteDef(view.state, this.label)
+      if (!now) return
+      view.dispatch({
+        selection: { anchor: now.pos },
+        effects: EditorView.scrollIntoView(now.pos, { y: 'center' })
+      })
+    })
+    return sup
+  }
+}
+
+/** 脚注定义区折叠成一行（块级，blockField 出）；光标进入回落源码可编辑 */
+export class FootnoteDefWidget extends WidgetType {
+  constructor(
+    readonly label: string,
+    readonly text: string
+  ) {
+    super()
+  }
+  eq(other: FootnoteDefWidget): boolean {
+    return other.label === this.label && other.text === this.text
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('div')
+    el.className = 'cm-lp-footnote-def'
+    const label = document.createElement('span')
+    label.className = 'cm-lp-footnote-def-label'
+    label.textContent = `^${this.label}`
+    el.appendChild(label)
+    el.appendChild(document.createTextNode(this.text.split('\n')[0] ?? ''))
+    return el
+  }
+}
+
+/** :smile: → emoji 字符 */
+export class EmojiWidget extends WidgetType {
+  constructor(readonly char: string) {
+    super()
+  }
+  eq(other: EmojiWidget): boolean {
+    return other.char === this.char
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'cm-lp-emoji'
+    el.textContent = this.char
+    return el
+  }
+}
+
+/** [TOC] → 可点击目录。点击条目跳到对应标题 */
+export class TocWidget extends WidgetType {
+  constructor(readonly entries: TocEntry[]) {
+    super()
+  }
+  eq(other: TocWidget): boolean {
+    return JSON.stringify(other.entries) === JSON.stringify(this.entries)
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const nav = document.createElement('nav')
+    nav.className = 'cm-lp-toc'
+    const head = document.createElement('div')
+    head.className = 'cm-lp-toc-title'
+    head.textContent = '目录'
+    nav.appendChild(head)
+    const list = document.createElement('ul')
+    nav.appendChild(list)
+    for (const entry of this.entries) {
+      const li = document.createElement('li')
+      li.textContent = entry.text
+      // 层级缩进（不嵌套 DOM，避免空标题层级时列表抖动）
+      li.style.paddingLeft = `${(entry.level - 1) * 14 + 6}px`
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        view.dispatch({
+          selection: { anchor: entry.pos },
+          effects: EditorView.scrollIntoView(entry.pos, { y: 'start', yMargin: 12 })
+        })
+      })
+      list.appendChild(li)
+    }
+    return nav
+  }
 }
 
 /** 无序列表的 `-` `*` `+` → 圆点 */

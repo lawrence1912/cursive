@@ -52,4 +52,16 @@ describe('块级装饰（blockField 的纯函数，不依赖 DOM）', () => {
     // 非 mermaid 围栏不换 widget
     expect(decos('代码：\n\n```ts\nconst a = 1\n```')).toEqual([])
   })
+
+  it('FootnoteDefinition → FootnoteDefWidget；光标进入回落', () => {
+    const doc = '前文\n\n[^1]: 这是定义\n'
+    expect(decos(doc)).toEqual([`4-${doc.trimEnd().length}:FootnoteDefWidget`])
+    expect(decos(doc, 10)).toEqual([])
+  })
+
+  it('TocBlock → TocWidget，收集全文标题', () => {
+    const doc = '目录：\n\n[TOC]\n\n# 一\n\n## 二\n'
+    // TocBlock 只盖 [TOC] 那一行
+    expect(decos(doc)).toEqual(['5-10:TocWidget'])
+  })
 })

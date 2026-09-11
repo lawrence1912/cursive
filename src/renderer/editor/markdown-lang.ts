@@ -12,18 +12,22 @@ import {
   type MarkdownConfig
 } from '@lezer/markdown'
 
+/** @lezer/markdown 未导出 BlockResult，这里按上游定义补一份 */
+type BlockResult = boolean | null
+import { EMOJI } from './emoji'
+
 /**
- * cursive 的 markdown 方言：CommonMark + GFM + YAML front matter + 数学公式。
+ * cursive 的 markdown 方言：CommonMark + GFM + YAML front matter + 数学 + 方言补齐。
  *
  * 刻意不用 `markdownLanguage` —— 它在 GFM 之外还塞了上下标和 emoji 扩展，
- * 会把数学公式里的 `^` 当成 Superscript 解析（$e^{-x^2}$ 就废了）。
- * 这里用 commonmarkLanguage 打底、显式只加 GFM，方言范围跟计划一致。
+ * 会和本文件自己的上下标/emoji 实现打架。这里用 commonmarkLanguage 打底、
+ * 显式只加 GFM，再叠本文件的 math 与 extras 两层扩展。
  */
 export function cursiveMarkdown(): LanguageSupport {
   return yamlFrontmatter({
     content: markdown({
       base: commonmarkLanguage,
-      extensions: [...GFM, math],
+      extensions: [...GFM, math, extras],
       codeLanguages: languages
     })
   })
@@ -49,16 +53,22 @@ function isDigit(code: number): boolean {
 }
 
 /** 从 pos+len 往右找合法的闭定界符，返回其起点；找不到返回 -1 */
-function findInlineClose(cx: InlineContext, pos: number, len: number): number {
+function findInlineClose(
+  cx: InlineContext,
+  pos: number,
+  len: number,
+  delim: number,
+  noDigitAfter: boolean
+): number {
   for (let i = pos + len; i < cx.end; i++) {
     const ch = cx.char(i)
-    if (ch === NEWLINE) return -1 // 行内公式不跨行（跨行走 DisplayMath 块解析）
-    if (ch !== DOLLAR) continue
+    if (ch === NEWLINE) return -1 // 行内语法不跨行
+    if (ch !== delim) continue
     // 闭定界符长度必须与开定界符一致：$$…$$ 配对，$…$ 配对。
     // 不校验的话 '$x$$y' 会把闭 $ 的终点算到行外去，内联装饰跨行直接把 CM 搞崩
-    if (len === 2 ? cx.char(i + 1) !== DOLLAR : cx.char(i + 1) === DOLLAR) continue
+    if (len === 2 ? cx.char(i + 1) !== delim : cx.char(i + 1) === delim) continue
     if (isSpace(cx.char(i - 1))) continue // 闭定界符前不能是空白
-    if (isDigit(cx.char(i + len))) continue // 闭定界符后不能是数字（$10 那种）
+    if (noDigitAfter && isDigit(cx.char(i + len))) continue // 闭定界符后不能是数字（$10 那种）
     return i
   }
   return -1
@@ -70,7 +80,7 @@ function parseInlineMath(cx: InlineContext, next: number, pos: number): number {
   const len = cx.char(pos + 1) === DOLLAR ? 2 : 1
   const after = cx.char(pos + len)
   if (after === -1 || isSpace(after) || after === DOLLAR) return -1
-  const close = findInlineClose(cx, pos, len)
+  const close = findInlineClose(cx, pos, len, DOLLAR, true)
   if (close < 0) return -1
   const end = close + len
   return cx.addElement(
@@ -129,6 +139,168 @@ const math: MarkdownConfig = {
       // 抢在 SetextHeading 之前：否则 $$\nx\n$$ 下面的 --- 之类会把段落吃成标题
       before: 'SetextHeading',
       leaf: (_cx, leaf) => (/^\$\$/.test(leaf.content) ? new DisplayMathParser() : null)
+    }
+  ]
+}
+
+// ---------- 方言补齐（P1-3）：高亮 / 上下标 / emoji / 脚注 / TOC ----------
+//
+// 上下标用 ^ ~ 单字符定界符，与数学公式不冲突：math 的元素内容是原子的，
+// $e^{-x^2}$ 里的 ^ 根本不会进入行内解析（这正是当初弃用 markdownLanguage 的原因）。
+// 单 ~ 也安全：GFM 删除线要求恰好 ~~，单 ~ 会落到这里的 Subscript。
+
+const EQUALS = 61
+const CARET = 94
+const TILDE = 126
+const COLON = 58
+const LBRACKET = 91
+const CARET2 = 94
+const RBRACKET = 93
+
+/** 成对单字符定界符（^…^ / ~…~）的通用行内解析器 */
+function makePairedParser(
+  name: string,
+  node: string,
+  mark: string,
+  delim: number
+): { name: string; parse: (cx: InlineContext, next: number, pos: number) => number } {
+  return {
+    name,
+    parse(cx, next, pos) {
+      if (next !== delim) return -1
+      const first = cx.char(pos + 1)
+      if (first === -1 || isSpace(first) || first === delim) return -1
+      for (let i = pos + 1; i < cx.end; i++) {
+        const ch = cx.char(i)
+        if (ch === NEWLINE) return -1
+        if (ch !== delim) continue
+        if (isSpace(cx.char(i - 1))) continue // 闭定界符前不能是空白
+        return cx.addElement(
+          cx.elt(node, pos, i + 1, [
+            cx.elt(mark, pos, pos + 1),
+            cx.elt(mark, i, i + 1)
+          ])
+        )
+      }
+      return -1
+    }
+  }
+}
+
+/** ==高亮==：与 math 同款的双字符定界符扫描（内容不跨行） */
+function parseHighlight(cx: InlineContext, next: number, pos: number): number {
+  if (next !== EQUALS || cx.char(pos + 1) !== EQUALS) return -1
+  const after = cx.char(pos + 2)
+  if (after === -1 || isSpace(after) || after === EQUALS) return -1
+  const close = findInlineClose(cx, pos, 2, EQUALS, false)
+  if (close < 0) return -1
+  const end = close + 2
+  return cx.addElement(
+    cx.elt('Highlight', pos, end, [
+      cx.elt('HighlightMark', pos, pos + 2),
+      cx.elt('HighlightMark', close, end)
+    ])
+  )
+}
+
+/** :smile: → emoji。表里没有的短代码一律保持字面量（时间 10:30:45 不受影响） */
+function parseEmoji(cx: InlineContext, next: number, pos: number): number {
+  if (next !== COLON) return -1
+  let end = pos + 1
+  while (end < cx.end) {
+    const ch = cx.char(end)
+    if (ch === COLON) break
+    if (ch === NEWLINE) return -1
+    if (!/[a-zA-Z0-9_+-]/.test(String.fromCharCode(ch))) return -1
+    end++
+  }
+  if (end >= cx.end || end === pos + 1) return -1
+  if (!EMOJI[cx.slice(pos + 1, end)]) return -1
+  return cx.addElement(cx.elt('Emoji', pos, end + 1))
+}
+
+/** [^label] 脚注引用。必须抢在 Link 之前，否则 [ 被链接解析器拿走 */
+function parseFootnoteRef(cx: InlineContext, next: number, pos: number): number {
+  if (next !== LBRACKET || cx.char(pos + 1) !== CARET2) return -1
+  let end = pos + 2
+  while (end < cx.end) {
+    const ch = cx.char(end)
+    if (ch === RBRACKET) break
+    if (ch === NEWLINE || isSpace(ch)) return -1
+    end++
+  }
+  if (end >= cx.end || end === pos + 2) return -1
+  return cx.addElement(cx.elt('FootnoteRef', pos, end + 1))
+}
+
+/** 块级定义的通用形态：首行认领，finish 时整体落元素（照抄 DisplayMathParser） */
+function makeLineStartParser(test: (content: string) => boolean, node: string) {
+  return class {
+    nextLine(_cx: BlockContext, _line: Line, _leaf: LeafBlock): boolean {
+      return false
+    }
+    finish(cx: BlockContext, leaf: LeafBlock): boolean {
+      if (!test(leaf.content)) return false
+      cx.addLeafElement(leaf, cx.elt(node, leaf.start, leaf.start + leaf.content.length))
+      return true
+    }
+  }
+}
+
+/** [TOC]（单行）块 */
+const TocParser = makeLineStartParser((c) => /^\[\s*toc\s*\]$/i.test(c.trim()), 'TocBlock')
+
+/**
+ * 脚注定义 [^label]: 内容。
+ * 必须用 eager parse 抢在 LinkReference 之前 —— 「[^1]: 文字」同时是合法的
+ * 链接引用定义形状，等段落累积完再认领就来不及了。定义内容到空行为止
+ * （多行续行是 GitHub 规则的简化版）。
+ */
+function parseFootnoteDef(cx: BlockContext, line: Line): BlockResult {
+  if (!/^\[\^[^\s\]]+\]:/.test(line.text.slice(line.pos))) return false
+  const from = cx.lineStart + line.pos
+  for (;;) {
+    const peeked = cx.peekLine()
+    if (!peeked || !peeked.trim()) break
+    cx.nextLine()
+  }
+  const end = cx.lineStart + line.text.length
+  cx.addElement(cx.elt('FootnoteDefinition', from, end))
+  // 必须把当前行推过定义块，否则 parsedPos 不前进，解析器原行重试直到超时
+  cx.nextLine()
+  return true
+}
+
+const extras: MarkdownConfig = {
+  defineNodes: [
+    { name: 'Highlight', style: t.emphasis },
+    { name: 'HighlightMark', style: t.processingInstruction },
+    { name: 'Superscript', style: t.special(t.string) },
+    { name: 'SuperscriptMark', style: t.processingInstruction },
+    { name: 'Subscript', style: t.special(t.string) },
+    { name: 'SubscriptMark', style: t.processingInstruction },
+    { name: 'Emoji', style: t.content },
+    { name: 'FootnoteRef', style: t.link },
+    { name: 'FootnoteDefinition', block: true },
+    { name: 'TocBlock', block: true }
+  ],
+  parseInline: [
+    makePairedParser('Superscript', 'Superscript', 'SuperscriptMark', CARET),
+    makePairedParser('Subscript', 'Subscript', 'SubscriptMark', TILDE),
+    { name: 'Highlight', parse: parseHighlight },
+    { name: 'Emoji', parse: parseEmoji },
+    { name: 'FootnoteRefParser', before: 'Link', parse: parseFootnoteRef }
+  ],
+  parseBlock: [
+    {
+      name: 'FootnoteDefinition',
+      before: 'LinkReference',
+      parse: parseFootnoteDef
+    },
+    {
+      name: 'TocBlock',
+      before: 'SetextHeading',
+      leaf: (_cx, leaf) => (/^\[\s*toc\s*\]$/i.test(leaf.content) ? new TocParser() : null)
     }
   ]
 }

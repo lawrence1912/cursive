@@ -323,10 +323,12 @@ final class PDFExporter: NSObject, WKNavigationDelegate, WKScriptMessageHandler 
         wv.navigationDelegate = self
         self.wv = wv
         // 清掉历史版本留下的 scheme 缓存：老版本响应没带 Cache-Control，
-        // 旧 bundle 会一直盖住新产物（升级后第一次启动必须自愈一次）
+        // 旧 bundle 会一直盖住新产物。清完后才能 load —— 异步竞速输一次，
+        // 浏览器就拿旧 bundle 盖过整个 E2E（症状：新用例全零、旧用例照过）
         let stale: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
-        WKWebsiteDataStore.default().removeData(ofTypes: stale, modifiedSince: .distantPast) {}
-        wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
+        WKWebsiteDataStore.default().removeData(ofTypes: stale, modifiedSince: .distantPast) {
+            wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -540,9 +542,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         NSApp.activate(ignoringOtherApps: true)
 
         buildMenu()
+        let wv = webView!
         let staleCache: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
-        WKWebsiteDataStore.default().removeData(ofTypes: staleCache, modifiedSince: .distantPast) {}
-        webView.load(URLRequest(url: URL(string: "app://r/index.html")!))
+        WKWebsiteDataStore.default().removeData(ofTypes: staleCache, modifiedSince: .distantPast) {
+            wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
+        }
 
         // argv 打开文档：cursive-shell /path/to/file.md
         if let arg = CommandLine.arguments.dropFirst().first(where: {
@@ -1124,7 +1128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         await new Promise(r => setTimeout(r, 60))
         const tbBack = getComputedStyle(sb).display
         const counts = {}
-        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid'])
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub'])
           counts[cls] = document.querySelectorAll('.' + cls).length
         // P1-1：KaTeX 字体必须真的加载了（CSP 拦掉的话公式会用系统字体凑合，
         // 肉眼不一定看得出）。fonts.ready 之后任一 KaTeX_* 字体到位即算过

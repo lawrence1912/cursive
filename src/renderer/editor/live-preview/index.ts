@@ -11,12 +11,16 @@ import { buildDecorations } from './decorate'
 import { Reveal, revealScope } from './reveal'
 import {
   cellSpan,
+  collectHeadings,
   currentTheme,
+  EmojiWidget,
   extractFence,
+  FootnoteDefWidget,
   MathWidget,
   MermaidWidget,
   parseTable,
-  TableWidget
+  TableWidget,
+  TocWidget
 } from './widgets'
 
 export { docDir } from './decorate'
@@ -183,6 +187,34 @@ export function buildBlocks(state: EditorState): DecorationSet {
               widget: new MermaidWidget(fence.src, currentTheme()),
               block: true
             }).range(node.from, node.to)
+          )
+          return false
+        }
+        case 'FootnoteDefinition': {
+          // 定义区折叠成一行；光标进入回落源码（与表格同一套 reveal 判定）
+          if (reveal.touches(node.from, node.to)) return false
+          const m = /^\[\^([^\s\]]+)\]:\s*([\s\S]*)$/.exec(
+            state.doc.sliceString(node.from, node.to)
+          )
+          if (!m) return false
+          out.push(
+            Decoration.replace({
+              widget: new FootnoteDefWidget(m[1], m[2].trim()),
+              block: true
+            }).range(node.from, node.to)
+          )
+          return false
+        }
+        case 'TocBlock': {
+          // [TOC] → 目录组件；标题数据来自全文语法树（此处已全文 ensure）
+          if (reveal.touches(node.from, node.to)) return false
+          const entries = collectHeadings(state)
+          if (!entries.length) return false
+          out.push(
+            Decoration.replace({ widget: new TocWidget(entries), block: true }).range(
+              node.from,
+              node.to
+            )
           )
           return false
         }

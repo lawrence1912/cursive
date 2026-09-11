@@ -13,14 +13,14 @@ npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm
 echo "==> [2/4] 编译原生壳"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
 
-echo "==> [3/4] E2E 六用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
+echo "==> [3/4] E2E 七用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 FIX=/tmp/cursive-e2e
 SCRATCH="$HOME/Library/Application Support/cursive/scratch"
 # 上一轮留下的崩溃恢复快照，会被下一轮当成「待恢复的草稿」开出来，把用例打开的文件
 # 挤成非活动标签 —— E2E 于是随机 FAIL。每轮从干净的恢复状态起跑
 mkdir -p "$SCRATCH"; rm -f "$SCRATCH"/*.json
 rm -rf "$FIX"; mkdir -p "$FIX/assets"
-cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md "$FIX/"
+cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md test/fixtures/dialect.md "$FIX/"
 cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
 printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n' > "$FIX/img.md"
 printf '# 表格测试\n\n| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| a | b | c |\n| **粗体** | `code` | d |\n' > "$FIX/table.md"
@@ -61,6 +61,12 @@ if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}
     ok = ok and (m.get('inline', 0) >= 2 and m.get('block', 0) >= 2 and m.get('font') is True)
+if sys.argv[1] == 'dialect.md':
+    # P1-3：TOC/脚注/emoji/高亮/上下标各自渲染成组件或样式
+    c2 = r['counts']
+    ok = ok and (c2.get('cm-lp-toc', 0) >= 1 and c2.get('cm-lp-footnote-ref', 0) >= 2
+                 and c2.get('cm-lp-emoji', 0) >= 1 and c2.get('cm-lp-highlight', 0) >= 1
+                 and c2.get('cm-lp-sup', 0) >= 1 and c2.get('cm-lp-sub', 0) >= 1)
 if sys.argv[1] == 'mermaid.md':
     # P1-2：正常块渲染出 SVG；非法块保留源码报错而不是白屏
     mm = r.get('mermaid') or {}
@@ -75,6 +81,7 @@ run_case kitchen-sink.md
 run_case crlf.md
 run_case math.md
 run_case mermaid.md
+run_case dialect.md
 
 # 崩溃恢复不许抢焦点：种一份 scratch 草稿，再把 scratchList 的应答拖慢到 1.2s，
 # 逼出「文件先到、恢复后到」那条顺序 —— 正常顺序下 scratchList 几毫秒就回来，测不到。
