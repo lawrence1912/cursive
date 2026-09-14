@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A Typora-like live-preview markdown editor",
   "type": "module",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "vite",
