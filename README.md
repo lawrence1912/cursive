@@ -72,6 +72,7 @@ KaTeX 行内与块级公式 · mermaid 流程图 / 时序图 / 饼图 · 图片�
 ### 一、下载现成的包
 
 到 [Releases](https://github.com/lawrence1912/cursive/releases) 拿 `Cursive-<版本>.dmg`，打开后把 Cursive 拖进「应用程序」。
+**现成的包是 arm64（Apple Silicon）** —— Intel 机器走下面第二条自己编译，一样是三条命令。
 
 **第一次打开会被 macOS 拦住**，提示「无法验证开发者」或「已损坏，无法打开」。
 
