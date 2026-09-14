@@ -5,3 +5,4 @@ dist/
 *.tsbuildinfo
 .shots/
 shell-swift/cursive-shell
+/assets/
