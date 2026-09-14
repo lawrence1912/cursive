@@ -19,6 +19,8 @@ export const EXPORT_CSS = `
   --mark-idle: #9aa3ae;
   --accent: #0969da;
   --border: #e6e8eb;
+  /* 与 themes/base.css 同名同值：比 --border 更淡的一档，表格行间用它 */
+  --divider: #ededf0;
   --code-bg: #f4f5f7;
   --surface: #fafbfc;
   --match: rgb(255 196 0 / 32%);
@@ -194,14 +196,15 @@ body {
   font-size: 0.92em;
   line-height: 1.55;
 }
+/* 表格与编辑器里保持一致：只留横线、表头不铺底、不要斑马纹。
+   印在纸上这一套尤其对 —— 网格线和斑马纹是打印机最容易糊成一片的东西 */
 .cursive-doc th, .cursive-doc td {
-  border: 1px solid var(--border);
-  padding: 5px 12px;
+  border: none;
+  border-bottom: 1px solid var(--divider);
+  padding: 6px 12px;
 }
-.cursive-doc thead th { background: var(--code-bg); font-weight: 600; }
-.cursive-doc tbody tr:nth-child(even) {
-  background: color-mix(in srgb, var(--code-bg) 45%, transparent);
-}
+.cursive-doc thead th { border-bottom: 1px solid var(--border); font-weight: 600; }
+.cursive-doc tbody tr:last-child td { border-bottom: none; }
 
 /* ---------- 列表 ---------- */
 .cursive-doc ul, .cursive-doc ol { padding-left: 1.6em; margin: 0.7em 0; }

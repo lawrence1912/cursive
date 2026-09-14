@@ -358,6 +358,41 @@ body {
   display: none;
 }
 
+/* ---- 滚动条 ----
+   默认那根有 17px 宽（实测 `scrollDOM.offsetWidth - clientWidth`），比页面上任何
+   一条线都粗，在一屏白纸的右边格外扎眼。这里收到 10px 槽 / 6px 可见滑块，
+   颜色从 --fg 兑出来 —— 浅色里是淡灰、暗色里是淡白、护眼里是淡棕，四套主题不用各写一遍。
+
+   **不要同时写标准属性 `scrollbar-width`**：这一版 WebKit 里只要设了它，
+   下面整套 ::-webkit-scrollbar 就被忽略，回落成原生那根（实测仍是 17px，
+   `scrollbar-width: thin` 一点没收窄）。只留 -webkit- 这一套才真正管用 ——
+   同一份 CSS 两条路，看着像双保险，实际是后者把前者关掉了。
+
+   代价说清楚：一旦给 ::-webkit-scrollbar 写了规则，WebKit 就改用「占位的」
+   自定义滚动条。系统偏好里设成「滚动时显示」的用户，原本这里是 0 占位的浮层条，
+   现在会变成常驻的一条细槽。在这个编辑器里不亏 —— 正文是居中定宽的，
+   槽宽变化不动版心，反而少了「内容长过一屏时版面突然横跳」那一下。
+
+   浮动格式栏那条横向的自己 display:none 掉了，选择器更具体，不受这里影响 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  /* 2px 透明边 + background-clip: content-box：可见滑块 6px，两侧留呼吸 */
+  background-color: color-mix(in srgb, var(--fg) 20%, transparent);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--fg) 34%, transparent);
+}
+
 .fb-btn,
 .fb-pick {
   flex: none;

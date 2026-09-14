@@ -206,8 +206,11 @@ body.cursive-em-italic .cm-md-em {
    光标和选区归浏览器画 —— 编辑器此时是失焦的，drawSelection 不会再出一个假光标 */
 .cm-lp-tableview th,
 .cm-lp-tableview td {
-  border: 1px solid var(--border);
-  padding: 5px 12px;
+  /* 只留横线，不画竖线：竖线是网格的一半噪声，而列本来就靠对齐读得出来。
+     格子的编辑落点不靠边框交代 —— 点进去有 :focus 那圈强调色环 */
+  border: none;
+  border-bottom: 1px solid var(--divider);
+  padding: 6px 12px;
   -webkit-user-select: text;
   user-select: text;
   caret-color: var(--fg);
@@ -224,12 +227,13 @@ body.cursive-em-italic .cm-md-em {
   background-color: var(--sel) !important;
 }
 .cm-lp-tableview thead th {
-  background: var(--code-bg);
+  /* 表头不再铺灰底：底下那条实线（比行间的发丝线重一档）已经说清楚它是表头，
+     再加一块填色就是同一件事说两遍 */
+  border-bottom: 1px solid var(--border);
   font-weight: 600;
 }
-.cm-lp-tableview tbody tr:nth-child(even) {
-  background: color-mix(in srgb, var(--code-bg) 45%, transparent);
-}
+/* 斑马纹去掉：有了行间横线，它是第二套行分隔，两套叠在一起才是「表格很吵」的来源 */
+.cm-lp-tableview tbody tr:last-child td { border-bottom: none; }
 
 /* 格内行内语法（P2-6）：样式借正文那几个类（.cm-lp-inline-code / -highlight / -sup /
    -sub / -link），这里只补裸标签和「格子里不该有手型」这类差异 */
