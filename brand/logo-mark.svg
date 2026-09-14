@@ -1,25 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 292" width="450" height="292" role="img" aria-label="cursive">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="196 202 620 620" width="310" height="310" role="img" aria-label="cursive">
   <title>cursive mark</title>
   <defs>
     <linearGradient id="m-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4c463e"/><stop offset="1" stop-color="#201e1b"/></linearGradient>
     <linearGradient id="m-mk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bdb5a7"/><stop offset="1" stop-color="#948b7d"/></linearGradient>
     <linearGradient id="m-car" x1=".2" y1="0" x2=".8" y2="1">
       <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
+    <radialGradient id="m-halo" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#3d90f0" stop-opacity=".34"/><stop offset=".5" stop-color="#3d90f0" stop-opacity=".1"/><stop offset="1" stop-color="#3d90f0" stop-opacity="0"/></radialGradient>
     <radialGradient id="m-cast" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#221f1a" stop-opacity=".16"/><stop offset=".62" stop-color="#221f1a" stop-opacity=".05"/><stop offset="1" stop-color="#221f1a" stop-opacity="0"/></radialGradient>
+      <stop offset="0" stop-color="#221f1a" stop-opacity=".24"/><stop offset=".62" stop-color="#221f1a" stop-opacity=".08"/><stop offset="1" stop-color="#221f1a" stop-opacity="0"/></radialGradient>
   </defs>
-  <ellipse cx="43" cy="96" rx="54" ry="20" fill="url(#m-cast)"/>
-  <ellipse cx="240" cy="96" rx="156" ry="20" fill="url(#m-cast)"/>
-  <ellipse cx="210" cy="192" rx="204" ry="20" fill="url(#m-cast)"/>
-  <ellipse cx="150" cy="288" rx="146" ry="20" fill="url(#m-cast)"/>
-  <rect x="14" y="26" width="58" height="58" rx="20" fill="url(#m-mk)"/>
-  <rect x="20" y="32" width="46" height="4" rx="2" fill="#fff" opacity=".4"/>
-  <rect x="102" y="26" width="276" height="58" rx="29" fill="url(#m-ink)"/>
-  <rect x="114" y="32" width="252" height="4" rx="2" fill="#fff" opacity=".14"/>
-  <rect x="14" y="122" width="392" height="58" rx="29" fill="url(#m-ink)"/>
-  <rect x="26" y="128" width="368" height="4" rx="2" fill="#fff" opacity=".14"/>
-  <rect x="14" y="218" width="272" height="58" rx="29" fill="url(#m-ink)"/>
-  <rect x="26" y="224" width="248" height="4" rx="2" fill="#fff" opacity=".14"/>
-  <rect x="392" y="12" width="42" height="86" rx="21" fill="url(#m-car)"/>
-  <rect x="401" y="23" width="12" height="60" rx="6" fill="#fff" opacity=".5"/>
+  <!-- C：一整笔，开口朝右，缺口正对光标 -->
+  <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="url(#m-ink)" stroke-width="106" stroke-linecap="round"/>
+  <path d="M 600 290 A 236 236 0 0 0 330 430" fill="none" stroke="#fff" stroke-opacity=".13" stroke-width="9" stroke-linecap="round"/>
+  <!-- 怀里那一行：灰方块是 markdown 标记（光标停在这一行才显形），后面是排好版的成品 -->
+  <ellipse cx="455" cy="562" rx="112" ry="15" fill="url(#m-cast)"/>
+  <rect x="352" y="477" width="70" height="70" rx="24" fill="url(#m-mk)"/>
+  <rect x="359" y="484" width="56" height="5" rx="2.5" fill="#fff" opacity=".4"/>
+  <rect x="444" y="477" width="118" height="70" rx="35" fill="url(#m-ink)"/>
+  <rect x="456" y="484" width="94" height="5" rx="2.5" fill="#fff" opacity=".14"/>
+  <!-- 光标：停在 C 的缺口上，也正是那一行的行尾 -->
+  <ellipse cx="660" cy="512" rx="92" ry="112" fill="url(#m-halo)"/>
+  <rect x="634" y="424" width="52" height="176" rx="26" fill="url(#m-car)"/>
+  <rect x="645" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
 </svg>

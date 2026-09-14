@@ -9,35 +9,20 @@
       <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".6" stop-color="#fff" stop-opacity=".02"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
     <linearGradient id="aid-ink" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#fdfbf7"/><stop offset="1" stop-color="#ded7ca"/></linearGradient>
-    <linearGradient id="aid-mk" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7b8391"/><stop offset="1" stop-color="#5a616d"/></linearGradient>
     <linearGradient id="aid-car" x1=".2" y1="0" x2=".8" y2="1">
       <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
     <radialGradient id="aid-halo" cx=".5" cy=".5" r=".5">
       <stop offset="0" stop-color="#3d90f0" stop-opacity=".34"/><stop offset=".5" stop-color="#3d90f0" stop-opacity=".1"/><stop offset="1" stop-color="#3d90f0" stop-opacity="0"/></radialGradient>
-    <radialGradient id="aid-cast" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#000" stop-opacity=".46"/><stop offset=".62" stop-color="#000" stop-opacity=".16"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
   </defs>
+  <!-- Apple 的 macOS 图标网格：1024 画布里圆角矩形占 824，四周留透明边 -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#aid-tile)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#aid-sheen)"/>
-  <ellipse cx="345" cy="464" rx="60" ry="24" fill="url(#aid-cast)"/>
-  <ellipse cx="542" cy="464" rx="162" ry="24" fill="url(#aid-cast)"/>
-  <ellipse cx="512" cy="560" rx="210" ry="24" fill="url(#aid-cast)"/>
-  <ellipse cx="452" cy="656" rx="152" ry="24" fill="url(#aid-cast)"/>
-  <!-- 行 1：光标停在这一行，所以 markdown 标记显形 -->
-  <rect x="316" y="394" width="58" height="58" rx="20" fill="url(#aid-mk)"/>
-  <rect x="322" y="400" width="46" height="4" rx="2" fill="#fff" opacity=".4"/>
-  <rect x="404" y="394" width="276" height="58" rx="29" fill="url(#aid-ink)"/>
-  <rect x="416" y="400" width="252" height="4" rx="2" fill="#fff" opacity=".5"/>
-  <!-- 行 2 / 3：光标不在，已是成品，没有标记 -->
-  <rect x="316" y="490" width="392" height="58" rx="29" fill="url(#aid-ink)"/>
-  <rect x="328" y="496" width="368" height="4" rx="2" fill="#fff" opacity=".5"/>
-  <rect x="316" y="586" width="272" height="58" rx="29" fill="url(#aid-ink)"/>
-  <rect x="328" y="592" width="248" height="4" rx="2" fill="#fff" opacity=".5"/>
-  <!-- 光标 -->
-  <ellipse cx="715" cy="423" rx="86" ry="80" fill="url(#aid-halo)"/>
-  <ellipse cx="715" cy="474" rx="42" ry="16" fill="url(#aid-cast)"/>
-  <rect x="694" y="380" width="42" height="86" rx="21" fill="url(#aid-car)"/>
-  <rect x="703" y="391" width="12" height="60" rx="6" fill="#fff" opacity=".5"/>
+  <!-- C：一整笔，开口朝右。笔宽与标志里的正文胶囊同族，缺口正对光标 -->
+  <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="url(#aid-ink)" stroke-width="106" stroke-linecap="round"/>
+  <path d="M 600 290 A 236 236 0 0 0 330 430" fill="none" stroke="#100f12" stroke-opacity=".16" stroke-width="9" stroke-linecap="round"/>
+  <!-- 光标：正好停在 C 的缺口上 —— 写到哪儿，C 就断在哪儿 -->
+  <ellipse cx="660" cy="512" rx="92" ry="112" fill="url(#aid-halo)"/>
+  <rect x="634" y="424" width="52" height="176" rx="26" fill="url(#aid-car)"/>
+  <rect x="645" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="url(#aid-edge)" stroke-width="3"/>
 </svg>

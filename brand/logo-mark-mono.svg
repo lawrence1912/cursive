@@ -1,10 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 292" width="450" height="292" role="img" aria-label="cursive">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="196 202 620 620" width="310" height="310" role="img" aria-label="cursive">
   <title>cursive mark (monochrome)</title>
   <g fill="currentColor">
-    <rect x="14" y="26" width="58" height="58" rx="20" opacity=".45"/>
-    <rect x="102" y="26" width="276" height="58" rx="29"/>
-    <rect x="14" y="122" width="392" height="58" rx="29"/>
-    <rect x="14" y="218" width="272" height="58" rx="29"/>
-    <rect x="392" y="12" width="42" height="86" rx="21"/>
+    <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="currentColor" stroke-width="106" stroke-linecap="round"/>
+    <rect x="352" y="477" width="70" height="70" rx="24" opacity=".45"/>
+    <rect x="444" y="477" width="118" height="70" rx="35"/>
+    <rect x="634" y="424" width="52" height="176" rx="26"/>
   </g>
 </svg>

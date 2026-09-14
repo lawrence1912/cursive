@@ -1,6 +1,7 @@
 import { syntaxTree } from '@codemirror/language'
 import { EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state'
 import type { SyntaxNode } from '@lezer/common'
+import { setTableEdit } from './live-preview'
 
 /**
  * P2-2 Markdown 输入规则。
@@ -36,6 +37,9 @@ export function expandTableOnEnter(state: EditorState): TransactionSpec | null {
   return {
     changes: { from: line.to, insert },
     selection: EditorSelection.cursor(cursor),
+    // 骨架一补出来就直接进就地编辑态：新表格以渲染态出现、光标已经在第一个空格子里。
+    // 源代码模式下没有这个字段，CM 会原样忽略该 effect
+    effects: setTableEdit.of(line.from),
     userEvent: 'input.complete'
   }
 }

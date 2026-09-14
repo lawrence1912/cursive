@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import { icon } from './icons'
 
 export interface TabItem {
@@ -40,33 +41,33 @@ export class TabBar {
 
   render(tabs: TabItem[], activeId: number): void {
     const frag = document.createDocumentFragment()
-    for (const t of tabs) {
+    for (const tab of tabs) {
       const el = document.createElement('div')
-      el.className = 'tab-item' + (t.id === activeId ? ' is-active' : '')
-      el.dataset['id'] = String(t.id)
-      el.title = t.title
+      el.className = 'tab-item' + (tab.id === activeId ? ' is-active' : '')
+      el.dataset['id'] = String(tab.id)
+      el.title = tab.title
 
       const title = document.createElement('span')
       title.className = 'tab-title'
-      title.textContent = t.title
+      title.textContent = tab.title
       el.appendChild(title)
 
-      if (t.dirty) {
+      if (tab.dirty) {
         const dot = document.createElement('span')
         dot.className = 'tab-dirty'
         el.appendChild(dot)
       }
-      if (t.stale) {
+      if (tab.stale) {
         const warn = document.createElement('span')
         warn.className = 'tab-stale'
         warn.innerHTML = icon('warn')
-        warn.title = '文件在外部被修改，此标签的未保存改动已过期'
+        warn.title = t('tab.stale')
         el.appendChild(warn)
       }
 
       const close = document.createElement('button')
       close.className = 'tab-close'
-      close.setAttribute('aria-label', `关闭 ${t.title}`)
+      close.setAttribute('aria-label', t('tab.close', { title: tab.title }))
       close.innerHTML = icon('close')
       el.appendChild(close)
 

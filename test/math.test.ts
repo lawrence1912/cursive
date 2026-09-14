@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { extractFence, renderMath } from '../src/renderer/editor/live-preview/widgets'
+import { extractFence } from '../src/renderer/editor/live-preview/code'
+import { renderMath } from '../src/renderer/editor/live-preview/widgets'
 
 describe('KaTeX 渲染', () => {
   it('正常公式输出 .katex HTML', () => {

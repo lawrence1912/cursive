@@ -96,6 +96,31 @@ describe('cursive 的 markdown 方言', () => {
     expect(nodes('引用 [^1] 无定义\n')).not.toContain('FootnoteDefinition')
   })
 
+  it('P1-6 告示块：`> [!danger]` 归 CalloutMark，不再被 Link 认领', () => {
+    // 修好之前：[!danger] 是合法的 shortcut 链接引用形状，整行渲染成一个坏链接
+    const cal = nodes('> [!danger] 小心\n> 正文\n')
+    expect(cal).toContain('CalloutMark')
+    expect(cal).toContain('Blockquote')
+    expect(cal).not.toContain('Link')
+    // 折叠标记连在节点里（`-` 默认折、`+` 默认展开）
+    expect(nodes('> [!note]-\n> 内容\n')).toContain('CalloutMark')
+  })
+
+  it('P1-6 反例：未知类型不成卡片，但也不再假装成链接', () => {
+    // 类型表里没有 xyz → 不触发告示块（那是装饰层的事），但 `[` 照样被抢下来：
+    // 打错一个类型名就掉回「蓝色带下划线的坏链接」，正是这一项要消灭的东西
+    const unknown = nodes('> [!xyz] 随便写\n')
+    expect(unknown).toContain('CalloutMark')
+    expect(unknown).toContain('Blockquote')
+    expect(unknown).not.toContain('Link')
+    // 只认段落的第一个字符
+    expect(nodes('这段 [!note] 不是告示块\n')).not.toContain('CalloutMark')
+    // 脚注的 [^1] 不受影响（两个解析器都抢在 Link 前面，互不相扰）
+    expect(nodes('> 文[^1]字\n')).toContain('FootnoteRef')
+    // 真链接照旧
+    expect(nodes('> [文字](https://a.b) 在引用里\n')).toContain('Link')
+  })
+
   it('CommonMark 基本结构正常', () => {
     const n = nodes('# 标题\n\n> 引用\n\n- 项\n\n```ts\nconst a = 1\n```\n\n---\n')
     for (const name of ['ATXHeading1', 'Blockquote', 'BulletList', 'FencedCode', 'HorizontalRule'])

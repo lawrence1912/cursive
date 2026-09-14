@@ -43,19 +43,141 @@ body.cursive-em-italic .cm-md-em {
   color: var(--muted);
 }
 
+/* ---------- 告示块 Callout（P1-6） ----------
+   和代码块同一套「逐行铺底 + 首尾收圆角」的行级做法：整块换成一个 widget 的话，
+   告示块里就没法打字了（理由同下面代码块那段）。
+   底色不单独开 token —— 由类型主色 color-mix 兑出来，浅色暗色各自成立。
+   .cm-lp-callout-<tone> 必须排在 .cm-lp-callout 后面：两者同特异度、挂在同一个
+   行元素上，谁写在后面谁定 --cal。 */
+.cm-lp-callout {
+  --cal: var(--cal-note);
+  background: color-mix(in srgb, var(--cal) 8%, transparent);
+  border-left: 3px solid var(--cal);
+  padding-left: 0.85em;
+  padding-right: 0.85em;
+}
+.cm-lp-callout-tip { --cal: var(--cal-tip); }
+.cm-lp-callout-warn { --cal: var(--cal-warn); }
+.cm-lp-callout-danger { --cal: var(--cal-danger); }
+.cm-lp-callout-example { --cal: var(--cal-example); }
+.cm-lp-callout-quote { --cal: var(--cal-quote); }
+
+/* 首行就是标题行。光标进来回显 `[!danger]` 源码时这身打扮不变 —— 卡片不该跳动 */
+.cm-lp-callout-head {
+  padding-top: 0.45em;
+  border-radius: 0 7px 0 0;
+  font-weight: 600;
+  color: var(--cal);
+}
+.cm-lp-callout-close {
+  padding-bottom: 0.5em;
+  border-radius: 0 0 7px 0;
+}
+/* 单行告示块 / 折起来的告示块：首行同时是尾行 */
+.cm-lp-callout-head.cm-lp-callout-close {
+  border-radius: 0 7px 7px 0;
+}
+
+/* CalloutHeadWidget：替换掉 `[!danger]` 那段源码，给出图标（+ 没写标题时的类型名） */
+.cm-lp-callout-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32em;
+  margin-right: 0.4em;
+  vertical-align: -0.16em;
+}
+.cm-lp-callout-icon {
+  display: inline-flex;
+  color: var(--cal);
+}
+.cm-lp-callout-icon .ic,
+.cm-lp-callout-fold .ic,
+.cm-lp-callout-more .ic {
+  width: 1.05em;
+  height: 1.05em;
+}
+/* 折叠三角只有写了 `[!note]-` / `[!note]+` 时才出现（同 Obsidian） */
+.cm-lp-callout-fold {
+  display: inline-flex;
+  padding: 0;
+  color: var(--mark-idle);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.cm-lp-callout-fold:hover {
+  color: var(--cal);
+}
+/* 折起来的正文 → 一颗省略号药丸（blockField 出的跨行替换），点一下展开 */
+.cm-lp-callout-more {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5em;
+  padding: 0 0.35em;
+  color: var(--mark-idle);
+  background: color-mix(in srgb, var(--cal) 14%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cm-lp-callout-more:hover {
+  color: var(--cal);
+}
+
 /* ---------- 代码块 ----------
-   逐行铺背景，行与行之间没有间隙，视觉上就连成一整块 */
+   逐行铺背景，行与行之间没有间隙，视觉上就连成一整块；首尾两行另加
+   .cm-lp-code-open / -close（decorate.ts 的 edgeLine），把这一整块收成圆角卡片。
+   为什么不用一个块级 widget 包起来：那样整块就成了替换装饰，代码块里
+   **没法打字**了。行级装饰是唯一能「既是真文本、又像一张卡」的做法 */
 .cm-lp-code {
   background: var(--code-bg);
   font-family: var(--mono);
   font-size: 0.9em;
   line-height: 1.6;
   padding-left: 0.9em;
-  box-shadow: inset 3px 0 0 var(--border);
+  padding-right: 0.9em;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.cm-lp-code-open,
+.cm-lp-code-close {
+  /* 回显态（光标落在围栏行上）的那两条 ```：留着才能改语言，但压到最轻 ——
+     它俩是卡片的上下边，不该跟代码抢注意力 */
+  font-size: 0.72em;
+  color: var(--mark-idle);
+}
+.cm-lp-code-open {
+  padding-top: 0.45em;
+  border-top: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+}
+.cm-lp-code-close {
+  padding-bottom: 0.55em;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+}
+/* 未闭合的围栏：首行同时也是尾行，四角都圆 */
+.cm-lp-code-open.cm-lp-code-close {
+  border-radius: 8px;
+}
+/* 藏起来的围栏行（decorate.ts 的 decorateFence）。
+   开围栏那条整行换成语言条，行高跟着条子走；闭围栏那条**没内容了**，
+   压成几像素高 —— 它就是卡片的下边距。当年「藏掉会剩一个空行」说的就是
+   这一行：解法不是让 ``` 一直露着，而是让这个空行变成边距 */
+.cm-lp-code-open.cm-lp-fence-off {
+  padding-top: 5px;
+  padding-bottom: 2px;
+}
+.cm-lp-code-close.cm-lp-fence-off {
+  /* 一律用 px：em 是拿**本元素**的字号算的，而这里字号正好被压成 0，
+     写 0.5em 等于没有内边距（卡片下沿会直接贴着最后一行代码） */
+  font-size: 0;
+  line-height: 5px;
+  padding-bottom: 7px;
 }
 
 /* ---------- 表格 ----------
-   光标碰到回显管道符源码（.cm-lp-table）；否则 TableWidget 渲染真表格（index.ts tableField） */
+   TableWidget 渲染真表格且**就地可编辑**（live-preview/table.ts）；
+   只有没在编辑、光标又碰到时才回显管道符源码（.cm-lp-table） */
 .cm-lp-table {
   font-family: var(--mono);
   font-size: 0.9em;
@@ -64,6 +186,15 @@ body.cursive-em-italic .cm-md-em {
 
 .cm-lp-tableview {
   margin: 8px 0;
+  /* 工具栏与手柄都相对它定位；不给 overflow，两者才能探出表格边界 */
+  position: relative;
+  /* 表格外壳（边框、行间空隙）不给选：点在这些地方会把原生选区送进 contentDOM，
+     CM 一读就把整块换回源码。真正要选的文字在单元格里，下面单独放开 */
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 溢出滚动单独一层：外壳不裁剪，以后加浮动工具栏才有地方挂 */
+.cm-lp-tablescroll {
   overflow-x: auto;
 }
 .cm-lp-tableview table {
@@ -71,10 +202,26 @@ body.cursive-em-italic .cm-md-em {
   font-size: 0.92em;
   line-height: 1.55;
 }
+/* 每个格子是一座 contenteditable 孤岛（widget 根节点被 CM 写死成 contenteditable=false）。
+   光标和选区归浏览器画 —— 编辑器此时是失焦的，drawSelection 不会再出一个假光标 */
 .cm-lp-tableview th,
 .cm-lp-tableview td {
   border: 1px solid var(--border);
   padding: 5px 12px;
+  -webkit-user-select: text;
+  user-select: text;
+  caret-color: var(--fg);
+  outline: none;
+}
+.cm-lp-tableview th:focus,
+.cm-lp-tableview td:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* CM 的 hideNativeSelection 把 .cm-content 里聚焦元素的选区底色顶成系统 Highlight
+   （Prec.highest + !important），不覆盖回来会和主题脱节 */
+.cm-lp-tableview th:focus::selection,
+.cm-lp-tableview td:focus::selection {
+  background-color: var(--sel) !important;
 }
 .cm-lp-tableview thead th {
   background: var(--code-bg);
@@ -82,6 +229,123 @@ body.cursive-em-italic .cm-md-em {
 }
 .cm-lp-tableview tbody tr:nth-child(even) {
   background: color-mix(in srgb, var(--code-bg) 45%, transparent);
+}
+
+/* 格内行内语法（P2-6）：样式借正文那几个类（.cm-lp-inline-code / -highlight / -sup /
+   -sub / -link），这里只补裸标签和「格子里不该有手型」这类差异 */
+.cm-lp-tableview del {
+  color: var(--muted);
+}
+.cm-lp-tableview .cm-lp-link {
+  cursor: text; /* 格子是可编辑的，链接不能抢走文本光标；⌘+点击照样打开 */
+}
+.cm-lp-tableview .cm-lp-inline-code {
+  white-space: pre-wrap;
+}
+
+/* ---------- 表格底部浮动工具栏（P2-6） ----------
+   绝对定位挂在表格下沿：出现和消失都不把正文顶动一行 */
+.cm-lp-tbl-bar {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-top: 5px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
+}
+.cm-lp-tbl-bar[hidden] {
+  display: none;
+}
+.cm-lp-tbl-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.cm-lp-tbl-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--accent-wash);
+}
+.cm-lp-tbl-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+.cm-lp-tbl-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+.cm-lp-tbl-btn[data-tool='drop']:hover:not(:disabled) {
+  color: var(--warn);
+}
+.cm-lp-tbl-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+/* ---------- 悬停 +/− 手柄（P2-6） ----------
+   整层不吃事件，只有药丸自己吃 —— 否则鼠标扫过表格就点不进格子了 */
+.cm-lp-tbl-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cm-lp-tbl-handles[hidden] {
+  display: none;
+}
+.cm-lp-tbl-handle {
+  position: absolute;
+  display: flex;
+  overflow: hidden;
+  /* 中心压在列/行的边框线上，一半探到表格外面 */
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 1px 5px rgb(0 0 0 / 12%);
+  pointer-events: auto;
+}
+.cm-lp-tbl-handle.is-row {
+  flex-direction: column;
+}
+.cm-lp-tbl-handle button {
+  width: 17px;
+  height: 16px;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.cm-lp-tbl-handle button:hover {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+.cm-lp-tbl-handle button[data-hand$='del']:hover {
+  color: var(--warn);
+}
+.cm-lp-tbl-handle button[hidden] {
+  display: none;
 }
 
 /* ---------- front matter ---------- */
@@ -153,31 +417,58 @@ body.cursive-em-italic .cm-md-em {
 }
 .cm-lp-link:hover { border-bottom-color: var(--accent); }
 
-/* ---------- 代码块右上角语言/复制（P1-4） ---------- */
+/* ---------- 代码块顶部语言条（P1-4 复制 + 语言显示） ----------
+   它**就是开围栏那一行**（``` 被整行换成了这条），所以是真占位的一横条，
+   不是浮在右上角的悬浮件：卡片上沿永远对得齐，也不会盖住第一行代码。
+   左边语言名点开是选择器，右边复制 —— 两件事都在这一行里解决 */
 .cm-lp-codebar {
-  float: right;
-  position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-top: -1.4em;
-  margin-right: 4px;
-  z-index: 1;
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--mark-idle);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cm-lp-codebar button {
+  flex: none;
+  height: 17px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
 }
 .cm-lp-codebar-lang {
-  font-family: var(--mono);
-  font-size: 0.8em;
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  max-width: 60%;
+  padding: 0 2px 0 5px;
+  letter-spacing: 0.02em;
+}
+.cm-lp-codebar-lang > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 图标默认 16px，在 11px 的条子里要跟着缩，否则箭头比语言名还大 */
+.cm-lp-codebar-lang .ic {
+  width: 11px;
+  height: 11px;
+}
+.cm-lp-codebar-lang:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 .cm-lp-codebar-copy {
-  font: inherit;
-  font-size: 0.78em;
-  padding: 1px 8px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
+  padding: 0 6px;
+  border-color: var(--border);
 }
 .cm-lp-codebar-copy:hover {
   color: var(--accent);

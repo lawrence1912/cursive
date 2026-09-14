@@ -1,0 +1,14 @@
+/* 示例皮肤：把这个文件拷到 ~/Library/Application Support/cursive/themes/ 再重开 Cursive，
+   「设置 → 自定义样式」里就会出现「暖橙」。
+   自定义皮肤是**叠在内置主题之后**的一张样式表，想改哪条改哪条 —— 只写一行也成立。
+   可改的 token 见 src/renderer/themes/base.css 顶部那一段。 */
+:root {
+  --accent: #c2410c;
+  --accent-wash: #fdece3;
+  --sel: #fbd9c6;
+}
+:root[data-theme='dark'] {
+  --accent: #fb923c;
+  --accent-wash: #3a2417;
+  --sel: #5a3720;
+}

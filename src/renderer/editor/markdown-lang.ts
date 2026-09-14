@@ -1,6 +1,6 @@
 import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown'
 import { yamlFrontmatter } from '@codemirror/lang-yaml'
-import type { LanguageSupport } from '@codemirror/language'
+import { LanguageDescription, type LanguageSupport } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { tags as t } from '@lezer/highlight'
 import {
@@ -14,6 +14,7 @@ import {
 
 /** @lezer/markdown 未导出 BlockResult，这里按上游定义补一份 */
 type BlockResult = boolean | null
+import { CALLOUT_SHAPE } from './callout'
 import { EMOJI } from './emoji'
 
 /**
@@ -28,9 +29,27 @@ export function cursiveMarkdown(): LanguageSupport {
     content: markdown({
       base: commonmarkLanguage,
       extensions: [...GFM, math, extras],
-      codeLanguages: languages
+      codeLanguages: resolveCodeLang
     })
   })
+}
+
+/**
+ * 围栏上的语言名 → 解析器。**上色用的这一次解析，和代码块条子上显示的名字
+ * 必须是同一次**（`live-preview/code.ts` 的 langLabel 也调它）——
+ * 两边各判各的，迟早会出现「条子写着 Python、整块却是纯文本色」。
+ *
+ * 在 language-data 自带的 `matchLanguageName` 之上补一条**后缀兜底**：
+ * `py` / `yml` / `rs` / `kt` 这些最常写的简称在 language-data 里只登记成
+ * 扩展名、没进 alias，名字匹配一概认不出来 —— ```py 因此整块没有颜色。
+ */
+export function resolveCodeLang(info: string): LanguageDescription | null {
+  const name = info.trim().toLowerCase()
+  if (!name) return null
+  return (
+    LanguageDescription.matchLanguageName(languages, name, true) ??
+    LanguageDescription.matchFilename(languages, `x.${name}`)
+  )
 }
 
 // ---------- 数学公式（P1-1）----------
@@ -153,6 +172,7 @@ const EQUALS = 61
 const CARET = 94
 const TILDE = 126
 const COLON = 58
+const BANG = 33
 const LBRACKET = 91
 const CARET2 = 94
 const RBRACKET = 93
@@ -271,6 +291,24 @@ function parseFootnoteDef(cx: BlockContext, line: Line): BlockResult {
   return true
 }
 
+/**
+ * `[!danger]` 告示块标记（P1-6）。和脚注同一个坑，而且更凶：`[!danger]` 正好是
+ * 合法的 shortcut 链接引用形状，不抢在 Link 前面，整行会被渲染成一个
+ * 蓝色带下划线的坏链接 —— 比裸源码更让人困惑。
+ *
+ * 唯一的闸门是「段落的第一个字符」（`pos === cx.offset`）—— 类型认不认识不在这里判：
+ * 打错一个字母就掉回坏链接是最糟的失败方式，不如一律认领成 CalloutMark，
+ * 由装饰层决定是渲染成卡片（类型在表里）还是原样显示（不在表里，仍是普通引用）。
+ * 「必须在引用块里」那一半也归装饰层 —— 行内解析器看不到块上下文
+ * （decorate.ts 的 CalloutMark 分支要求父节点链上有 Blockquote）。
+ */
+function parseCalloutMark(cx: InlineContext, next: number, pos: number): number {
+  if (next !== LBRACKET || cx.char(pos + 1) !== BANG || pos !== cx.offset) return -1
+  const m = CALLOUT_SHAPE.exec(cx.slice(pos, Math.min(cx.end, pos + 32)))
+  if (!m) return -1
+  return cx.addElement(cx.elt('CalloutMark', pos, pos + m[0].length))
+}
+
 const extras: MarkdownConfig = {
   defineNodes: [
     { name: 'Highlight', style: t.emphasis },
@@ -282,14 +320,16 @@ const extras: MarkdownConfig = {
     { name: 'Emoji', style: t.content },
     { name: 'FootnoteRef', style: t.link },
     { name: 'FootnoteDefinition', block: true },
-    { name: 'TocBlock', block: true }
+    { name: 'TocBlock', block: true },
+    { name: 'CalloutMark', style: t.processingInstruction }
   ],
   parseInline: [
     makePairedParser('Superscript', 'Superscript', 'SuperscriptMark', CARET),
     makePairedParser('Subscript', 'Subscript', 'SubscriptMark', TILDE),
     { name: 'Highlight', parse: parseHighlight },
     { name: 'Emoji', parse: parseEmoji },
-    { name: 'FootnoteRefParser', before: 'Link', parse: parseFootnoteRef }
+    { name: 'FootnoteRefParser', before: 'Link', parse: parseFootnoteRef },
+    { name: 'CalloutMarkParser', before: 'Link', parse: parseCalloutMark }
   ],
   parseBlock: [
     {

@@ -1,0 +1,85 @@
+<pre class="frontmatter">---
+title: 导出语料
+tags: [export, 测试]
+---</pre>
+<h1 id="导出语料">导出语料</h1>
+<p>这一段带 <strong>粗体</strong>、<em>斜体</em>、<del>删除线</del>、<code>行内代码</code>、<mark>高亮</mark>、上标 x<sup>2</sup>、下标 H<sub>2</sub>O、
+emoji <span class="emoji">😄</span>、转义 *不是斜体*、链接 <a href="https://codemirror.net" title="官网">CodeMirror</a>、
+自动链接 <a href="https://example.com">https://example.com</a> 和脚注引用<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">1</a></sup>。</p>
+<nav class="toc">
+<div class="toc-title">目录</div>
+<ul>
+<li style="padding-left:6px"><a href="#导出语料">导出语料</a></li>
+<li style="padding-left:20px"><a href="#列表">列表</a></li>
+<li style="padding-left:20px"><a href="#引用与告示块">引用与告示块</a></li>
+<li style="padding-left:20px"><a href="#带-粗体-的-setext-标题">带 粗体 的 setext 标题</a></li>
+<li style="padding-left:20px"><a href="#代码">代码</a></li>
+<li style="padding-left:20px"><a href="#表格">表格</a></li>
+<li style="padding-left:20px"><a href="#数学">数学</a></li>
+<li style="padding-left:20px"><a href="#图片与引用式链接">图片与引用式链接</a></li>
+</ul>
+</nav>
+<h2 id="列表">列表</h2>
+<ul>
+<li>无序项一</li>
+<li>无序项二<ul>
+<li>嵌套项</li>
+</ul>
+</li>
+<li class="task"><input type="checkbox" disabled> 待办未完成</li>
+<li class="task"><input type="checkbox" disabled checked> 待办已完成</li>
+</ul>
+<ol>
+<li>有序项一</li>
+<li>有序项二</li>
+</ol>
+<h2 id="引用与告示块">引用与告示块</h2>
+<blockquote>
+<p>普通引用第一行
+ 第二行</p>
+</blockquote>
+<div class="callout callout-warn">
+<div class="callout-head"><svg class="ic" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 2.6 14.6 13.4H1.4z"/><path d="M8 6.6v3"/><circle cx="8" cy="11.6" r="0.7" fill="currentColor" stroke="none"/></svg><span>小心</span></div>
+<div class="callout-body">
+<p>告示块的正文。</p>
+<p>第二段也算同一张卡。</p>
+</div>
+</div>
+<div class="callout callout-note">
+<div class="callout-head"><svg class="ic" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.5v3.6"/><circle cx="8" cy="5.1" r="0.75" fill="currentColor" stroke="none"/></svg><span>笔记</span></div>
+<div class="callout-body">
+<p>不写标题就补类型名。</p>
+</div>
+</div>
+<hr>
+<h2 id="带-粗体-的-setext-标题">带 <strong>粗体</strong> 的 setext 标题</h2>
+<h2 id="代码">代码</h2>
+<figure class="code"><figcaption>TypeScript</figcaption><pre><code><span class="tok-keyword">const</span> <span class="tok-variableName tok-definition">greet</span> <span class="tok-operator">=</span> <span class="tok-punctuation">(</span><span class="tok-variableName tok-definition">name</span><span class="tok-punctuation">:</span> <span class="tok-typeName">string</span><span class="tok-punctuation">)</span><span class="tok-punctuation">:</span> <span class="tok-typeName">string</span> <span class="tok-punctuation">=&gt;</span> <span class="tok-string2">`你好，</span><span class="tok-punctuation">${</span><span class="tok-variableName">name</span><span class="tok-punctuation">}</span><span class="tok-string2">`</span></code></pre></figure>
+<figure class="code"><pre><code>缩进代码块
+第二行</code></pre></figure>
+<figure class="mermaid" id="cursive-mmd-0"><pre class="mermaid-src" data-mmd="cursive-mmd-0">flowchart TD
+    A --&gt; B</pre></figure>
+<h2 id="表格">表格</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>左对齐</th><th style="text-align:center">居中</th><th style="text-align:right">右对齐</th></tr></thead>
+<tbody>
+<tr><td>a</td><td style="text-align:center">b</td><td style="text-align:right">c</td></tr>
+<tr><td><strong>粗</strong></td><td style="text-align:center"><code>码</code></td><td style="text-align:right"><a href="x">l</a></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="数学">数学</h2>
+<p>行内公式 <span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span>，以及块级：</p>
+<div class="math-block"><span class="katex"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mo>∫</mo><mrow><mo>−</mo><mi mathvariant="normal">∞</mi></mrow><mi mathvariant="normal">∞</mi></msubsup><msup><mi>e</mi><mrow><mo>−</mo><msup><mi>x</mi><mn>2</mn></msup></mrow></msup><mtext> </mtext><mi>d</mi><mi>x</mi><mo>=</mo><msqrt><mi>π</mi></msqrt></mrow><annotation encoding="application/x-tex">
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+</annotation></semantics></math></span></div>
+<h2 id="图片与引用式链接">图片与引用式链接</h2>
+<p><img src="assets/placeholder.png" data-abs="/docs/assets/placeholder.png" alt="占位图"></p>
+<p>引用式链接 <a href="https://example.com">文字</a>。</p>
+<pre class="raw-html">&lt;div class=&quot;raw&quot;&gt;裸 HTML 原样显示&lt;/div&gt;</pre>
+<div class="footnotes">
+<ol>
+<li id="fn-1"><span class="footnote-label">1</span> 脚注定义里也能写 **粗体**。 <a class="footnote-back" href="#fnref-1">&#8617;</a></li>
+</ol>
+</div>

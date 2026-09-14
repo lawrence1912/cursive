@@ -6,7 +6,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: safe-file:; script-src 'self'"
     />
-    <title>cursive</title>
+    <title>Cursive</title>
   </head>
   <body>
     <div id="drag-strip"></div>
@@ -18,9 +18,11 @@
       </div>
     </div>
     <footer id="status-bar">
-      <span id="status-file">未命名</span>
+      <!-- status-file 的内容由 main.ts 启动时填（跟随界面语言），这里留空防错语闪帧 -->
+      <span id="status-file"></span>
       <span class="spacer"></span>
-      <span id="status-count"></span>
+      <span id="status-pos"></span>
+      <span id="status-count" role="button" tabindex="0" data-i18n-title="status.detailTitle"></span>
       <span id="status-match"></span>
       <span id="status-saved"></span>
       <span id="status-mode"></span>

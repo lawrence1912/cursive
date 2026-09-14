@@ -1,15 +1,17 @@
-import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
-import { Facet, type Range, type Text } from '@codemirror/state'
+import { Facet, type EditorState, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
+import { calloutFolded, matchCallout, type CalloutMatch } from '../callout'
 import { EMOJI } from '../emoji'
+import { parsedTree } from '../syntax'
+import { CodeHeadWidget, fenceParts } from './code'
 import { Reveal, revealScope } from './reveal'
+import { tableEditAt } from './table'
 import {
   BulletWidget,
+  CalloutHeadWidget,
   CheckboxWidget,
-  CodeBarWidget,
   EmojiWidget,
-  extractFence,
   FootnoteRefWidget,
   ImageWidget,
   MathWidget,
@@ -42,9 +44,13 @@ function markDeco(cls: string): Decoration {
 
 interface Ctx {
   out: Range<Decoration>[]
+  /** 告示块的折叠态存在 state 上（不写回文档），行样式要跟着变 */
+  state: EditorState
   doc: Text
   reveal: Reveal
   dir: string | null
+  /** 正在就地编辑的表格块起点：它不回落源码，也就不该铺回显用的行样式 */
+  editAt: number | null
   /** 当前可视区间，行级装饰只在这个范围内铺，避免为屏幕外的长代码块白干 */
   visFrom: number
   visTo: number
@@ -54,9 +60,11 @@ export function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view
   const ctx: Ctx = {
     out: [],
+    state,
     doc: state.doc,
     reveal: new Reveal(state, state.facet(revealScope)),
     dir: state.facet(docDir),
+    editAt: tableEditAt(state),
     visFrom: 0,
     visTo: 0
   }
@@ -65,8 +73,7 @@ export function buildDecorations(view: EditorView): DecorationSet {
   // 这里把可视范围强制同步解析到位（有界：不超视口 + 1KB 余量）。
   const ranges = view.visibleRanges
   const visEnd = ranges.length ? ranges[ranges.length - 1].to : state.doc.length
-  const tree =
-    ensureSyntaxTree(state, Math.min(visEnd + 1000, state.doc.length)) ?? syntaxTree(state)
+  const tree = parsedTree(state, Math.min(visEnd + 1000, state.doc.length))
 
   for (const { from, to } of view.visibleRanges) {
     ctx.visFrom = from
@@ -97,27 +104,32 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       addLines(ctx, node.from, node.to, `cm-lp-h${node.name.slice(-1)}`)
       return
 
-    case 'Blockquote':
-      addLines(ctx, node.from, node.to, 'cm-lp-quote')
+    case 'Blockquote': {
+      // 告示块本质还是引用块（P1-6 刻意不新增块级节点），两者在这里分道扬镳
+      const cal = calloutAt(doc, node.node)
+      if (!cal) {
+        addLines(ctx, node.from, node.to, 'cm-lp-quote')
+        return
+      }
+      addLines(ctx, node.from, node.to, `cm-lp-callout cm-lp-callout-${cal.tone}`)
+      edgeLine(ctx, node.from, 'cm-lp-callout-head')
+      // 折起来时正文那几行被 blockField 整段替换掉，卡片的下沿就落回首行
+      const folded = cal.foldable && calloutFolded(ctx.state, node.from, cal.folded)
+      edgeLine(ctx, folded ? node.from : doc.lineAt(node.to).from, 'cm-lp-callout-close')
       return
+    }
 
     case 'FencedCode': {
       addLines(ctx, node.from, node.to, 'cm-lp-code')
-      // P1-4：右上角语言标签 + 复制按钮（挂首行，float 到右上）
-      if (!revealed) {
-        const fence = extractFence(doc.sliceString(node.from, node.to))
-        if (fence?.lang)
-          out.push(
-            Decoration.widget({ widget: new CodeBarWidget(fence.lang, fence.src) }).range(node.from)
-          )
-      }
+      decorateFence(ctx, node.node)
       return false
     }
 
     case 'Table': {
       // 真表格渲染在 index.ts 的 blockField（块级装饰必须走 StateField）。
-      // 这里只负责「光标碰到 → 回显管道符源码」的行样式。
-      if (revealed) addLines(ctx, node.from, node.to, 'cm-lp-table')
+      // 这里只负责「光标碰到 → 回显管道符源码」的行样式；就地编辑中的那张表
+      // 压根不回落，行样式也就不能铺（否则一层源码样式叠在 widget 底下）。
+      if (revealed && node.from !== ctx.editAt) addLines(ctx, node.from, node.to, 'cm-lp-table')
       return false
     }
 
@@ -152,7 +164,8 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       return
 
     case 'CodeMark':
-      // 只藏行内代码的反引号；围栏 ``` 保留可见（藏了会剩个空行更难看）
+      // 只藏行内代码的反引号。围栏那两条 ``` 归 decorateFence 管 ——
+      // 整行换成语言条 / 压成卡片下边距，不是简单藏掉留个空行
       if (!revealed && node.node.parent?.name === 'InlineCode') {
         pushHide(ctx, node.from, node.to)
       }
@@ -169,6 +182,27 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       // `\,` → 藏掉反斜杠，只显示被转义的字符
       if (!revealed) pushHide(ctx, node.from, node.from + 1)
       return
+
+    case 'CalloutMark': {
+      // 解析器只保证「段落第一个字符 + 类型表里有」，「必须在引用块里」这一半在这
+      if (revealed || node.node.parent?.parent?.name !== 'Blockquote') return
+      const cal = matchCallout(doc.sliceString(node.from, node.to))
+      if (!cal) return
+      const end = skipSpaces(doc, node.to)
+      const quoteFrom = node.node.parent.parent.from
+      out.push(
+        Decoration.replace({
+          widget: new CalloutHeadWidget(
+            cal.icon,
+            // 行里还有别的字 = 用户写了自定义标题，就别再补类型名
+            end < doc.lineAt(node.from).to ? '' : cal.label,
+            cal.foldable,
+            cal.foldable && calloutFolded(ctx.state, quoteFrom, cal.folded)
+          )
+        }).range(node.from, end)
+      )
+      return false
+    }
 
     case 'Highlight':
       out.push(markDeco('cm-lp-highlight').range(node.from, node.to))
@@ -280,6 +314,60 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
 
 // ---------- 工具 ----------
 
+/**
+ * 告示块判定：引用块的第一个内容子节点就是 CalloutMark。
+ * 嵌套的 `> > [!note]` 只有里层那个引用块算告示块，外层照旧是普通引用 —— 不递归。
+ */
+export function calloutAt(doc: Text, quote: SyntaxNode): CalloutMatch | null {
+  for (let c = quote.firstChild; c; c = c.nextSibling) {
+    if (c.name === 'QuoteMark') continue
+    if (c.name !== 'Paragraph' || c.firstChild?.name !== 'CalloutMark') return null
+    return matchCallout(doc.sliceString(c.firstChild.from, c.firstChild.to))
+  }
+  return null
+}
+
+/**
+ * 围栏代码块的两条 ``` 行。
+ *
+ * **每条围栏行各算各的回显**，不是整块 reveal：光标在代码体里敲字时围栏保持藏着
+ * （卡片不会一边打字一边抽动），只有光标真落在围栏那一行才回显源码去改语言。
+ * 顺带的好处是写代码时顶部那条语言/复制一直够得着 —— 老版本整块 revealed
+ * 就把复制按钮收走了，恰恰是最想复制的时候。
+ *
+ * 首尾两行各加 `.cm-lp-code-open` / `-close`，CSS 才能把逐行背景收成一张圆角卡片；
+ * 藏起来的那条再加 `.cm-lp-fence-off` —— 源码没了，行高得跟着塌下去，
+ * 否则卡片上下各留一条空条（这正是当初「藏了会剩个空行更难看」的那个坑，
+ * 解法是让空行变成卡片的内边距，而不是让围栏一直露着）。
+ */
+function decorateFence(ctx: Ctx, node: SyntaxNode): void {
+  const { doc, out, reveal } = ctx
+  const fence = fenceParts(doc, node)
+  const openLine = doc.lineAt(node.from)
+  const closeLine = fence?.closeFrom == null ? null : doc.lineAt(fence.closeFrom)
+
+  // 只开了个头的裸 ```（没语言、没内容、也没闭合）不藏：这一行凭空消失更吓人
+  const worth =
+    !!fence && (fence.lang !== '' || fence.body.trim() !== '' || fence.closeFrom !== null)
+  const hideOpen = worth && !reveal.touches(openLine.from, openLine.to)
+  const hideClose = !!closeLine && !reveal.touches(closeLine.from, closeLine.to)
+
+  edgeLine(ctx, openLine.from, hideOpen ? 'cm-lp-code-open cm-lp-fence-off' : 'cm-lp-code-open')
+  const bottom = closeLine ?? doc.lineAt(node.to)
+  edgeLine(ctx, bottom.from, hideClose ? 'cm-lp-code-close cm-lp-fence-off' : 'cm-lp-code-close')
+
+  if (!fence) return
+  if (hideOpen)
+    out.push(
+      Decoration.replace({
+        // 语言之后剩下的参数（```js title=a.js 的后半截）只进 tooltip，不上屏
+        widget: new CodeHeadWidget(fence.lang, doc.sliceString(fence.langTo, fence.openTo))
+      }).range(fence.openFrom, fence.openTo)
+    )
+  if (hideClose && fence.closeFrom !== null && fence.closeTo !== null)
+    pushHide(ctx, fence.closeFrom, fence.closeTo)
+}
+
 function addLines(ctx: Ctx, from: number, to: number, cls: string): void {
   const start = Math.max(from, ctx.visFrom)
   const end = Math.min(to, ctx.visTo)
@@ -292,6 +380,13 @@ function addLines(ctx: Ctx, from: number, to: number, cls: string): void {
     if (line.to >= ctx.doc.length) break
     pos = line.to + 1
   }
+}
+
+/** 给块首/块尾那一行单独补一个类；不在视口里就跳过（和 addLines 同一套裁剪口径） */
+function edgeLine(ctx: Ctx, pos: number, cls: string): void {
+  const line = ctx.doc.lineAt(pos)
+  if (line.from < ctx.visFrom || line.from > ctx.visTo) return
+  ctx.out.push(lineDeco(cls).range(line.from))
 }
 
 function skipSpaces(doc: Text, pos: number): number {

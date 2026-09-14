@@ -1,4 +1,6 @@
-# cursive
+<img src="brand/logo-mark.svg" alt="cursive" width="132" align="right">
+
+# Cursive
 
 macOS 上的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
 标记默认隐藏，光标移进哪一行，哪一行才回显源码。
@@ -15,38 +17,54 @@ macOS 上的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
 | 打开/保存/另存、脏标记、关闭拦截、原生菜单、查找 | ✅ |
 | 多标签（每标签独立 EditorState） | ✅ |
 | 文件树 · 大纲（滚动跟随） | ✅ |
-| GFM 表格真渲染 + 点单元格进源码改字 | ✅ 浮动工具栏待补 |
+| 文件树工具栏：新建文件/文件夹 · 搜索 · 打开文件夹 | ✅ |
+| 文件树读写：新建 · 重命名 · 拖拽移动 · 删除（进废纸篓）· 在 Finder 中显示 | ✅ |
+| GFM 表格真渲染 + **就地编辑**（点进格子直接改，不回落源码）<br>底部浮动工具栏（增删行列/整列对齐/整理对齐）· 悬停 +/− 手柄 · 格内行内语法 | ✅ |
 | 自动保存 + 崩溃恢复 · 外部变更监听 | ✅ |
 | 最近文件 · Finder 双击 · Dock 菜单 | ✅ |
-| 导出 PDF | ✅ 单页长条，未分页 |
-| 主题切换（浅/深/系统）· 排版偏好（字号/行距/栏宽/衬线） | ✅ |
+| 导出 PDF（真分页 · A4/Letter · 页边距 · 页码） | ✅ |
+| 主题切换（浅/深/系统/护眼）+ 自定义皮肤 CSS · 排版偏好（字号/行距/栏宽/衬线） | ✅ |
+| 界面语言切换（中文 ⇄ English）· 原生菜单与对话框全量跟随 | ✅ |
 | KaTeX 数学公式（行内/块级）· mermaid 图表 | ✅ |
 | 脚注 · `==高亮==` · 上下标 · emoji · `[TOC]` | ✅ |
-| 代码块语言标签+复制 · 图片放大预览/尺寸语法 | ✅ |
+| 告示块 `> [!note]` / `> [!danger]`（Obsidian 别名 + GitHub 大写写法，可折叠） | ✅ |
+| 代码块：藏 ``` + 顶部语言条（语言选择器 / 复制）· 图片放大预览/尺寸语法 | ✅ |
 | 格式化命令 +「格式」菜单（⌘B/⌘I/⌘1-6…） | ✅ |
+| 格式化命令：底部悬浮格式栏 + 原生「格式」菜单 + 快捷键（⌘B/⌘1-6…） | ✅ |
 | Markdown 输入规则（表格/代码块骨架）· 列表智能（Tab 升降级/重编号） | ✅ |
 | 智能粘贴（HTML→MD · URL 包链接 · ⇧⌥⌘V 纯文本） | ✅ |
-| 查找替换中文化 · ⌘G/⇧⌘G · 匹配计数 | ✅ |
+| 查找替换：右上角浮层面板 · 面板内计数 · ⌘G/⇧⌘G · ⌥⌘R 摊开替换 | ✅ |
 | 截图粘贴 + 拖拽图片自动落盘 `assets/` · 拖 .md 开新标签 | ✅ |
-| 跨文件全局搜索 · 专注/打字机模式 | ⬜ |
-| 导出 HTML / pandoc | ⬜ |
+| 专注模式（压暗非当前段落）· 打字机模式（光标行定高） | ✅ |
+| 大纲：折叠 · 层级档位 · 过滤框 · 每节字数 · 拖拽重排 · 右键菜单 | ✅ |
+| 状态栏：光标行列 · 选区字数 · 阅读时间 · 点字数条弹详细统计 | ✅ |
+| 跨文件全局搜索（壳侧流式、可取消；结果按文件分组，点击跳转并选中那一处） | ✅ |
+| 多窗口（⌘⇧N，每个窗口独立文档、标签与文件树） | ✅ |
+| 导出 HTML（单文件：样式内联 · 图片可嵌 base64 · mermaid 烘成静态 SVG · 公式走 MathML） | ✅ |
+| 导出 docx / epub（pandoc 桥接） | ⬜ |
 
 **当前已渲染**：标题、粗体/斜体/删除线、行内代码、链接、图片、引用、分隔线、
 无序/有序列表、任务复选框（可点击）、代码块（嵌套语言高亮）、YAML front matter、
 GFM 表格、KaTeX 数学公式（`$…$` / `$$…$$`，货币符号不吃，错误红色源码）、
-mermaid 图表（随主题配色，语法错误保留源码+报错）。
+mermaid 图表（随主题配色，语法错误保留源码+报错）、
+告示块（13 种类型 6 档配色，图标 + 中文类型名，`[!note]-` 可折叠）。
 
 ## 快捷键
 
 | | |
 |---|---|
-| ⌘O / ⌘⇧O | 打开文件 / 打开文件夹 |
+| ⌘O / ⌘⇧O | 打开文件 / 打开文件夹（**开新窗口**：一个窗口 = 一个工作区） |
 | ⌘S / ⌘⇧S | 保存 / 另存为 |
-| ⌘P | 导出 PDF |
+| ⇧⌘E / ⌘P | 导出 HTML / 导出 PDF |
 | ⌘, | 设置（主题 / 排版） |
 | ⌘\ / ⌘⇧T | 显示/隐藏文件树 / 大纲 |
+| ⌘⇧F | 在文件夹中查找（跨文件搜索） |
+| ⌘⇧N | 新建窗口 |
+| ⌃⌘D | 切换深色 |
 | ⌘/ | 源代码模式 |
-| ⌘F | 查找 |
+| ⌥⌘F / ⌥⌘T | 专注模式 / 打字机模式 |
+| ⌃⌘F | 全屏 |
+| ⌘F / ⌥⌘R | 查找 / 查找并替换 |
 | ⌘B / ⌘I / ⌘U | 粗体 / 斜体 / 下划线 |
 | ⇧⌘X / ⌃⌘C / ⌘K | 删除线 / 行内代码 / 链接 |
 | ⌘1 – ⌘6 / ⌘0 | 标题 1–6 / 正文 |
@@ -54,6 +72,8 @@ mermaid 图表（随主题配色，语法错误保留源码+报错）。
 | ⇧⌘[ / ⇧⌘] / ⇧⌘C | 无序列表 / 有序列表 / 任务项 |
 | ⇧⌥⌘V | 粘贴为纯文本 |
 | ⌘ + 点击链接 | 用浏览器打开 |
+
+标题栏两端还有三处入口：左边一颗开关文件树，右边一块是「深色 / 栏宽 / 大纲」。
 
 命令行：`cursive 文件.md` 打开文件，`cursive 目录/` 在侧边栏打开文件夹。
 
@@ -67,6 +87,7 @@ npm install
 npm run build                     # 构建 renderer 到 out/renderer
 ./shell-swift/build.sh            # 编译原生壳 → shell-swift/cursive-shell
 ./shell-swift/cursive-shell a.md    # 开发运行（资源查找 Bundle → cwd → exe 相对）
+CURSIVE_TIMING=1 ./shell-swift/cursive-shell a.md   # 打印启动各阶段耗时（见 ROADMAP P4-6）
 ```
 
 其他脚本：
@@ -75,7 +96,7 @@ npm run build                     # 构建 renderer 到 out/renderer
 npm run dev        # 浏览器里开发 renderer（HMR，但拿不到 window.api，原生功能不可用）
 npm test           # 往返保真 + 方言 + 表格单测
 npm run typecheck  # 渲染层 + 共享层类型检查
-npm run icon       # 从 build/icon.png 重建 build/icon.icns（想换图标时跑）
+npm run icon       # 从 brand/app-icon.svg 重出 build/icon.png + icon.icns（换图标时跑）
 ```
 
 ## 架构
@@ -138,24 +159,45 @@ LF，BOM 若不剥掉会被当成正文第一个字符。读文件时把这两�
 `markdownLanguage`，因为它自带上下标扩展，会把 `$e^{-x^2}$ ` 里的 `^` 解析成
 Superscript。`scripts/dump-tree.mjs` 可以打印任意文档的节点名，改装饰器前先跑一次。
 
+### 导出 HTML / PDF 是怎么做的
+
+`src/renderer/export/` 把整份文档渲染成语义 HTML（`<h2>` / `<table>` / `<figure>`），
+**和实时预览共用同一棵语法树和同一批解析函数** —— 图片走 `parseImage`、告示块走
+`calloutAt`、表格走 `tableDataAt`、围栏走 `fenceParts`、行内标记走 `INLINE_MARKS`、
+标题锚点走 `headings.ts` 的 `slugs`。编辑器只渲染视口而导出渲染全文，两条路径对同一段
+markdown 必须是同一种理解，所以这里一处小解析器都不另写；`test/export.test.ts` 拿
+`buildBlocks()` 的块级装饰和导出产出逐块对账，外加一份 golden 快照。
+
+产物是**单文件**：样式内联、mermaid 烘成静态 SVG、图片可选嵌成 data: URI
+（勾在保存面板上，读盘在壳侧 —— 图片字节不过 IPC 桥）。三处与编辑器**有意不同**：
+公式走 MathML（KaTeX 的 HTML 输出要额外背 1 MB 字体）、裸 HTML 一律转义（所见即所得，
+顺带没有「导出的文件被文档里的脚本接管」这回事）、告示块的折叠态一律摊开。
+
+**导出 PDF 就是把这份 HTML 打印出来**（`PDFPrinter`，`printOperation(with:)` 真分页）：
+纸张 / 页边距 / 分页归壳侧 `NSPrintInfo` 一处管，CSS 只管排版与断页规则，页码由 PDFKit
+盖在下页边距里。这条路上有四个坑能让结果「时好时坏」——「`op.run()` 会把主线程堵死，
+于是分页永远算不完、PDF 一路涨到 1.8 GB」和「开印前调一次 `knowsPageRange` 就随机印空白页」
+是其中两个，全部记在 `PDFPrinter` 的注释里。
+
 ## 打包成 .app
 
 ```bash
-./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/cursive.app
-CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/cursive-<version>.dmg
+./shell-swift/release.sh              # 标准工作流：测试 + E2E 全绿才打包 dist/Cursive.app
+CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/Cursive-<version>.dmg
 ```
 
-`release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 6 个 E2E 用例
-（图片/表格/全家桶/CRLF/数学/mermaid）+ 崩溃恢复竞态 → `make-app.sh` 组装 bundle。
-产物约 9.5 MB（app，含 KaTeX 与 mermaid）。
+`release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 8 个 E2E 用例
+（图片/表格/全家桶/CRLF/数学/mermaid/方言/告示块）+ 崩溃恢复竞态 → `make-app.sh` 组装 bundle。
+产物约 9.8 MB（app，含 KaTeX 与 mermaid，两者都按需加载）。
 
 `make-app.sh` 把 `out/renderer` 塞进 `Contents/Resources/renderer`，写入 `Info.plist`
 （`.md` 关联 rank=Alternate，不抢默认打开方式），再做 ad-hoc 签名
 （`codesign --force --deep --sign -`）。自用到此为止 —— 本机构建的包没有 quarantine
 属性，Gatekeeper 不拦。要发给别人才需要 Apple Developer 证书 + 公证。
 
-图标母版是 `build/icon.png`（设计源 `scripts/icon.html`），`npm run icon` 用系统
-`sips` + `iconutil` 打出 `build/icon.icns`，不依赖任何图形库。
+图标的矢量源只有 `brand/app-icon.svg` 一份，`npm run icon` 用系统 `sips` + `iconutil`
+打出 `build/icon.png`（1024 母版）和 `build/icon.icns`，**每一档尺寸都从矢量重新栅格**，
+不依赖浏览器或任何图形库。整套品牌资产与用法见 `brand/README.md`。
 
 ## 冒烟 / E2E
 
@@ -168,15 +210,32 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
 ```
 
 `CURSIVE_SMOKE` 之外启动就是正常交互应用，绝不自动退出。可选：
-`CURSIVE_SMOKE_SHOT=<png>` 截图、`CURSIVE_SMOKE_THEME=dark|light|system` 切主题后截图、
-`CURSIVE_SMOKE_PDF=<路径>` 顺带导出 PDF、`CURSIVE_SMOKE_SCRATCH_DELAY=<ms>` 逼出崩溃恢复竞态。
+`CURSIVE_SMOKE_SHOT=<png>` 截图、`CURSIVE_SMOKE_THEME=dark|light|sepia|system` 切主题后截图、
+`CURSIVE_SMOKE_MENU=<菜单动作>` 截图前派一个菜单动作（目检设置面板这类）、
+`CURSIVE_SMOKE_SHOT_SEARCH=1` 截图前把跨文件搜索面板留在开着的状态、
+`CURSIVE_SMOKE_PDF=<路径>` 顺带导出 PDF（结果含页数与页尺寸；纸张与页边距用
+`CURSIVE_SMOKE_PDF_PAPER` / `CURSIVE_SMOKE_PDF_MARGIN` 走查）、`CURSIVE_SMOKE_HTML=<路径>` 顺带导出 HTML
+（绕过保存面板，图片按嵌入处理）、`CURSIVE_SMOKE_SCRATCH_DELAY=<ms>` 逼出崩溃恢复竞态。
+
+> 切主题的截图**别接着上一次不同主题的运行跑**：WKWebView 的 `takeSnapshot` 会把切换前的
+> 合成层原样拍进去（表现为活动标签、大纲当前行还留着上一套配色）。那是截图假象，不是配色
+> bug —— 同一主题连跑第二次就正常了。
 
 细节见 `CONTEXT.md` 的「自检探针 / E2E」一节。
 
 ## 已知限制
 
-- 表格能点进单元格改字，但还没有增删行列的浮动工具栏，排在 P2-6
-- 代码块可复制、图片可放大、格式化快捷键已就位，但表格工具栏 / 输入规则 / 智能粘贴仍在 P2
-- 代码块的 ``` 围栏保留可见（藏掉会剩一个空行，更难看）
-- 导出 PDF 是单页长条，不是真分页
-- 尚无脚注/高亮/上下标/TOC、跨文件搜索、专注/打字机模式、导出 HTML
+- 表格的「整理对齐」是显式命令（工具栏那颗「整理」），不会自动跑 —— 平时改一格只动那一格，源码里的列宽会变参差，这是保存零损耗的代价
+- 表格单元格里粘贴多行文本会被压成一行（格内粘贴退化成原生纯文本，多行由 `escapeCell` 压平）
+- 代码块的语言条只在「光标不在围栏行上」时出现：把光标挪到围栏行会回显 ```` ```ts ```` 源码（要改语言也可以直接在那行改）
+- 导出的 PDF / HTML 只有浅色一套（导出物会进别人的浏览器、会被打印，跟着阅读者的系统外观走
+  等于同一份文档两个样子）；脚注定义里的行内语法不渲染（解析器把定义整块当叶子节点，
+  编辑器里也一样）
+- 告示块的类型表是封闭的：`> [!xyz]` 这种表里没有的类型不成卡片，仍旧是普通引用
+  （只是 `[!xyz]` 以字面量示人，不会再被当成链接）
+- 嵌套的 `> > [!note]` 只有里层那块算告示块，不递归
+- 跨文件搜索只扫 `.md/.markdown/.mdown/.mkd/.txt`，跳过 `node_modules`/`dist`/`out` 这类目录；
+  上限 800 处命中 / 6000 个文件，触顶会在结果区注明「已截断」
+- 自定义皮肤是叠在内置主题之后的一张 CSS，写坏了只能删文件重开（没有出错回滚）
+- 多窗口之间只共享 localStorage 里的偏好；窗口位置只记第一个窗口的
+- 尚无 pandoc 导出（docx / epub），也没有签名公证与自动更新

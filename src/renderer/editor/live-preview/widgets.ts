@@ -2,6 +2,11 @@ import katex from 'katex'
 import { syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
+import { icon, type IconName } from '../../ui/icons'
+import { t } from '../../i18n'
+import { toggleCalloutFold } from '../callout'
+import type { Heading } from '../headings'
 
 /**
  * 每个 widget 都必须实现 eq()：CodeMirror 靠它判断能否复用 DOM。
@@ -54,8 +59,11 @@ export function currentTheme(): ThemeName {
 }
 
 let mermaidPromise: Promise<(typeof import('mermaid'))['default']> | null = null
-/** mermaid 约 1MB，动态 import 让 Vite 切成独立 chunk，打开普通文档不背这个成本 */
-function loadMermaid() {
+/**
+ * mermaid 约 1MB，动态 import 让 Vite 切成独立 chunk，打开普通文档不背这个成本。
+ * 导出（`export/index.ts` 把图烘成静态 SVG）走同一个 promise —— 一份实例，加载一次。
+ */
+export function loadMermaid() {
   mermaidPromise ??= import('mermaid').then((m) => m.default)
   return mermaidPromise
 }
@@ -116,85 +124,11 @@ export class MermaidWidget extends WidgetType {
   }
 }
 
-/**
- * 代码块右上角语言标签 + 复制按钮（P1-4）。挂在代码块首行，float 到右上。
- * 复制的是代码体源码（不含围栏）。
- */
-export class CodeBarWidget extends WidgetType {
-  constructor(
-    readonly lang: string,
-    readonly src: string
-  ) {
-    super()
-  }
-  eq(other: CodeBarWidget): boolean {
-    return other.lang === this.lang && other.src === this.src
-  }
-  override ignoreEvent(): boolean {
-    return false
-  }
-  toDOM(): HTMLElement {
-    const bar = document.createElement('span')
-    bar.className = 'cm-lp-codebar'
-    const lang = document.createElement('span')
-    lang.className = 'cm-lp-codebar-lang'
-    lang.textContent = this.lang || 'code'
-    const copy = document.createElement('button')
-    copy.className = 'cm-lp-codebar-copy'
-    copy.type = 'button'
-    copy.textContent = '复制'
-    copy.title = '复制代码'
-    copy.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      copyText(this.src)
-      copy.textContent = '已复制'
-      setTimeout(() => {
-        copy.textContent = '复制'
-      }, 1200)
-    })
-    bar.append(lang, copy)
-    return bar
-  }
-}
-
-/** 从 FencedCode 的源码文本里拆出语言与代码体（闭围栏存在则去掉） */
-export function extractFence(text: string): { lang: string; src: string } | null {
-  const nl = text.indexOf('\n')
-  if (nl < 0) return null
-  const open = /^(`{3,}|~{3,})[ \t]*(.*)$/.exec(text.slice(0, nl))
-  if (!open) return null
-  const lang = (open[2] ?? '').trim().split(/\s+/)[0] ?? ''
-  const lines = text.slice(nl + 1).split('\n')
-  const last = lines[lines.length - 1]
-  if (last !== undefined && /^\s*(`{3,}|~{3,})\s*$/.test(last)) lines.pop()
-  return { lang, src: lines.join('\n') }
-}
-
 // ---------- 方言补齐（P1-3）：脚注 / emoji / TOC ----------
 
-export interface TocEntry {
-  level: number
-  text: string
-  pos: number
-}
-
-/** 收集全文 ATX 标题（调前需保证语法树已就绪，blockField 已全文 ensure） */
-export function collectHeadings(state: EditorState): TocEntry[] {
-  const out: TocEntry[] = []
-  syntaxTree(state).iterate({
-    enter(n) {
-      const m = /^ATXHeading([1-6])$/.exec(n.name)
-      if (!m) return
-      out.push({
-        level: Number(m[1]),
-        text: state.doc.sliceString(n.from, n.to).replace(/^#+\s*/, ''),
-        pos: n.from
-      })
-    }
-  })
-  return out
-}
+/** 目录条目 = 大纲条目：取数在 `editor/headings.ts`，两处共用同一份（见那里的注释） */
+export type TocEntry = Heading
+export { collectHeadings } from '../headings'
 
 /** 在全文找脚注定义 [^label]: 的位置与内容 */
 export function findFootnoteDef(state: EditorState, label: string): { pos: number; text: string } | null {
@@ -293,7 +227,7 @@ export class TocWidget extends WidgetType {
     nav.className = 'cm-lp-toc'
     const head = document.createElement('div')
     head.className = 'cm-lp-toc-title'
-    head.textContent = '目录'
+    head.textContent = t('w.toc')
     nav.appendChild(head)
     const list = document.createElement('ul')
     nav.appendChild(list)
@@ -483,129 +417,97 @@ export class ImageWidget extends WidgetType {
       } catch {
         /* 保底原样 */
       }
-      wrap.textContent = `${path}\n(${this.alt || '图片加载失败'})`
+      wrap.textContent = `${path}\n(${this.alt || t('w.imgBroken')})`
     })
     wrap.appendChild(img)
     return wrap
   }
 }
 
-// ---------- GFM 表格 ----------
-// 光标碰到时回显管道符源码（decorate.ts 的 .cm-lp-table），
-// 否则整个块替换成真表格。块级装饰必须由 StateField 提供（见 index.ts 的 tableField）。
+// ---------- 告示块 Callout（P1-6） ----------
 
-export interface TableData {
-  aligns: ('left' | 'center' | 'right')[]
-  header: string[]
-  rows: string[][]
-}
-
-/** 单元格里的 `\|` 转义先换成占位符再切列，避免被当成边界 */
-const ESC = '\u0000'
-
-function splitRow(line: string): string[] {
-  const body = line
-    .trim()
-    .replace(/\\\|/g, ESC)
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-  return body.split('|').map((c) => c.trim().split(ESC).join('|'))
+/** 从 widget 所在位置往上找它所属的告示块起点（位置会漂移，点击时现查，同 CheckboxWidget） */
+function toggleCalloutAt(view: EditorView, el: HTMLElement): void {
+  const pos = view.posAtDOM(el)
+  for (let n: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, 1); n; n = n.parent) {
+    if (n.name !== 'Blockquote') continue
+    view.dispatch({ effects: toggleCalloutFold.of(n.from) })
+    return
+  }
 }
 
 /**
- * 行内第 index 格「文字」的区间（相对行首），给「点单元格 → 光标落进对应源码」定位。
- * 切列规则与 splitRow 对齐：先 trim，再吃掉首尾各一根管道符，中间按 | 切。
- * `\|` 先换成两个占位符（同样两个字符，偏移不变），免得被当成列边界。
+ * 告示块首行的图标（+ 没写标题时补的类型名 + 可折叠时的三角）。
+ * 它替换掉 `[!danger]` 那段源码本身 —— 一个替换装饰同时办了「藏起标记」和
+ * 「插入图标」两件事，不用再叠一个 pushHide。
  */
-export function cellSpan(line: string, index: number): { from: number; to: number } | null {
-  const masked = line.replace(/\\\|/g, ESC + ESC)
-  let start = 0
-  let end = masked.length
-  while (start < end && /\s/.test(masked[start]!)) start++
-  while (end > start && /\s/.test(masked[end - 1]!)) end--
-  if (masked[start] === '|') start++
-  if (end > start && masked[end - 1] === '|') end--
-
-  let from = start
-  let seen = 0
-  for (let i = start; i <= end; i++) {
-    if (i < end && masked[i] !== '|') continue
-    if (seen === index) {
-      let f = from
-      let t = i
-      while (f < t && /\s/.test(masked[f]!)) f++
-      while (t > f && /\s/.test(masked[t - 1]!)) t--
-      return { from: f, to: t }
-    }
-    seen++
-    from = i + 1
-  }
-  return null
-}
-
-/** 解析 GFM 管道表格；结构不合法（少于 2 行 / 分隔行不合规）返回 null */
-export function parseTable(text: string): TableData | null {
-  const lines = text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l !== '')
-  if (lines.length < 2) return null
-  const delimCells = splitRow(lines[1])
-  if (delimCells.length === 0 || !delimCells.every((c) => /^:?-+:?$/.test(c))) return null
-  const aligns = delimCells.map((c) => {
-    const left = c.startsWith(':')
-    const right = c.endsWith(':')
-    if (left && right) return 'center' as const
-    if (right) return 'right' as const
-    return 'left' as const
-  })
-  const header = splitRow(lines[0])
-  if (header.length === 0) return null
-  const rows = lines.slice(2).map((l) => splitRow(l))
-  return { aligns, header, rows }
-}
-
-export class TableWidget extends WidgetType {
-  constructor(readonly data: TableData) {
+export class CalloutHeadWidget extends WidgetType {
+  constructor(
+    readonly icon: IconName,
+    /** 空串 = 文档里写了自定义标题，不补类型名 */
+    readonly label: string,
+    readonly foldable: boolean,
+    readonly folded: boolean
+  ) {
     super()
   }
-  eq(other: TableWidget): boolean {
-    return JSON.stringify(other.data) === JSON.stringify(this.data)
+  eq(other: CalloutHeadWidget): boolean {
+    return (
+      other.icon === this.icon &&
+      other.label === this.label &&
+      other.foldable === this.foldable &&
+      other.folded === this.folded
+    )
   }
-  /**
-   * 默认实现返回 true = widget 里发生的事件编辑器一概不管，于是「点进表格改一个字」
-   * 根本做不到（CM 的 eventBelongsToEditor 会直接判定事件不属于编辑器）。
-   * 只放行 mousedown：index.ts 的 editTableOnClick 接住它，把光标送进对应的源码格；
-   * 其余事件继续忽略 —— 放行 DOM 变更/选区同步会让 widget 内容被当成编辑输入写回文档。
-   */
-  override ignoreEvent(event: Event): boolean {
-    return event.type !== 'mousedown'
+  override ignoreEvent(): boolean {
+    return false
   }
-  toDOM(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'cm-lp-tableview'
-    const table = document.createElement('table')
-
-    const thead = table.createTHead()
-    const hr = thead.insertRow()
-    this.data.header.forEach((cell, i) => {
-      const th = document.createElement('th')
-      th.textContent = cell
-      th.style.textAlign = this.data.aligns[i] ?? 'left'
-      hr.appendChild(th)
-    })
-
-    const tbody = table.createTBody()
-    for (const row of this.data.rows) {
-      const tr = tbody.insertRow()
-      this.data.header.forEach((_, i) => {
-        const td = tr.insertCell()
-        td.style.textAlign = this.data.aligns[i] ?? 'left'
-        td.textContent = row[i] ?? ''
-      })
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'cm-lp-callout-mark'
+    const ic = document.createElement('span')
+    ic.className = 'cm-lp-callout-icon'
+    ic.innerHTML = icon(this.icon)
+    el.appendChild(ic)
+    if (this.label) {
+      const name = document.createElement('span')
+      name.className = 'cm-lp-callout-name'
+      name.textContent = this.label
+      el.appendChild(name)
     }
+    if (this.foldable) {
+      const fold = document.createElement('button')
+      fold.type = 'button'
+      fold.className = 'cm-lp-callout-fold'
+      fold.setAttribute('aria-label', this.folded ? t('w.calloutExpand') : t('w.calloutCollapse'))
+      fold.innerHTML = icon(this.folded ? 'chevron' : 'chevron-down')
+      fold.addEventListener('mousedown', (e) => {
+        e.preventDefault() // 不让焦点离开编辑器，否则选区没了
+        toggleCalloutAt(view, fold)
+      })
+      el.appendChild(fold)
+    }
+    return el
+  }
+}
 
-    wrap.appendChild(table)
-    return wrap
+/** 折起来的正文 → 一颗省略号药丸（blockField 出的跨行替换），点一下展开 */
+export class CalloutFoldWidget extends WidgetType {
+  eq(): boolean {
+    return true
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'cm-lp-callout-more'
+    el.setAttribute('aria-label', t('w.calloutExpand'))
+    el.innerHTML = icon('dots')
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      toggleCalloutAt(view, el)
+    })
+    return el
   }
 }

@@ -5,19 +5,16 @@
     <radialGradient id="lkD-sheen" cx=".24" cy=".1" r=".76"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
     <linearGradient id="lkD-edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".6" stop-color="#fff" stop-opacity=".02"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
     <linearGradient id="lkD-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/><stop offset="1" stop-color="#ded7ca"/></linearGradient>
-    <linearGradient id="lkD-mk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7b8391"/><stop offset="1" stop-color="#5a616d"/></linearGradient>
     <linearGradient id="lkD-car" x1=".2" y1="0" x2=".8" y2="1">
       <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
   </defs>
   <g transform="scale(0.125)">
     <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-tile)"/>
     <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-sheen)"/>
-    <rect x="316" y="394" width="58" height="58" rx="20" fill="url(#lkD-mk)"/>
-    <rect x="404" y="394" width="276" height="58" rx="29" fill="url(#lkD-ink)"/>
-    <rect x="316" y="490" width="392" height="58" rx="29" fill="url(#lkD-ink)"/>
-    <rect x="316" y="586" width="272" height="58" rx="29" fill="url(#lkD-ink)"/>
-    <rect x="694" y="380" width="42" height="86" rx="21" fill="url(#lkD-car)"/>
-    <rect x="703" y="391" width="12" height="60" rx="6" fill="#fff" opacity=".5"/>
+    <!-- 图标 = 应用图标的同一版 C：一整笔，缺口正对光标 -->
+    <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="url(#lkD-ink)" stroke-width="106" stroke-linecap="round"/>
+    <rect x="634" y="424" width="52" height="176" rx="26" fill="url(#lkD-car)"/>
+    <rect x="645" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
     <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="url(#lkD-edge)" stroke-width="3"/>
   </g>
   <g transform="translate(160 51.4) scale(0.655)" fill="none" stroke="#f2efe9" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">

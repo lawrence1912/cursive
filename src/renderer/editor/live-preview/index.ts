@@ -1,30 +1,49 @@
-import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
-import { StateEffect, StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
+import { syntaxTree } from '@codemirror/language'
+import {
+  Prec,
+  StateEffect,
+  StateField,
+  type EditorState,
+  type Extension,
+  type Range
+} from '@codemirror/state'
 import {
   Decoration,
   EditorView,
+  keymap,
   ViewPlugin,
   type DecorationSet,
   type ViewUpdate
 } from '@codemirror/view'
-import { buildDecorations } from './decorate'
+import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
+import { parsedTree } from '../syntax'
+import { extractFence } from './code'
+import { buildDecorations, calloutAt } from './decorate'
 import { Reveal, revealScope } from './reveal'
 import {
-  cellSpan,
+  activeCellAt,
+  setTableEdit,
+  tableDataAt,
+  tableEditAt,
+  tableEditField,
+  tableEnterKeymap,
+  tableRendered,
+  TableWidget
+} from './table'
+import {
+  CalloutFoldWidget,
   collectHeadings,
   currentTheme,
   EmojiWidget,
-  extractFence,
   FootnoteDefWidget,
   MathWidget,
   MermaidWidget,
-  parseTable,
-  TableWidget,
   TocWidget
 } from './widgets'
 
 export { docDir } from './decorate'
 export { revealScope, type RevealScope } from './reveal'
+export { setTableEdit } from './table'
 export { currentTheme } from './widgets'
 
 /** 主题切换时发进编辑器：块级 widget（mermaid）跟着重渲染成对应配色 */
@@ -47,7 +66,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         this.wasComposing = true
         return
       }
-      if (this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged) {
+      // 进/出表格编辑态只带一个 effect（不改文档也不改选区），不认它就不会重铺行样式
+      const tableEdit = u.transactions.some((tr) => tr.effects.some((e) => e.is(setTableEdit)))
+      if (this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged || tableEdit) {
         this.wasComposing = false
         this.decorations = buildDecorations(u.view)
       }
@@ -77,48 +98,6 @@ const openLinkOnClick = EditorView.domEventHandlers({
 })
 
 /**
- * 点表格单元格 → 光标落到源码里对应的那一格（选区一动，reveal 判定就把整块换回管道符源码）。
- * 没有这条，表格是块级 replace 装饰 + widget 默认吞事件，点上去毫无反应 —— 表格改不了。
- * 另一半在 widgets.ts：TableWidget.ignoreEvent 放行 mousedown。
- */
-const editTableOnClick = EditorView.domEventHandlers({
-  mousedown(event, view) {
-    const cell = (event.target as HTMLElement | null)?.closest?.('td, th') as HTMLTableCellElement | null
-    if (!cell?.closest('.cm-lp-tableview')) return false
-
-    // widget 子节点的 posAtDOM = 被替换区间的起点，也就是表格块的开头
-    const pos = view.posAtDOM(cell)
-    let tableFrom = -1
-    syntaxTree(view.state).iterate({
-      from: pos,
-      to: pos,
-      enter: (n) => {
-        if (n.name === 'Table') tableFrom = n.from
-      }
-    })
-    if (tableFrom < 0) return false
-
-    const row = cell.parentElement as HTMLTableRowElement
-    // 源码第 1 行是分隔行（|---|---|），DOM 里没有它：表头 → 第 0 行，正文第 n 行 → 第 n+1 行
-    const lineNo =
-      view.state.doc.lineAt(tableFrom).number + (row.rowIndex === 0 ? 0 : row.rowIndex + 1)
-    if (lineNo > view.state.doc.lines) return false
-    const line = view.state.doc.line(lineNo)
-    const span = cellSpan(line.text, cell.cellIndex)
-    // 没法把 x 精确映射到字符，至少方向别拧：点左半格进格首，右半格进格尾
-    const box = cell.getBoundingClientRect()
-    const anchor = span
-      ? line.from + (event.clientX > box.left + box.width / 2 ? span.to : span.from)
-      : line.to
-
-    event.preventDefault()
-    view.dispatch({ selection: { anchor }, scrollIntoView: true })
-    view.focus()
-    return true
-  }
-})
-
-/**
  * 块级 widget（真表格 / 数学块 / mermaid）。
  * 块级（跨行）装饰不允许从 ViewPlugin 提供，必须走 StateField；
  * 光标碰到时由 decorate.ts 回显源码（两个集合不会重叠：同一套 reveal 判定）。
@@ -127,8 +106,13 @@ const editTableOnClick = EditorView.domEventHandlers({
 const blockField = StateField.define<DecorationSet>({
   create: buildBlocks,
   update(value, tr) {
-    const themeChanged = tr.effects.some((e) => e.is(themeEffect))
-    if (!tr.docChanged && !tr.selection && !themeChanged) return value.map(tr.changes)
+    const effect = tr.effects.some(
+      (e) => e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold)
+    )
+    // 后台 parse 推进（空事务）也要认：文档大到一次 ensure 解析不完时，块级装饰
+    // 只在这条路上才等得到剩下的树 —— 否则半截表格就一直半截着
+    const grew = syntaxTree(tr.startState) !== syntaxTree(tr.state)
+    if (!tr.docChanged && !tr.selection && !effect && !grew) return value.map(tr.changes)
     return buildBlocks(tr.state)
   },
   provide: (f) => EditorView.decorations.from(f)
@@ -141,27 +125,50 @@ const blockField = StateField.define<DecorationSet>({
 export function buildBlocks(state: EditorState): DecorationSet {
   const out: Range<Decoration>[] = []
   const reveal = new Reveal(state, state.facet(revealScope))
+  const editAt = tableEditAt(state)
   // 与 buildDecorations 同款坑：CM 的 parse 是异步分块的，而本字段的重建只挂在
   // docChanged/selection/主题效应上 —— 「打开文件 / 外部重载 / 切标签」这类纯换
   // state 的路径，字段初值是在空树上算的，之后没人再推它一把，表格/公式/图就
   // 永远不出现（Context.md 里 ViewPlugin 那条的块级版，tableField 时代就潜伏着）。
-  // 块级装饰本来就是全文范围的，这里只能全文强制同步解析。
-  ensureSyntaxTree(state, state.doc.length)
-  syntaxTree(state).iterate({
+  // 块级装饰本来就是全文范围的，这里只能全文强制同步解析 —— 且**必须用 ensure 的
+  // 返回值**，`syntaxTree(state)` 读的快照这会儿还停在打开文件时那 3000 字上
+  // （见 `editor/syntax.ts`）。
+  parsedTree(state).iterate({
     from: 0,
     to: state.doc.length,
     enter: (node) => {
       switch (node.name) {
         case 'Table': {
-          if (reveal.touches(node.from, node.to)) return false
-          const data = parseTable(state.doc.sliceString(node.from, node.to))
+          // 就地编辑中的那张表不回落源码 —— 光标本来就在它的某一格里，
+          // reveal 判定对它失效（tableEditField 说了算，见 table.ts）
+          const editing = editAt === node.from
+          if (!tableRendered(state, reveal, node.from, node.to)) return false
+          const data = tableDataAt(state, node.from, node.to)
           if (data)
             out.push(
-              Decoration.replace({ widget: new TableWidget(data), block: true }).range(
-                node.from,
-                node.to
-              )
+              Decoration.replace({
+                widget: new TableWidget(
+                  data,
+                  editing,
+                  editing ? activeCellAt(state, node.from, data) : null
+                ),
+                block: true
+              }).range(node.from, node.to)
             )
+          return false
+        }
+        case 'Blockquote': {
+          // 折起来的告示块：正文整段换成一颗省略号药丸。范围从首行末尾起 ——
+          // 连着换行符一起吃掉，下面几行才会并进首行那一行里（CM 自带折叠同款）。
+          // 跨行的替换装饰只能从 StateField 出，所以它在这里而不在 decorate.ts。
+          const cal = calloutAt(state.doc, node.node)
+          if (!cal?.foldable || !calloutFolded(state, node.from, cal.folded)) return
+          if (reveal.touches(node.from, node.to)) return false
+          const head = state.doc.lineAt(node.from)
+          if (head.to >= node.to) return false // 只有一行，没东西可折
+          out.push(
+            Decoration.replace({ widget: new CalloutFoldWidget() }).range(head.to, node.to)
+          )
           return false
         }
         case 'DisplayMath': {
@@ -225,7 +232,15 @@ export function buildBlocks(state: EditorState): DecorationSet {
 }
 
 export function livePreview(): Extension {
-  return [livePreviewPlugin, blockField, openLinkOnClick, editTableOnClick]
+  return [
+    livePreviewPlugin,
+    tableEditField,
+    calloutFoldField,
+    blockField,
+    openLinkOnClick,
+    // 必须压过 defaultKeymap 的光标移动：方向键撞上渲染态表格时要进单元格
+    Prec.high(keymap.of(tableEnterKeymap))
+  ]
 }
 
 /** 源代码模式就是把上面这套整个撤掉 */

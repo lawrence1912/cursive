@@ -1,14 +1,16 @@
 #!/bin/sh
-# 打包 cursive.app（+ 可选 DMG）：原生壳 + out/renderer 全部塞进标准 bundle
+# 打包 Cursive.app（+ 可选 DMG）：原生壳 + out/renderer 全部塞进标准 bundle
 #
 # 用法：
-#   ./shell-swift/make-app.sh            # 产出 dist/cursive.app
-#   CURSIVE_DMG=1 ./shell-swift/make-app.sh  # 额外产出 dist/cursive-<version>.dmg
+#   ./shell-swift/make-app.sh            # 产出 dist/Cursive.app
+#   CURSIVE_DMG=1 ./shell-swift/make-app.sh  # 额外产出 dist/Cursive-<version>.dmg
 set -e
 cd "$(dirname "$0")/.."
 
 VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])" 2>/dev/null || echo "0.1.0")
-APP="dist/cursive.app"
+APP="dist/Cursive.app"
+# 改名前的产物留在 dist 里会变成第二个图标，顺手清掉
+rm -rf dist/cursive.app
 
 echo "==> 构建 renderer"
 npm run build --silent
@@ -18,7 +20,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/renderer"
 
 # 二进制
-swiftc -O -swift-version 5 shell-swift/main.swift -o "$APP/Contents/MacOS/cursive"
+swiftc -O -swift-version 5 shell-swift/main.swift -o "$APP/Contents/MacOS/Cursive"
 
 # renderer 资源（壳经 Bundle.main.resourceURL 找到这里）
 ditto out/renderer "$APP/Contents/Resources/renderer"
@@ -32,9 +34,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key>					<string>cursive</string>
-	<key>CFBundleDisplayName</key>			<string>cursive</string>
-	<key>CFBundleExecutable</key>			<string>cursive</string>
+	<key>CFBundleName</key>					<string>Cursive</string>
+	<key>CFBundleDisplayName</key>			<string>Cursive</string>
+	<key>CFBundleExecutable</key>			<string>Cursive</string>
 	<key>CFBundleIdentifier</key>			<string>dev.lawrence.cursive</string>
 	<key>CFBundleVersion</key>				<string>$VERSION</string>
 	<key>CFBundleShortVersionString</key>	<string>$VERSION</string>
@@ -74,10 +76,10 @@ codesign --force --deep --sign - "$APP"
 codesign --verify --strict "$APP" && echo "    签名校验通过"
 
 if [ "${CURSIVE_DMG:-0}" = "1" ]; then
-    DMG="dist/cursive-$VERSION.dmg"
+    DMG="dist/Cursive-$VERSION.dmg"
     echo "==> 打 DMG $DMG"
     rm -f "$DMG"
-    hdiutil create -volname cursive -srcfolder "$APP" -ov -format UDZO "$DMG" | tail -1
+    hdiutil create -volname Cursive -srcfolder "$APP" -ov -format UDZO "$DMG" | tail -1
 fi
 
 SIZE=$(du -sh "$APP" | cut -f1 | tr -d ' ')

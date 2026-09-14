@@ -2,6 +2,7 @@ import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import { expandOnEnter, expandTableOnEnter } from '../src/renderer/editor/input-rules'
+import { setTableEdit } from '../src/renderer/editor/live-preview/table'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 
 function run(doc: string, caret = doc.length): EditorState | null {
@@ -27,6 +28,15 @@ describe('P2-2 表格骨架', () => {
   it('已是分隔行不再补', () => {
     expect(run('|---|---|')).toBeNull()
     expect(expandTableOnEnter(EditorState.create({ doc: '|---|---|', selection: { anchor: 9 } }))).toBeNull()
+  })
+
+  it('顺手进就地编辑态：新表格直接以渲染态出现', () => {
+    const doc = '前文\n\n| a | b |'
+    const spec = expandTableOnEnter(
+      EditorState.create({ doc, selection: { anchor: doc.length } })
+    )
+    const effects = [spec!.effects].flat()
+    expect(effects.some((e) => e?.is(setTableEdit) && e.value === 4)).toBe(true)
   })
 
   it('非表格文本不触发', () => {
