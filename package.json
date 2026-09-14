@@ -1,7 +1,7 @@
 {
   "name": "cursive",
   "version": "0.1.0",
-  "description": "A Typora-like live-preview markdown editor",
+  "description": "A single-pane live-preview markdown editor for macOS",
   "type": "module",
   "license": "MIT",
   "private": true,

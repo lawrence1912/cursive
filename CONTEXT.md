@@ -2,7 +2,7 @@
 
 ## 一句话
 
-Typora 风格的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+ `src/renderer`（CodeMirror 6）**；Electron 版已彻底删除（P0-4），构建链只剩 Vite → `out/renderer`。
+所见即所得的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+ `src/renderer`（CodeMirror 6）**；Electron 版已彻底删除（P0-4），构建链只剩 Vite → `out/renderer`。
 产品名写作 **Cursive**（菜单、窗口标题、`Cursive.app`）；**目录名 / 环境变量 / localStorage 键 / 可执行文件仍是小写 `cursive`** —— 那些是标识符，改了等于给自己造一次数据迁移。
 
 ## 功能要点（renderer）
@@ -46,7 +46,7 @@ Typora 风格的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+
   - invoke：`openDialog` / `read` / `save` / `saveAs` / `confirmDiscard` / `openExternal` / `pickFolder` / `readDir` / `createFile` / `createFolder` / `trashItem` / `lastFolder` / `setAppearance`
   - send：`setDocState` / `confirmClose`
   - 壳→渲染推送：`menu` / `file:opened` / `folder:opened`
-- 菜单动作字符串（真相在 `src/shared/types.ts` 的 `MenuAction`）：`file:new` `file:open` `file:save` `file:save-as` `file:save-and-close` `file:open-folder` `file:export-html` `edit:find` `edit:replace` `edit:find-in-files` `view:toggle-source` `view:toggle-sidebar` `view:toggle-outline` `view:toggle-format-bar` `view:toggle-focus` `view:toggle-typewriter` `view:theme-system` `view:theme-light` `view:theme-dark` `view:theme-sepia` `view:toggle-dark` `app:preferences`
+- 菜单动作字符串（真相在 `src/shared/types.ts` 的 `MenuAction`）：`file:new` `file:open` `file:save` `file:save-as` `file:save-and-close` `file:close-tab` `file:open-folder` `file:export-html` `edit:find` `edit:replace` `edit:find-in-files` `view:toggle-source` `view:toggle-sidebar` `view:toggle-outline` `view:toggle-format-bar` `view:toggle-focus` `view:toggle-typewriter` `view:theme-system` `view:theme-light` `view:theme-dark` `view:theme-sepia` `view:toggle-dark` `app:preferences`
 - **主题与排版偏好**：真相在渲染层 localStorage `cursive.prefs`（`ui/prefs.ts`）。CSS 只认 `data-theme="light|dark|sepia"` 这几个确定值，`system` 由 matchMedia 解析后钉上去；`base.css` 里那份媒体查询只兜首帧（CSP 禁内联脚本，抢不到更早时机），**暗色 token 两份必须同步改**。护眼（`sepia`）是**第三套确定 token**，算在浅色一侧（`setAppearance` 给壳的是 `.aqua`），只覆写变量、组件样式一条不改 —— 这正是当初把颜色全收进变量的回报；媒体查询那份要写成 `:root:not([data-theme="light"]):not([data-theme="sepia"])`，否则系统暗色下选护眼会被它压回深色。切主题会调 `setAppearance` 让壳设 `NSApp.appearance` —— 不设的话标题栏/红绿灯/NSAlert/NSOpenPanel 还是系统色，切一半很违和。字号/行距改完必须 `view.requestMeasure()`，否则 CodeMirror 缓存的字符尺寸是过期的
 - **界面语言**（中英双语，真相与主题同处）：`src/renderer/i18n/` —— `zh.ts` 是 **key 清单的真相源**，`en.ts` 类型为 `Record<Key, string>`，中文加了条目英文没跟上 typecheck 直接红。入口在设置面板「语言」分段控件（语言选项各自以自身语言显示）。**三层机制**：① 静态 chrome（innerHTML 一次构建的面板/工具栏）用 `data-i18n` 系属性声明文案（四种：`data-i18n` / `-title` / `-ph` / `-aria`，外加 `data-i18n-args`；**没有 innerHTML 那一路**，一律 textContent / setAttribute），`applyI18n()` 幂等重翻 —— 构建后跑一次、切语言时 `setLang()` 全局重跑；② 动态字符串（状态栏消息/右键菜单/widget）在构建点直接 `t()`，`main.ts` 的 langchange 订阅者重刷状态栏各行/光标行列/标签栏/格式栏/大纲/统计，`syncMode()` 顺手把活动标签的块级装饰整体重建（TOC 标题/表格工具栏/代码语言条），**冻结标签不用管** —— 重新激活时 `activate()` → `syncMode()` 自会重建；自己拿不到 main.ts 那份订阅的（侧栏、跨文件搜索面板、查找面板）各自 `onLangChange`；③ 快捷键后缀拼进 title 的（标题栏/侧栏工具栏按钮）走显式 relabel，data-i18n 表达不了 `标签 (⌘X)` 这种组合。**默认语言**：偏好记过 `lang` 听偏好；有偏好但没记过（老用户）保持中文；全新安装跟随系统语言 —— `detectLang()`（先看偏好）与 `systemLang()`（只看系统）是两个函数，**`ui/prefs.ts` 的 DEFAULTS.lang 必须用后者**，用前者的话「默认」等于「本次启动时的语言」，恢复默认改不动语言。**边界**：callout 类型名（笔记/提示…）是 Markdown 方言的渲染内容、代码语言显示名（TypeScript 等专有名词）、产品名 Cursive 都不随界面语言切。**代码侧的四个坑**：① `applyI18n(root?)` 的 root 不能写成默认参数 `= document` —— node 单测里那个标识符不存在，求值默认值直接 ReferenceError；而且它走的是 `querySelectorAll`，**选不中 root 本身**，根元素上的 `data-i18n-*` 只能靠切语言时那次全局 `applyI18n()` 生效。② Node ≥21 有 `navigator.language`，判「在不在浏览器里」只能看 `typeof localStorage === 'undefined'`。③ 语言名缓存（`langLabel` 的 labelCache）键里要带当前语言，否则切语言后条子还挂着旧名字。④ **凡是「由某个事件顺手刷出来」的文案都要在 langchange 里点名**：`syncCursor`/`syncFormatBar` 挂在 updateListener 的 `docChanged || selectionSet` 分支上，而 `syncMode()` 派的是一次 reconfigure（两者皆假），漏了就会一直留着旧语言直到用户碰一下光标；同理 `EditorState.phrases`（CodeMirror 查找的读屏播报）是**建 state 时钉进配置**的，写成 `{ k: t(...) }` 会让已开着的标签念旧文案 —— `setup.ts` 的 `SEARCH_PHRASES` 因此写成取值器（`state.phrase()` 每次 `map[key]` 现取，getter 天然跟着 `t()` 走，连 reconfigure 都不用）。跨文件搜索的状态行同理**存状态不存字符串**（`Status` 联合类型），否则切语言说不出「12 处 · 3 个文件」那句话
 - **代码块语法高亮**：解析侧是 `markdown-lang.ts` 的 `codeLanguages: resolveCodeLang`（@codemirror/language-data 按需动态 import，`app://r` 服务得了这些 chunk；**名字匹配之上补了一条后缀兜底** —— `py`/`yml`/`rs`/`kt` 这些最常写的简称在 language-data 里只登记成扩展名、没进 alias，`matchLanguageName` 一概认不出来，```py 因此整块没颜色。条子上显示的语言名走的**就是这同一次解析**，两边各判各的迟早会出现「写着 Python 却没有颜色」）；上色侧是 `theme.ts` 的 `markdownHighlight`。两侧都通才有颜色，而**只有上色侧缺 tag 时不报错、只是「看起来很素」**——历史上就只配了 keyword/string/number/comment/function/typeName 六条，结果 yaml·json 的键（`propertyName`）、css 的属性/选择器（`propertyName`/`className`/`atom`）、diff 的增删（`inserted`/`deleted`）、bash 的参数（`propertyName`）全落空，这五种块整块是纯文本色。加语言前先确认它发的是什么 tag（`highlightTree(tree, classHighlighter, …)` 打一遍就知道）。颜色一律走 `--hl-*` 变量（base.css 三处同步），**不许写死 hex** —— `test/highlight.test.ts` 会检查生成的 CSS 里没有 hex。`labelName` 故意不涂：它在 markdown 层就是围栏行上的语言名（`` ```ts `` 里的 ts），那行要压到最轻
@@ -150,8 +150,8 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 
 ## 路线图
 
-**完整清单见 `ROADMAP.md`** —— 现状盘点 + 对标 Typora/MarkText + P0–P4 共 26 项，带验收标准与坑。
-本节只留「已完成（含踩坑记录）」和「当前这一轮」。
+**完整清单见 `ROADMAP.md`** —— 现状盘点 + 对标主流 WYSIWYG + P0–P4 的落地记录，带验收标准与坑。
+**清单已走完**：P4 剩下的与整个 P5 于 2026-09-14 决定先不做，条目已删。本节只留「已完成（含踩坑记录）」。
 
 ### 已完成（勿重做）
 
@@ -178,7 +178,24 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
   - **坑 3**：行内定界符长度必须与开定界符匹配（数学踩过，P1-3 的 == 复用同一扫描器）
 
 - ~~P1-4 代码块增强~~ ✅ `CodeBarWidget`（语言标签 + 复制按钮，`Decoration.widget` 挂块首行，`float:right` 到右上）。复制走 `navigator.clipboard`，WKWebView 非安全上下文会失败 → 兜底 textarea + `execCommand('copy')`。副本按钮点击即刻 e.preventDefault/stopPropagation，别让 widget 默认吞事件
-- ~~P1-5 图片显示增强~~ ✅ `parseImage` 支持 Typora `=宽x高` 尺寸语法；点击图片开灯箱（body 级遮罩 + Escape 关闭，复刻 Prefs 面板叠层模式）；加载失败显示**解析后的完整路径**（decodeURI + 剥掉 safe-file://local 前缀），而不是只给 alt —— 只给 alt 排查不了是路径错还是文件缺
+- ~~P1-5 图片显示增强~~ ✅ `parseImage` 支持 `=宽x高` 尺寸语法；点击图片开灯箱（body 级遮罩 + Escape 关闭，复刻 Prefs 面板叠层模式）；加载失败显示**解析后的完整路径**（decodeURI + 剥掉 safe-file://local 前缀），而不是只给 alt —— 只给 alt 排查不了是路径错还是文件缺
+  - **P1-5 的尾巴：尺寸语法端到端补完**。`parseImage` 一直认得 `=600x400`，但**解析器不给节点**，所以编辑器里从来没生效过：CommonMark 的链接目的地不能带空格、`=600x400` 也不是合法链接标题，内置 Image 解析器只认下 `![alt]`（shortcut 形状），`(…)` 落进正文 —— 装饰层拿到的切片对不上 `parseImage`，屏幕上是「alt + 一串源码」。`markdown-lang.ts` 新增 `SizedImage` 行内解析器（`before: 'Image'`，`SIZED_IMAGE` 正则）把它整段咬成一个 `Image` 节点
+  - **坑**：新节点**必须与内置图片同构**（`LinkMark` + `URL` + `SizeMark`），不能图省事 `cx.elt('Image', pos, end)` 造一个光杆节点 —— 装饰、导出、大纲取词、表格格内四条路径全都按**节点名/子节点**走：光杆节点的切片喂得上 `parseImage`（装饰和导出没事），但 `plainInline` 会原样吐出 `![alt](src =600x400)`，标题里带一张图就会在大纲/TOC 里挂一整行源码。`=600x400` 那一段单独叫 `SizeMark` 并入 `INLINE_MARKS`，取纯文本时一并藏掉
+  - **顺手修掉的老坑**：`isHiddenInline()` —— 原来「藏行内标记 + 藏 URL」这条判断在 `plainInline` 与 `cellTokens` 里各写了一份，而且只藏 `parent === 'Link'` 的 URL，图片的 URL 会漏出来（`## ![图](a.png)` 在大纲里是「图a.png」）。现在两条路径共用同一个函数，图片 URL 也藏
+  - **坑 2：解析器认领的形状，消费端也必须认**。`SIZED_IMAGE` 认 `<a b.png>`（文件名带空格时**唯一**的写法，CommonMark 自己就这么规定），但 `parseImage` 的目的地那组原来是 `([^)\s]+)` —— 空格直接断在这儿，返回 null，装饰层 `return` 掉、导出退回 `escapeHtml(raw)`，屏幕上和导出物里都是一行裸源码。**解析器测试只对着树断言是不够的**，`test/image-size.test.ts` 里「目的地写成 `<带空格.png>` 也认」当时是绿的，缺的是把同一段喂给 `parseImage` 那一半
+  - **坑 3（顺带查出来的老 bug）**：尖括号那半必须**单独一组** `(?:<([^<>\n]*)>|([^)\s]+))`。原来写作 `<?([^)\s]+)>?`，`[^)\s]+` 贪婪地把收尾的 `>` 一起吃进 src（`<ab.png>` → `ab.png>`），拼出来的 `safe-file://` 找不到文件 —— 所有尖括号写法的图片，从来就是裂的
+  - 验收：`test/image-size.test.ts`（节点形状逐字符断言、`= 600 x 400` 这种不认领、夹在正文中间不吃前后文、标题取词只留 alt、**节点切片喂得上 `parseImage`（含尖括号那种）**）；`test/image.test.ts` 三条尖括号回归；`test/export.test.ts` 断言导出 HTML 带 `width`/`height` 且尖括号那张没退回裸源码；**E2E `img.md` 三张图**（百分号编码中文名 / `=120x80` / `<带空格.png> =60x40`），断言导出物里有那两组宽高、没有 `![尖括号图]` 字样、编辑器里 `cm-lp-image` 计数 ≥ 3；应用实测（`=96x96` 出 96×96、`=300x` 出 300×186 按比例、光标进那一行回显源码）
+- ~~块级 widget 的高度记忆~~ ✅ CM 只渲染视口附近，视口外的块按 `WidgetType.estimatedHeight` 估高（默认 -1 = 按一行算），估错就是滚动条长度、跳转落点、点击定位一起错，而且真渲染到那一块高度一换上下文就跳。`widgets.ts` 的 `heightMemo` 在 `ResizeObserver` 里走 `view.requestMeasure`（measure 阶段读 `getBoundingClientRect`，不在 DOM 更新里读）把实测高度记下来
+  - **落盘那一半在 `live-preview/height-store.ts`**：只记在模块里的话，「第一次有点抖」会变成「每次开应用都抖一遍」。key = `cursive.widgetHeights`，值 = `{v, layout, entries}`，**layout 是排版条件指纹**（栏宽:字体:字号:行距:窗口高）—— 这些量都会改像素高度（图片有 `max-height: 60vh`），对不上就整份丢掉，宁可多跳一次也不按错误高度排版；版本号/坏 JSON/手改过的条目一律当没有
+  - 第一次写立刻落盘（「量到了」这件事别卡在节流窗口里），连续变化合并成一次（400ms）；条目上限 256，与内存那份一致
+  - **落盘那份要在文档进编辑器之前捞进内存**（`primeHeights(view)`，`main.ts` 的 `openTab` 开头调）。CM 的顺序是**先查 `estimatedHeight` 进高度表、再 `toDOM`**，而读盘原先挂在 `watchHeight` 的 write 里（要等第一个 widget 画出来、ResizeObserver 首发）—— 晚了一步，于是每次冷启动第一个块级 widget 照样跳一下，明明它的高度就在盘上。调用点卡在「chrome 与偏好都已生效、文档还没进来」那一刻：早了（view 刚建出来、`prefs.apply()` 还没跑）算出来的**排版指纹是过期的**，等于拿另一套排版下的像素高度排这一份。宽度为 0（还没上屏）时直接不预热
+  - **排版指纹只有一处算**（`layoutKey(view)`）：预热与实测各写一份的话，差一个字段就是「预热进来的永远对不上、下一发实测立刻清空」
+  - **量的是 widget 那个盒子（`dom`），不是 `observed`**：`observed` 只回答「谁的尺寸变了要通知我」（图片是内层 `<img>`，它解码完才知道多高），CM 要的是整个 widget 占多高 —— 小图上两者差一个行盒
+  - **估值要跟着 CSS 的上限截**：文档里写的 `=4000x3000` 只是请求，`.cm-lp-image img` 还有 `max-height: 60vh` 压着。不截的话首帧按 3000px 排版、量完塌回 400px，整篇跟着跳一次
+  - **图裂时先 `unwatchHeight` 再换内容**：`is-broken` 是**另一个盒子**（虚线框 + 两行小字），让它写进这张图的 key 的话，下次文件补回来了估高还是那个矮盒子
+  - **已知限制：多窗口共用一份落盘**。localStorage 是整个 data store 共享的，而指纹里带了**窗口高**（图片有 `max-height: 60vh`）—— 两个高度不同的窗口会来回覆盖盘上那份，下次冷启动只有最后写的那套排版能命中。各窗口内存里那份互不干扰（`diskStore` 首读之后就在手里），所以只影响「下次开」的命中率，不影响正确性；真要修得按指纹分桶存，不值
+  - **第一次见到某个块的那一下位移消不掉** —— 那时确实没人量过（这和上面「落盘那份读晚了」不是一回事：那条是量过、就在盘上、只是没赶上）。要再进一步得让壳侧在打开文档时就把本地图片的原始尺寸报上来（新通道），收益只在这一种情形，暂不做
+  - 验收：`test/height-store.test.ts` 9 条（落盘那一半）；`test/widget-height.test.ts` 8 条（异步填充后更新、同图不同尺寸不共享、宽度变化废旧、**预热**、宽度为 0 不预热、**图裂摘观察者**、已移除节点不测量）
 - ~~P1-6 告示块 Callout~~ ✅ `> [!note]` / `> [!danger]`：13 种类型（Obsidian 全量别名，GitHub 的 NOTE/TIP/IMPORTANT/WARNING/CAUTION 一并吃下）→ 6 档配色 + 图标 + 中文类型名；自定义标题写在类型后面，`[!note]-` 默认折起 / `[!note]+` 默认展开。三处分工：类型表与折叠状态 `editor/callout.ts`、解析 `markdown-lang.ts`、装饰 `live-preview/decorate.ts`（图标复用 `ui/icons.ts`）
   - **坑 1**：`[!danger]` 正好是合法的 shortcut 链接引用形状 —— 不 `before: 'Link'` 抢下来，整行会被渲染成一行**蓝色带下划线的坏链接**，比裸源码更让人困惑。和 `FootnoteRefParser` 同一个坑
   - **坑 2**：**类型认不认识不在解析器判**。形状是 `[!word]` 且落在段落第一个字符就一律认领成 CalloutMark；表里没有的（`[!xyz]`）由装饰层决定「不成卡片、仍是普通引用」，源码以字面量示人。打错一个字母就掉回坏链接是最糟的失败方式
@@ -188,11 +205,51 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
   - **配色**：每档只给一个主色 `--cal-<tone>`（base.css 三处同步），卡片底色由 `color-mix(in srgb, var(--cal) 8%, transparent)` 现兑 —— 浅暗两套底色不用各写一遍。`.cm-lp-callout-<tone>` 必须排在 `.cm-lp-callout` 之后：同特异度、挂同一个行元素，靠先后顺序决出 `--cal`
   - E2E `callout.md` 的 `calloutProbe`：图标数、补上的中文类型名、**危险与笔记的计算后边框色不同**（`--cal-*` 落空的话所有档会继承成同一个色）、点三角折/展（1→0→1）且文档长度不变
 
-### 当前这一轮：P4 导出与分发
+### 崩溃恢复只认「上次留下的」，而且只认一次
+
+- **症状**：在 A 窗口的**未命名**文档里打几个字，再开一个窗口，那几个字跟着过去了。
+- **成因**：`scratch/` 是**整个 app 一个目录**，而 `scratchList` 把目录里的 json 全发一遍。
+  未命名文档停输入 2s 就静默落盘（P0-2），于是「A 窗口此刻正在编辑的草稿」和
+  「上次崩溃留下的草稿」在盘上长得一模一样 —— 每个新开的窗口都会把它恢复成一个未命名标签。
+  更糟的是两个窗口各存一份、各自再落盘（`scratchId` 是 `tab-<ts>-<id>`，新窗口给的是新 id），越滚越多
+- **改法**（`main.swift` 的 `recoverableScratch`）：两条规矩缺一不可 ——
+  ① **只认启动那一刻就在盘上的 id**（那才叫「上次留下的」），快照在
+  `applicationWillFinishLaunching` 里取：**必须早于第一个窗口**，晚一步这一轮自己写的草稿就混进来了；
+  ② **交出去一份就从候选集里划掉** —— 恢复是一次性的，第二个窗口不该再拿到同一份。
+  `scratchDir` 因此从 `WindowController` 的计算属性提到文件级（AppDelegate 也要够得着）
+- **验收**：崩溃恢复那条独立用例末尾**真开一个第二窗口**（探针参数 `secondWindow`，由
+  `CURSIVE_SMOKE_SCRATCH_DELAY` 触发），断言 `scratchQueries ≥ 2`（第二个窗口确实问了）、
+  `scratchHandouts == 1`（只交出去一份）、`scratchPending == 0`（候选集清空）。
+  光看一个窗口是测不出这条不变量的
+
+### 契约 v19：工作区根 = 这个窗口自己的（`workspaceRoot`，原 `lastFolder`）
+
+- **症状**：从 Finder 双击一个 `.md`（或「打开方式」/ `open -a`），侧栏挂出来的是**上次那个文件夹**，
+  和刚打开的这份文档毫不相干。
+- **成因有两处，缺一不可**：① 壳侧 `setup()` 里 `treeRoot = pendingFolder ?? lastFolder` ——
+  带**文件**开出来的窗口没有 `pendingFolder`，于是落到全局的 `lastFolder`；② 渲染层
+  `sidebar.restore()` 问的也是 `lastFolder`。而 `setActive` 那条兜底（「没开过文件夹就把文档所在
+  目录挂成树根」）**顶不上** —— 它的条件是 `!this.root`，这时 root 已经被那个历史文件夹占住了。
+  自检下 `lastFolder` 一律返回 nil，所以 E2E 里一直是对的，只有真机会犯
+- **改法**：`treeRoot = pendingFolder ?? parentDir(pendingOpen) ?? lastFolder`，三种来源在
+  `setup()` 里一次定死；通道 `lastFolder` 改名 `workspaceRoot`，直接把这个窗口的 `treeRoot` 报回去
+  （名字不改的话，它返回的东西和名字说的是两回事）。`parentDir` 要求**绝对路径**且不是 `/`
+  —— 树根同时是防穿越守卫之界，相对路径守不住，挂在 `/` 上等于让文件树去读整个磁盘
+- **`openFile:` 的路由也跟着改**：从前「一律塞给当前窗口」，于是一个窗口里会同时摆着 A 文件夹的树
+  和 B 文件夹的文档。现在先找**工作区罩得住它的窗口**（树根就是它所在的目录，或祖先目录 ——
+  后者正是 `setActive` 会逐级展开到它的那种情形），有就在那儿开新标签、把窗口提到前面；
+  没有才新开一个。**同一个文件夹里的第二个文件是新标签，不是又一个窗口**
+- **顺手补的竞态**：`sidebar.restore()` 在启动时是**不被等**的（`void`，见 main.ts 的顺序），
+  文档可能抢先经 `setActive` 兜底把树根挂好了 —— 同一个目录就直接返回，不然 `open()` 会把
+  展开状态和选中项一起清掉；真要换根，换完补一次 `setActive` 定位
+- 验收：E2E 每个用例都守两条 —— 壳侧 `windowRoots[0] == /tmp/cursive-e2e`（守卫之界当场就位）、
+  渲染层 `sbRoot == /tmp/cursive-e2e`（侧栏真挂在那儿）。改之前壳侧那条是空串
+
+### 最近一轮：P4 导出与分发（**已收尾**）
 
 - ~~P4-1 导出 HTML~~ ✅ 单文件产出（样式内联 / mermaid 静态 SVG / 图片可嵌 data: URI / 公式 MathML），菜单「文件 → 导出为 HTML…」⇧⌘E，契约 v15。设计与三处有意差异见上面「功能要点」那条；**最值得记的一点**：导出与实时预览的方言不能漂移，办法不是「写一个更全的导出解析器」，而是**根本不写** —— 全文渲染读的是同一棵 `parsedTree`，块级/行内每一种构件都调编辑器那边已经在用的那个函数。对账断言写在 `test/export.test.ts`（块级拿 `buildBlocks()` 逐类比数目，行内拿 `plainInline()` 比纯文本）与 `release.sh`（每个用例都导一次）
 - ~~P4-2 PDF 真分页~~ ✅ 打印导出 HTML（`printOperation` + `NSPrintInfo`），A4/Letter + 三档页边距 + 页码；「导出 PDF 是单页长条」这条已知限制到此消除。四条铁律见上面「功能要点」那条 —— 其中第 3 条（开印前碰一下打印视图就随机印空白页）值得单独记住：它会把另外三条伪装成「偶发」
-- 还剩：P4-3 复制为 HTML、P4-4 pandoc 桥接、P4-5 签名公证
+- **P4 到此为止**：P4-3 复制为 HTML、P4-4 pandoc 桥接、P4-5 签名公证、P4-6③ 窗口提前建，以及整个 P5，于 2026-09-14 决定先不做，条目已从 `ROADMAP.md` 删除
 
 ### 上一轮：P3 工作区（**已全部完成**）
 
@@ -232,7 +289,7 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 - ~~P3-1 文件树增删（一半）~~ ✅ 右键菜单（`ui/sidebar.ts` 的 `.sb-menu`，挂 **body** 上 —— `.sb-tree` 是 `overflow:auto`，挂里面会被裁掉）：新建文件 / 新建文件夹 / 删除。契约 v7 `createFile(dir)` `createFolder(dir)` `trashItem(path)`。**名字由壳弹原生输入框问**（渲染层不碰原生 UI），重名自动加 `-2`；**删除一律 `NSFileManager.trashItem`，不用 `removeItem`** —— 误删能在 Finder 里找回，壳侧先弹确认。三个通道都过 `safeTarget`：消解 `..`、必须绝对路径、必须落在 `treeRoot`（pickFolder 选的文件夹）或当前文档所在目录之下；名字里出现 `/` 直接拒（否则「新建文件」就成了任意路径写入）。增删之后走 `reload()` 整树重读（根 + 所有展开着的目录，浅的先加载）—— 比精确刷新某个父目录笨，但新建目录/删掉展开目录/重名加后缀这些分支一个都不用写。删掉的文件如果开着标签，`closeTab(id, true)` 丢弃关闭：**不能问「是否保存」，一保存就把文件复活了**。`CURSIVE_SMOKE` 下所有模态一律不弹（`runModal` 会把无人值守的自检卡死），名字取 `CURSIVE_SMOKE_NAME`。E2E `treeProbe` 断言工具栏四颗按钮、两份菜单项、新建、重命名、拖拽移动、删除、懒加载展开。重命名 / 拖拽移动 / 在 Finder 中显示已在本轮补齐（契约 v10，见上面「当前这一轮」）
 - **两个面板的高亮同一套口径**：不铺满整行，**从文字前方**起、跟着层级缩进一起往右收，比行矮 4px。文件树背景画在 `.sb-item` 上（折叠箭头留在高亮外面 —— 它是控件，不是标签的一部分）；大纲的缩进从 `padding-left` 改成 **`margin-left`**，因为高亮画的就是 `.ol-item` 这个盒子本身，用 padding 只会把文字推走、背景照样铺满。`.ol-item` 仍然**不能用 flex**（自身文本会变成匿名 flex item，`text-overflow: ellipsis` 失效，长标题就不省略了）
 - **代码块是一张卡**：`.cm-lp-code` 逐行铺背景 + 左右边框，首尾两行另加 `.cm-lp-code-open` / `-close`（`decorate.ts` 的 `edgeLine`，从 node 自己的范围算 —— `addLines` 会按视口裁剪，拿不到真正的首尾行）补上圆角、上下边框和内边距。**为什么不用块级 widget 包起来**：那样整块成了替换装饰，代码块里就没法打字了。围栏行保留可见但压到 0.72em + `--mark-idle`，当卡片的上下边用；语言名已经在 ```lang 上，`.cm-lp-codebar-lang` 因此隐藏，右上角只留复制按钮
-- ~~P2-8 底部悬浮格式栏~~ ✅ `ui/format-bar.ts`：贴**编辑区**（#center，不是窗口）底部居中的胶囊条 —— 块类型下拉（正文/标题 1-6，显示当前块名）+ 行内 6 键 + 块级 5 键。**它只是 P2-1 那张命令表的第三个入口**，零编辑逻辑：点按钮 = 派 `fmt:*`，和菜单同一条路，幂等/多光标/一次 ⌘Z 全白拿。四个必须知道的点：① 条子上 `mousedown` 一律 `preventDefault`，否则焦点离开编辑器、选区没了，命令就作用错地方；② 它盖在正文上，`setup.ts` 的 `bottomOverlay` 通过 `EditorView.scrollMargins` 给滚动让出等高下边距，否则光标打到底部会躲到条子后面；③ 查找面板也是贴底的（`search({top:false})`），`syncFormatBarOffset()` 每次 update 量一下 `.cm-panels-bottom` 的高度把条子抬上去；④ 高亮由 `fmt.ts` 的 `formatStateAt()` 算，**必须与 emitForRange/emitOnLine 同源** —— 亮着的按钮点下去就得是「取消」。开关在「视图」菜单（`view:toggle-format-bar`，不给快捷键），状态存 localStorage `cursive.formatBar`
+- ~~P2-8 底部悬浮格式栏~~ ✅ `ui/format-bar.ts`：贴**编辑区**（#center，不是窗口）底部居中的胶囊条 —— 块类型下拉（正文/标题 1-6，显示当前块名）+ 行内 6 键 + 块级 5 键。**它只是 P2-1 那张命令表的第三个入口**，零编辑逻辑：点按钮 = 派 `fmt:*`，和菜单同一条路，幂等/多光标/一次 ⌘Z 全白拿。四个必须知道的点：① 条子上 `mousedown` 一律 `preventDefault`，否则焦点离开编辑器、选区没了，命令就作用错地方；② 它盖在正文上，`setup.ts` 的 `bottomOverlay` 通过 `EditorView.scrollMargins` 给滚动让出等高下边距，否则光标打到底部会躲到条子后面；③ 查找面板也是贴底的（`search({top:false})`），`syncFormatBarOffset()` 每次 update 量一下 `.cm-panels-bottom` 的高度把条子抬上去；④ 高亮由 `fmt.ts` 的 `formatStateAt()` 算，**必须与 emitForRange/emitOnLine 同源** —— 亮着的按钮点下去就得是「取消」。**显隐是两级的**：「视图」菜单那个开关管**有没有这条工具栏**（`view:toggle-format-bar`，不给快捷键，`is-hidden`，连手柄一起收，状态存 localStorage `cursive.formatBar`）；条子右端那颗折角管**摊开还是收起**（`is-collapsed`，只剩一颗 46×20 的手柄贴在原地，存 `cursive.formatBarFold`）—— 「把底下这条让开」是写字时的常用动作，不该每次去翻菜单。`bottomOverlay.height` 因此是三态：关掉 0 / 收起 `FORMAT_BAR_COLLAPSED_SPACE` / 摊开 `FORMAT_BAR_SPACE`，漏一态就会「收起来了正文底下还空着一条」。条子**贴着状态栏坐**（下沿 6px，原来是 18px）：它是压在正文上的浮层，离底越近压住的正文越少
 - **P2-9 命令表补齐**（`fmt.ts` + 格式栏 + 格式菜单三处同步）：P2-1 那张表停在 18 条，而 P1-3 的方言和 P2-6 的表格编辑器之后长出来的东西一直没有任何入口。补的分两类 —— **① 行内开关 4 个**（`==高亮==` ⇧⌘H / `^上标^` ⌃⌘= / `~下标~` ⌃⌘- / `$行内公式$` ⌃⌘M），与原来那五个完全同构，`~` 与 `~~`、`$` 与 `$$` 的区分靠 `isWrapped` 里那条 `runIs`（P2-8 为 `*`/`**` 加的，白拿）；**② 插入类 8 个**（表格 ⌃⌘T / 图片 / 分隔线 / 公式块 / 告示块 / 流程图 / 脚注 / 目录），**不是开关**，走 `makeFormatSpec` 里单独的 `insert` 分支：只认主选区（多光标插三张表没意义）、不保留选区、块级骨架由 `blockSlot` 保证独占一段（`---` 紧贴文字会变成 setext 二级标题，不是分隔线）。插表格顺带发 `setTableEdit`，新表直接以渲染态出现、焦点已在第一格（与 input-rules 的表格骨架同一条路）；脚注是两处改动（光标插引用 + 文末插定义，编号取现有数字标签 max+1）。**UI 上开关与插入分开摆**：条子那一排全是开关，插入收进右端「插入」下拉 —— 它们永远不会点亮，混进同一排会让人以为坏了，而且条子早就是 `overflow-x:auto`。两个下拉互斥、各自 `position:absolute` 贴住自己那端（排进 flow 会在张开时把 bottom 锚定的条子整体顶上去）。顺序真相在 `fmt.ts` 的 `INSERT_ACTIONS`，UI 那一半写成 `Record<(typeof INSERT_ACTIONS)[number], …>`，漏配一条当场 typecheck 不过
 - **格式栏顺手修掉的两个老坑**（都是 P2-1 就有、被工具栏摆到明面上的）：① 光标停在已加粗的词里再按 ⌘B 会套成 `****词****` —— 无选区那条路只看「光标所在词」，中文分词还会把 `**粗体**` 里的词切开，词边界根本碰不到星号。改成 `enclosingWrap()`：先在行内找把光标夹住的那对定界符，找不到才退回词。② `*` 会认领 `**粗体**`（B 和 I 一起亮，⌘I 还把它啃成 `*粗体*`）—— `isWrapped` 现在要求这一串同字符标记的长度**恰好**等于定界符长度（`runIs`）
 - ~~P2-1 格式化命令 +「格式」菜单~~ ✅ 菜单「格式」15 项（粗/斜/下划线/删除线/行内码/链接/标题1-6/正文/代码块/引用/无序·有序列表/任务项）→ `menu` 通道 → `MenuAction` 的 `fmt:*` → `editor/fmt.ts` 的 `applyFormat`。⌘ 组合一律走原生菜单（判断 1）
