@@ -7,6 +7,7 @@
 ![macOS 12+](https://img.shields.io/badge/macOS-12%2B-111111)
 ![Electron-free](https://img.shields.io/badge/Electron--free-2f6fd0)
 [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![linux.do](https://img.shields.io/badge/%E7%A4%BE%E5%8C%BA-linux.do-ffb003)](https://linux.do/)
 
 ![Cursive 浅色界面](docs/shots/light.png)
 
