@@ -87,7 +87,7 @@ npm install
 npm run build                     # 构建 renderer 到 out/renderer
 ./shell-swift/build.sh            # 编译原生壳 → shell-swift/cursive-shell
 ./shell-swift/cursive-shell a.md    # 开发运行（资源查找 Bundle → cwd → exe 相对）
-CURSIVE_TIMING=1 ./shell-swift/cursive-shell a.md   # 打印启动各阶段耗时（见 ROADMAP P4-6）
+CURSIVE_TIMING=1 ./shell-swift/cursive-shell a.md   # 打印启动各阶段耗时（壳侧 + 页面内三格）
 ```
 
 其他脚本：
@@ -188,7 +188,8 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/Cursive-<versi
 
 `release.sh` 依次跑：类型检查 + 单测 → 构建 renderer → 编译壳 → 8 个 E2E 用例
 （图片/表格/全家桶/CRLF/数学/mermaid/方言/告示块）+ 崩溃恢复竞态 → `make-app.sh` 组装 bundle。
-产物约 9.8 MB（app，含 KaTeX 与 mermaid，两者都按需加载）。
+产物约 9.8 MB（app，含 KaTeX 与 mermaid，**两者都按需加载** —— 没有公式/图表的文档一个字节都不背；
+首屏 JS 759 KB，katex 与 turndown 各自躺在自己的 chunk 里）。
 
 `make-app.sh` 把 `out/renderer` 塞进 `Contents/Resources/renderer`，写入 `Info.plist`
 （`.md` 关联 rank=Alternate，不抢默认打开方式），再做 ad-hoc 签名

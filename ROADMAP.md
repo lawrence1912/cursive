@@ -1,7 +1,7 @@
 # Cursive 路线图
 
-> 基准 `6b17b9a` 之后（2026-09-13，**P0 / P1 / P2 / P3 全部完成，P4-1 导出 HTML + P4-2 PDF 真分页已落地**）。现状盘点 + 对标 Typora / MarkText + 按依赖顺序排的 P0–P4 清单。
-> **剩下的是 P4-3～P4-5（复制为 HTML / pandoc / 签名公证）和未排期的 P5。**
+> 基准 `cd54408` 之后（2026-09-14，**P0 / P1 / P2 / P3 全部完成，P4-1 导出 HTML + P4-2 PDF 真分页 + P4-6①② 启动提速已落地**）。现状盘点 + 对标 Typora / MarkText + 按依赖顺序排的 P0–P4 清单。
+> **剩下的是 P4-3～P4-5（复制为 HTML / pandoc / 签名公证）、P4-6③（窗口提前建）和未排期的 P5。**
 > 在线版（同一份内容，带样式）：<https://claude.ai/code/artifact/462ed29a-cc2f-4026-8e01-e4fa47e104a0>
 >
 > 开发上下文、契约、已踩的坑见 `CONTEXT.md`；这份只管「接下来做什么」。
@@ -652,36 +652,75 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
   PDF 也只在 mermaid 那条用例上导 —— 它没有 `findProbe`，探针跑完活动标签还是它自己
   （kitchen-sink 那条最后会跳到 table.md，导出的就不是打开的那份了）
 
-### P4-6 启动速度（已量过，未动刀）
+### P4-6 启动速度（①② 已做，③ 未动）
 
-> 目标是 Typora 那种「双击到看见字」≈ 300–400ms。现在**约 900ms**（`CURSIVE_TIMING=1 ./shell-swift/cursive-shell a.md` 自己量）。
+> 目标是 Typora 那种「双击到看见字」≈ 300–400ms。`CURSIVE_TIMING=1 ./shell-swift/cursive-shell a.md` 自己量。
 
-实测一遍（暖启动，kitchen-sink.md，各阶段是累计毫秒）：
+壳侧各阶段（暖启动，累计毫秒，这部分没变）：
 
 | 阶段 | 耗时 | 说明 |
 |---|--:|---|
 | 进程起来 → `willFinishLaunching` | ~70ms | dyld + AppKit，动不了 |
 | → `didFinishLaunching` | ~250ms | AppKit 自己的启动流程（窗口在这中间由 `openFile:` 先开出来了） |
 | 建窗口 + WKWebView + 装 scheme handler | ~130ms | 其中 WKWebView 本身 ~50ms |
-| 页面：HTML → **模块跑完** | ~180ms | 几乎全是**一兆多 JS 的解析执行**；index.html 本身 5ms 就服务完了 |
-| 渲染层就绪 → 文档推到编辑器 | ~25ms | 原先是 ~180ms（轮询），已改成就绪推送 |
-| 文档进编辑器 → 画出来 | ~55ms | 装饰 + 排版 |
+| 页面：HTML → 模块跑完 → 文档上屏 | 见下表 | 这一段才是能动刀的地方 |
 
-**已经做掉的（这一轮）**：就绪从轮询改成推送（`BRIDGE_JS` 给 `window.__cursive` 装 setter，赋值那一刻回报壳），
-省掉约 150ms —— 轮询最坏的地方在于那会儿 JS 线程正忙着跑模块，每一发 `evaluateJavaScript` 都得排在它后面。
+**已经做掉的**：
+- 就绪从轮询改成推送（`BRIDGE_JS` 给 `window.__cursive` 装 setter，赋值那一刻回报壳），约 −150ms ——
+  轮询最坏的地方在于那会儿 JS 线程正忙着跑模块，每一发 `evaluateJavaScript` 都得排在它后面
+- ✅ **① 文档随页面一起进来**：壳在窗口创建这一刻就知道要开哪个文件，同步读完随 `WKUserScript`
+  （`atDocumentStart`）注成 `window.__cursiveInitialDoc`（**契约 v18**），渲染层启动末尾直接
+  `openTab` 开它 —— 省掉「等就绪 → 一趟 IPC → `file:opened`」那一圈，连带把
+  「崩溃恢复的 scratch 与这份文档谁先到」那条竞态整条删掉
+- ✅ **② 砍首屏 JS**：`katex`（261 KB）与 `turndown` 从静态 import 改成动态。katex 的 JS 与 CSS
+  一起关进 `editor/live-preview/katex.ts` —— 那个模块存在的唯一理由就是**让 katex 只能被动态
+  import 够着**；`renderMath()` 在模块到手前返回 null，`fillMath()` 先摆源码占位、加载完再换（正文
+  公式与表格格内公式共用这一条）。导出那条路自己 `await loadKatex()` 再进同步渲染
 
-**还能拿的三块，按性价比排**：
+**③ 窗口提前建**（约 −100ms，收益不确定，未做）：`applicationWillFinishLaunching` 里就把 WKWebView
+和页面起起来，`openFile:` 到了只是往里推文档。风险是空窗口闪一下。
 
-1. **文档随页面一起进来**（约 −150ms，也最稳）：窗口创建时壳就知道要开哪个文件，
-   可以同步读完、随 `WKUserScript`（`atDocumentStart`）把内容注进 `window.__cursiveInitialDoc`，
-   渲染层启动时直接拿来建 state —— 省掉「等就绪 + 一次 IPC 往返」，顺带把竞态整条删掉
-2. **砍首屏 JS**（约 −80ms）：`katex` 现在是**静态 import**（261 KB，没有公式的文档也照背），
-   改成 mermaid 那种异步 widget 即可；`turndown` 只在粘贴时才用，同理
-3. **窗口提前建**（约 −100ms，收益不确定）：`applicationWillFinishLaunching` 里就把 WKWebView
-   和页面起起来，`openFile:` 到了只是往里推文档。风险是空窗口闪一下
+#### ①② 的实测结果 —— 比原先的估计小得多
 
-前两项加起来大约能到 650ms 上下；要再往下就得动「WKWebView 冷启动」本身（进程预热、
-或干脆把首屏做成静态 HTML 骨架先画出纸面再挂编辑器），投入产出比开始变差。
+产物是确定的：**首屏 JS 1,031,839 → 759,140 字节（−26.4%）**，首屏 CSS 65 KB → 35.7 KB
+（katex 那 29.9 KB 跟着 JS 进了懒加载 chunk）。时间是**页面内** `performance.now()`（甩掉前面那
+600ms AppKit + WKWebView，只看能动的部分），无公式文档，基线与新版交替各跑 20 次：
+
+| 分段 | 基线 min / p25 | 新版 min / p25 |
+|---|--:|--:|
+| ① 模块开跑（首屏 JS 取回+解析+编译） | 48 / 52.8 | **35 / 43.5** |
+| ② 文档进编辑器 | 186 / 212.8 | **150 / 193.5** |
+| ③ 文档已上屏 | 234 / 266.0 | **216** / 271.5 |
+
+**原先那两个估计都不准，原因值得记下来**：
+- ①「约 −150ms，也最稳」是**过期的**。那 150ms 早就被上一轮「轮询改推送」拿走了，剩下的
+  IPC 往返实测只有 ~7ms。①真正的价值在**删掉竞态**，不在速度
+- ②「约 −80ms」高估了：砍掉 272 KB 确实让「模块开跑」快了，但只有 −9～−13ms。
+  首屏 JS 的成本里解析编译只占一小块
+
+合起来「文档上屏」大约 −18ms（min）到持平。**要再往下就不是抠 JS 了** —— 得动 WKWebView 冷启动
+本身（进程预热，或把首屏做成静态 HTML 骨架先画出纸面再挂编辑器）。
+
+#### 量启动速度的五个坑（都真摔过，下次直接照这个来）
+
+1. **别比平均数和中位数，比 min 与 p25**：同一个二进制跑 20 次，`willFinishLaunching` 能从
+   60ms 飘到 400ms，噪声带 ±150ms，比一个 50ms 的改动大三倍。min/p25 才是「机器没在忙时」的真值
+2. **要量就量页面内的 `performance.now()`**：壳侧 `mark()` 的起点是进程启动，前面 600ms 的
+   AppKit + WKWebView 起进程与改动毫无关系，全是噪声源。渲染层现在有 `window.__cursiveMark`
+   （壳**只在 `CURSIVE_TIMING=1` 下注入**，平时页面上压根没这个函数，零开销）
+3. **rAF 打的点不能当主指标**：窗口不是最前面时 rAF 会被系统降频甚至一次都不回调
+   （P4-2 在离屏窗口里踩过同一个坑），于是分布是双峰的、还会漏样本。主指标用同步打点，
+   rAF 那一发只做参考
+4. **量之前先清 `~/Library/Application Support/cursive/scratch`**：留着上一轮的草稿，崩溃恢复会
+   先开出一个小文档，「文档进编辑器」那一发就打在**那份草稿**上 —— 基线凭空快 70ms，全是假的。
+   这条把前面好几轮的结论带偏了
+5. **别把文档提前灌进第一个 `EditorView`**：直觉上「一步到位」更快，实际更可疑 ——
+   `prefs.apply()` 改字号行距栏宽、格式栏改滚动边距、末尾 `syncMode()` 整份重建装饰，
+   这一串在空文档上全是免费的，带着一份长文档就每一次都要重排一遍。
+   正确姿势是**顺序一个字都不改**：chrome 先搭完，最后才 `openTab` ——
+   这样也就不必重新论证「这一串在有文档的情况下还对不对」。
+   （**这一条是按机制定的，不是量出来的**：当时量到的 +60ms 后来查明是坑 4 造成的假象，
+   而三种写法之间始终没能在噪声里分开。机制清楚、代价为零的改动，不必等一个量不出来的数）
 
 ### P5 差异化（可选，未排期）
 

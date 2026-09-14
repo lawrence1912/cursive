@@ -1,6 +1,6 @@
 import './themes/base.css'
 import './themes/live-preview.css'
-import 'katex/dist/katex.min.css'
+// katex 的 CSS 不在这里 —— 它跟着 JS 一起躺在懒加载的 editor/live-preview/katex.ts 里（P4-6②）
 
 import { findNext, findPrevious, openSearchPanel } from '@codemirror/search'
 import { EditorView } from '@codemirror/view'
@@ -36,6 +36,11 @@ import { FormatBar, FORMAT_BAR_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
 import { Prefs } from './ui/prefs'
 import { cursorLabel, measure, selectedText, StatsPanel, type Stat } from './ui/stats'
+
+// 计时探针的第一格：模块开始跑 = 取回 + 解析 + 编译首屏 JS 花掉的时间。
+// P4-6② 砍的就是这一格；它到「文档进编辑器」之间那段才是 P4-6① 的地盘。
+// 平时 __cursiveMark 根本不存在（壳只在 CURSIVE_TIMING=1 下注入），这一句直接短路
+window.__cursiveMark?.(`模块开跑（页面内 ${Math.round(performance.now())}ms）`)
 
 // 改名 typmd → cursive：老 localStorage key 一次性搬过来，搬完就删（下个大版本可以拿掉这一段）
 for (const k of ['outlineVisible', 'sidebarWidth', 'prefs']) {
@@ -106,6 +111,20 @@ try {
 } catch {
   /* 隐私模式 / 存储被禁：两个模式都按关处理 */
 }
+
+/**
+ * P4-6①：argv / Finder 那份文档，壳在 `atDocumentStart` 就注进来了（`__cursiveInitialDoc`），
+ * 启动末尾直接 `openTab` 开它 —— 省掉「等就绪 → 一趟 IPC → file:opened」那一圈。
+ * 没有（新建窗口 / 双击 app 图标）就是 null，照旧从空文档起步。
+ *
+ * **文档不在这儿灌进编辑器**：第一个 EditorView 照旧拿空文档建。它建好之后还有
+ * 一长串会碰到视图的初始化 —— `prefs.apply()` 改字号行距栏宽、格式栏改滚动边距、
+ * 主题落 data-theme、末尾那次 `syncMode()` 整份重建装饰 —— 空文档时这些全是免费的，
+ * 带着一份长文档就每一次都要重排一遍。所以**整条启动路径的形状一个字都没改**：
+ * chrome 先搭完，最后才把文档放进去（见下面 `openTab` 处），省掉的只是
+ * 「等就绪 → 一趟 IPC → file:opened」那一圈以及它带来的竞态。
+ */
+const initialDoc = window.__cursiveInitialDoc ?? null
 
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
@@ -395,6 +414,30 @@ function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint):
   return t
 }
 
+/**
+ * 启动耗时的最后一格：**文档的字真的画到屏幕上了**。壳侧的 mark() 全都停在
+ * 「推给渲染层」之前，而「双击文件 → 看见字」的终点只有页面自己知道。
+ *
+ * 挂在 activate() 上而不是启动流程末尾，是为了让两条路径量的是同一件事：
+ * 文档随页面注入时（P4-6①）第一次 activate 就带着内容；走 file:opened 那条时
+ * 启动末尾手上还是个空编辑器，量到的会是「空编辑器画完了」—— 那不是用户等的东西。
+ * 两层 rAF = 这一帧的布局与绘制都交完了。CURSIVE_TIMING=1 时壳会打印它。
+ */
+let firstPaintMarked = false
+function markFirstPaint(): void {
+  if (firstPaintMarked || view.state.doc.length === 0) return
+  firstPaintMarked = true
+  const mark = window.__cursiveMark
+  if (!mark) return
+  // 同步的这一发是**主指标**：文档进了编辑器、版也排了（activate 末尾），
+  // 剩下的只是把帧交出去。rAF 那一发才是真正的上屏，但它在窗口不是最前面时会被
+  // 系统降频甚至不回调（P4-2 在离屏窗口里踩过同一个坑），当指标会把噪声当成结论
+  mark(`文档进编辑器（页面内 ${Math.round(performance.now())}ms）`)
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => mark(`文档已上屏（页面内 ${Math.round(performance.now())}ms）`))
+  )
+}
+
 function activate(id: number): void {
   const cur = tabs.find((t) => t.id === activeId)
   if (cur && cur.id !== id) {
@@ -424,6 +467,7 @@ function activate(id: number): void {
   updateOutline()
   void sidebar.setActive(tab.path)
   view.focus()
+  markFirstPaint()
 }
 
 /** discard：文件已经不在了（进了废纸篓），别再问「是否保存」—— 一保存就把它复活了 */
@@ -987,6 +1031,16 @@ scheduleCount()
 syncCursor()
 view.focus()
 
+// P4-6①：注入的那份文档放在**最后**开 —— 走的是与 `file:opened` 完全相同的
+// `openTab`（连启动空白标签的复用都一样），只是不必等那一趟 IPC。
+//
+// **位置是特意排在这一串收尾之后的**：上面的 `syncMode()` 派的是一次 reconfigure，
+// 会把活动标签的装饰整份重建；`syncStatus` / `scheduleCount` / `syncCursor` 也都要读
+// 当前文档。提到前面去，这一串就得拿着一份完整文档再跑一遍，空文档时它们才是免费的。
+// 换句话说：**整条启动路径的形状与 P4-6① 之前一模一样**，只是不必等 IPC —— 这样也就
+// 不必重新论证「这一串在有文档的情况下还对不对」。
+if (initialDoc) openTab(initialDoc.content, initialDoc.path, initialDoc.fingerprint)
+
 // 主题 → 块级 widget：mermaid 的配色烘在 SVG 里，切主题必须重渲染。
 // data-theme 由 ui/prefs.ts 钉成确定的 light/dark，这里监听它：活动标签实时
 // 重渲染；冻结标签把 state 重建一遍 —— widget DOM 会被 CM 按 eq() 缓存，
@@ -1030,8 +1084,10 @@ onLangChange(() => {
 })
 
 // P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签。
-// 整段是异步的，而 argv/Finder 那份文件是壳轮询 __cursive 就绪后推过来的 ——
-// 两边谁先到都有可能，所以这里必须假设「等 scratchList 的工夫文件已经开好了」
+// 整段是异步的，而文档不一定已经在了 —— argv/Finder 那份现在随页面注入（P4-6①，
+// 这里跑到时它已经是活动标签），但「已经开着的窗口被要求再开一个文件」仍走 file:opened，
+// 照样可能插在等 scratchList 的这段时间里。所以下面的「别把用户刚点开的那份挤下去」
+// 不能省
 void (async () => {
   const list = await window.api.scratchList()
   if (!list.length) return

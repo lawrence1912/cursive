@@ -77,7 +77,15 @@ export interface ViewFlags {
   typewriter: boolean
 }
 
-/** 一份从磁盘读到的文档 */
+/**
+ * 一份从磁盘读到的文档。
+ *
+ * 三条路会送来它：`read()` / `openDialog()` 的返回、`onFileOpened` 事件，
+ * 以及**启动时随页面注入的那一份**（契约 v18，P4-6①）——
+ * 后者不是 `window.api` 上的方法，而是壳用 `WKUserScript`（`atDocumentStart`）
+ * 写进 `window.__cursiveInitialDoc` 的全局，声明在 `renderer/env.d.ts`。
+ * 它与 `onFileOpened` **互斥**：注入成功就不会再推 `file:opened`，读盘失败才退回老路。
+ */
 export interface DocPayload {
   path: string
   /** 已剥 BOM、换行归一为 LF 的正文 */

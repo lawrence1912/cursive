@@ -302,6 +302,11 @@ let BRIDGE_JS = """
   }
   window.__shellEmit = (event, payload) => window.api._emit(event, payload)
 
+  // CURSIVE_TIMING=1 时壳会把这个口子开出来（见 TIMING_JS）：渲染层用它报自己这边的
+  // 时刻。壳侧的 mark() 全都停在「文档推给渲染层」之前，而启动速度真正的终点是
+  // 文档进编辑器/上屏 —— 只有页面知道那一刻。平时 window.__cursiveMark 根本不存在，
+  // 调用方 `?.()` 一下就过去了，一个字节的消息都不发。
+
   // 渲染层就绪 = main.js 末尾给 window.__cursive 赋值。壳等的就是这一刻（要把
   // Finder / argv 打开的那份文档推进来）。**别让壳去轮询**：轮询那会儿 JS 线程
   // 正忙着跑一兆多的模块，每一发 evaluateJavaScript 都得排在它后面，实测白等
@@ -317,6 +322,15 @@ let BRIDGE_JS = """
     }
   })
 })()
+"""
+
+/// 只在 `CURSIVE_TIMING=1` 下注入：给渲染层开一个报时刻的口子。
+/// 平时不注入 = 页面上压根没有这个函数，`__cursiveMark?.(...)` 直接短路，
+/// 启动路径上不会多一发跨进程消息（要量的东西自己别成为开销）。
+let TIMING_JS = """
+window.__cursiveMark = (label) => {
+  try { window.webkit.messageHandlers.shell.postMessage({ type: 'timing', label: String(label) }) } catch {}
+}
 """
 
 // MARK: - 文件协议：app://r（服务 out/renderer）与 safe-file://local（绝对路径图片）共用
@@ -1009,6 +1023,29 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         config.userContentController.add(self, name: "shell")
         config.userContentController.addUserScript(
             WKUserScript(source: BRIDGE_JS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if ProcessInfo.processInfo.environment["CURSIVE_TIMING"] != nil {
+            config.userContentController.addUserScript(WKUserScript(
+                source: TIMING_JS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+        // P4-6①：argv / Finder 那份文档**随页面一起进来**，不再「等渲染层就绪 → 推一趟 IPC」。
+        // 窗口创建这一刻就已经知道要开哪个文件，同步读完注成一个全局常量即可
+        // （`atDocumentStart` = 先于页面的模块脚本，渲染层建第一个 EditorState 时它就在）。
+        // 省掉的不只是那一趟往返：`flushPendingOpen` 的轮询、以及「崩溃恢复的 scratch
+        // 与这份文档谁先到」那条竞态，一并没有了。
+        // 读盘失败就什么也不做 —— pendingOpen 还在，老路（就绪后 openPath）照走，
+        // 顺带把真正的错误提示留给它（那边有 showError）。
+        if let p = pendingOpen, let doc = try? readDoc(p) {
+            lastDocPath = p
+            NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: p))
+            // `JSON.parse('…')` 而不是直接写对象字面量：整份文档要在 documentStart 被
+            // JS 引擎编译一遍，几十上百 KB 的字面量走的是完整的语法分析，而 JSON.parse
+            // 走的是专用的快路径。外层 jsonLiteral 把内层那串 JSON 再转义成一个 JS 字符串
+            config.userContentController.addUserScript(WKUserScript(
+                source: "window.__cursiveInitialDoc = JSON.parse(\(jsonLiteral(jsonLiteral(doc))));",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            pendingOpen = nil
+            mark("首个文档随页面注入")
+        }
         // DevTools：右键页面 →「检查元素」
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
@@ -1292,6 +1329,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         if let dict = message.body as? [String: Any], dict["type"] as? String == "ready" {
             mark("渲染层 ready（推送）")
             flushPendingOpen()
+            return
+        }
+        // 渲染层自己报的时刻（window.__cursiveMark）：只在 CURSIVE_TIMING 下有输出
+        if let dict = message.body as? [String: Any], dict["type"] as? String == "timing" {
+            mark(dict["label"] as? String ?? "?")
             return
         }
         guard let dict = message.body as? [String: Any],
@@ -1805,7 +1847,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     }
 
     /// didFinish 可能早于渲染层模块执行完（监听器未注册时 emit 会静默丢失），
-    /// 轮询 window.__cursive（main.js 末尾暴露的就绪标记）就绪后再发 file:opened
+    /// 轮询 window.__cursive（main.js 末尾暴露的就绪标记）就绪后再发 file:opened。
+    /// P4-6① 之后**文件一般走不到这里**（启动那份已经随页面注进去了），剩下两种情况：
+    /// 带文件夹开出来的窗口（pendingFolder），以及注入时读盘失败的回退
     private func flushPendingOpen(attempt: Int = 0) {
         guard pendingOpen != nil || pendingFolder != nil, attempt < 100 else { return }
         webView.evaluateJavaScript("typeof window.__cursive === 'object'") { [weak self] ready, _ in

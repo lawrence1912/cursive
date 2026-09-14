@@ -1,13 +1,13 @@
 import type { EditorState, Text } from '@codemirror/state'
 import type { SyntaxNode } from '@lezer/common'
 import { classHighlighter, highlightTree } from '@lezer/highlight'
-import katex from 'katex'
 import { matchCallout } from '../editor/callout'
 import { EMOJI } from '../editor/emoji'
 import { collectHeadings, slugs } from '../editor/headings'
 import { INLINE_MARKS } from '../editor/inline-text'
 import { fenceParts, langLabel } from '../editor/live-preview/code'
 import { calloutAt, parseImage } from '../editor/live-preview/decorate'
+import { katexNow } from '../editor/live-preview/widgets'
 import { type CellToken, type TableData, tableDataAt } from '../editor/live-preview/table'
 import { resolveCodeLang } from '../editor/markdown-lang'
 import { parsedTree } from '../editor/syntax'
@@ -106,8 +106,14 @@ function safeUrl(url: string): string | null {
 
 /**
  * KaTeX → MathML。`throwOnError: false` 同编辑器：公式写错只该难看，不能让整份导出崩掉。
+ *
+ * katex 是懒加载的（P4-6②），而这里身处一整棵同步递归、变不成异步 —— 由入口
+ * `export/index.ts` 先 `await loadKatex()` 保证它在手。真没到手也只退化成 `<code>`，
+ * 不让一份导出栽在这上面。
  */
 export function renderMathML(tex: string, display: boolean): string {
+  const katex = katexNow()
+  if (!katex) return `<code>${escapeHtml(tex)}</code>`
   try {
     return katex.renderToString(tex, {
       displayMode: display,

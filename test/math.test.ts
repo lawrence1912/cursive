@@ -1,8 +1,23 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { extractFence } from '../src/renderer/editor/live-preview/code'
-import { renderMath } from '../src/renderer/editor/live-preview/widgets'
+import { loadKatex, renderMath } from '../src/renderer/editor/live-preview/widgets'
+
+// katex 改成按需加载之后（P4-6②）renderMath 在模块到手前返回 null。
+// 编辑器里由 fillMath 先摆源码、加载完再换；这里断言的是「到手之后渲染成什么」
+beforeAll(async () => {
+  await loadKatex()
+})
 
 describe('KaTeX 渲染', () => {
+  it('模块没到手时返回 null（调用方据此先摆源码占位）', async () => {
+    // 拿一份全新的模块实例来看「加载之前」那一刻 —— fillMath 的占位分支、
+    // 导出那条 `<code>` 兜底都挂在这个返回值上，不守住它会静默退化
+    vi.resetModules()
+    const fresh = await import('../src/renderer/editor/live-preview/widgets')
+    expect(fresh.renderMath('x^2', false)).toBeNull()
+    expect(fresh.katexNow()).toBeNull()
+  })
+
   it('正常公式输出 .katex HTML', () => {
     expect(renderMath('x^2', false)).toContain('katex')
     expect(renderMath('e^{-x^2}', false)).toContain('katex')

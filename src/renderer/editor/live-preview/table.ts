@@ -14,7 +14,7 @@ import { EMOJI } from '../emoji'
 import { INLINE_MARKS } from '../inline-text'
 import { parsedTree } from '../syntax'
 import { Reveal, revealScope } from './reveal'
-import { renderMath } from './widgets'
+import { fillMath } from './widgets'
 
 /**
  * GFM 表格：块级渲染成真表格，并且**就地可编辑** —— 点进单元格不再把整块换回管道符源码。
@@ -610,9 +610,11 @@ export interface CellToken {
   at: number
   tags: string[]
   href?: string
-  /** KaTeX 渲染结果（此时 text 为空） */
-  math?: string
-  /** 公式源码。导出要按自己的输出格式再渲染一遍（MathML），拿不到 TeX 就只能重新解析一遍 */
+  /**
+   * 公式源码（此时 text 为空）。**存源码不存渲染结果**：katex 是懒加载的（P4-6②），
+   * 采片段这一刻多半还没到手；渲染交给 `fillMath` 在 DOM 那一步做。
+   * 导出也正好要它 —— 那边按自己的输出格式（MathML）再渲染一遍。
+   */
   tex?: string
 }
 
@@ -683,7 +685,7 @@ export function cellTokens(state: EditorState, from: number, to: number): CellTo
         const tex = text.slice(delim, Math.max(delim, text.length - delim))
         if (!tex.trim()) return false
         flush(node.from)
-        out.push({ text: '', at: node.from - from, tags: [...tags], math: renderMath(tex, false), tex })
+        out.push({ text: '', at: node.from - from, tags: [...tags], tex })
         pos = node.to
         return false
       }
@@ -713,7 +715,7 @@ function plainTokens(tokens: CellToken[], text: string): boolean {
   const one = tokens[0]
   return (
     tokens.length === 0 ||
-    (tokens.length === 1 && !one!.tags.length && !one!.math && one!.text === text)
+    (tokens.length === 1 && !one!.tags.length && !one!.tex && one!.text === text)
   )
 }
 
@@ -830,10 +832,10 @@ function renderTokens(cell: HTMLElement, tokens: CellToken[]): void {
       node.appendChild(el)
       node = el
     }
-    if (tok.math) {
+    if (tok.tex) {
       const math = document.createElement('span')
       math.className = 'cm-lp-math-inline'
-      math.innerHTML = tok.math
+      fillMath(math, tok.tex, false)
       node.appendChild(math)
     } else {
       node.appendChild(document.createTextNode(tok.text))

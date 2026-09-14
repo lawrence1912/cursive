@@ -1,6 +1,6 @@
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import TurndownService from 'turndown'
+import type TurndownService from 'turndown'
 import { docDir } from './live-preview'
 
 /**
@@ -14,17 +14,29 @@ import { docDir } from './live-preview'
  * 删除线补上 `~~`（turndown 默认不认 <del>/<s>）。
  */
 
-const turndown = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-  bulletListMarker: '-',
-  emDelimiter: '*',
-  strongDelimiter: '**'
-})
-turndown.addRule('strikethrough', {
-  filter: (node) => ['DEL', 'S', 'STRIKE'].includes(node.nodeName),
-  replacement: (content) => `~~${content}~~`
-})
+let turndownPromise: Promise<TurndownService> | null = null
+
+/**
+ * P4-6②：turndown 只在「粘贴一段 HTML」时才用得上，从静态 import 改成动态 ——
+ * 首屏不背它。第一次粘贴多花一次 chunk 加载（本地文件，毫秒级），之后一直在手。
+ */
+function loadTurndown(): Promise<TurndownService> {
+  turndownPromise ??= import('turndown').then((m) => {
+    const td = new m.default({
+      headingStyle: 'atx',
+      codeBlockStyle: 'fenced',
+      bulletListMarker: '-',
+      emDelimiter: '*',
+      strongDelimiter: '**'
+    })
+    td.addRule('strikethrough', {
+      filter: (node) => ['DEL', 'S', 'STRIKE'].includes(node.nodeName),
+      replacement: (content) => `~~${content}~~`
+    })
+    return td
+  })
+  return turndownPromise
+}
 
 const URL_RE = /^https?:\/\/\S+$/i
 
@@ -110,9 +122,13 @@ export function smartPaste(): Extension {
       // 没有 HTML（纯文本复制）→ 交给 CodeMirror 默认处理
       if (!html) return false
 
-      const { text } = choosePasteContent(plain, html, (h) => turndown.turndown(h))
+      // 这里已经决定自己接管（要么插转换结果、要么插纯文本），所以先 preventDefault，
+      // 再等 turndown 到手 —— 事件处理器不能是异步的，但插入可以晚一拍
       event.preventDefault()
-      insertText(view, text)
+      void loadTurndown().then((td) => {
+        const { text } = choosePasteContent(plain, html, (h) => td.turndown(h))
+        insertText(view, text)
+      })
       return true
     }
   })

@@ -1,4 +1,3 @@
-import katex from 'katex'
 import { syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
@@ -15,18 +14,69 @@ import type { Heading } from '../headings'
 
 // ---------- 数学公式（KaTeX） ----------
 
+type Katex = (typeof import('./katex'))['default']
+
+let katexMod: Katex | null = null
+let katexPromise: Promise<Katex> | null = null
+
+/**
+ * P4-6②：katex 261 KB，从静态 import 改成动态 —— 首屏不再替没有公式的文档背这一份。
+ * 与 `loadMermaid()` 同一个形状；导出（`export/index.ts` 要拿它出 MathML）走同一个
+ * promise，一份实例加载一次。
+ */
+export function loadKatex(): Promise<Katex> {
+  katexPromise ??= import('./katex').then((m) => (katexMod = m.default))
+  return katexPromise
+}
+
+/**
+ * 已经到手的 katex 实例，没到手是 null。给「自己不能变成异步」的调用方用 ——
+ * 导出（`export/render.ts` 是一整棵同步递归）先 `await loadKatex()` 再进来，
+ * 这里就总是拿得到。
+ */
+export function katexNow(): Katex | null {
+  return katexMod
+}
+
 /**
  * KaTeX 渲染成 HTML。throwOnError: false = 语法错误不抛异常，
  * 而是把原始 TeX 套在 .katex-error 里（katex.css 给它红色）——
  * 公式写错只会难看，不能把编辑器搞崩。
- * renderToString 是同步的，widget 的 toDOM 才能直接用（mermaid 那套异步占位模式不需要）。
+ *
+ * **katex 还没加载完时返回 null**（顺手把加载踢起来）：调用方要么先放源码占位、
+ * 回头再补（`fillMath`），要么先 `await loadKatex()` 再调（导出那条路）。
  */
-export function renderMath(tex: string, display: boolean): string {
-  return katex.renderToString(tex, {
+export function renderMath(tex: string, display: boolean): string | null {
+  if (!katexMod) {
+    void loadKatex()
+    return null
+  }
+  return katexMod.renderToString(tex, {
     displayMode: display,
     throwOnError: false,
     strict: false,
     output: 'html'
+  })
+}
+
+/**
+ * 把公式填进 `el`：katex 在手就同步填（不闪），不在手就先摆源码、加载完再换掉。
+ * 正文里的 `MathWidget` 和表格格子里的行内公式共用这一条 —— 两处的占位与补渲染
+ * 必须是同一套，否则「公式在表格里不显示」这种毛病只会在其中一边出现。
+ */
+export function fillMath(el: HTMLElement, tex: string, display: boolean): void {
+  const html = renderMath(tex, display)
+  if (html !== null) {
+    el.innerHTML = html
+    return
+  }
+  const delim = display ? '$$' : '$'
+  el.textContent = `${delim}${tex}${delim}`
+  void loadKatex().then(() => {
+    // 等待期间这一格可能已经被重画掉（DOM 换了新的）——往死节点里写没意义
+    if (!el.isConnected) return
+    const done = renderMath(tex, display)
+    if (done !== null) el.innerHTML = done
   })
 }
 
@@ -44,7 +94,7 @@ export class MathWidget extends WidgetType {
   toDOM(): HTMLElement {
     const el = document.createElement(this.display ? 'div' : 'span')
     el.className = this.display ? 'cm-lp-mathview' : 'cm-lp-math-inline'
-    el.innerHTML = renderMath(this.tex, this.display)
+    fillMath(el, this.tex, this.display)
     return el
   }
 }

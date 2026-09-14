@@ -1,5 +1,5 @@
 import type { EditorState } from '@codemirror/state'
-import { loadMermaid } from '../editor/live-preview/widgets'
+import { loadKatex, loadMermaid } from '../editor/live-preview/widgets'
 import { collectCodeLangs, escapeHtml, loadCodeLangs, renderBody, type ExportOpts } from './render'
 import { EXPORT_CSS } from './style'
 
@@ -31,7 +31,9 @@ export async function exportHtmlDocument(
   state: EditorState,
   opts: ExportOpts = {}
 ): Promise<HtmlExport> {
-  await loadCodeLangs(collectCodeLangs(state))
+  // katex 与语言包都是按需加载的，`renderBody` 是同步的一整棵递归 —— 两样都得先到手，
+  // 否则公式退化成 `<code>`、代码块整块没有颜色
+  await Promise.all([loadCodeLangs(collectCodeLangs(state)), loadKatex()])
   const body = renderBody(state, opts)
   let html = body.html
   for (const block of body.mermaid) {

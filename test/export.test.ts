@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { calloutAt } from '../src/renderer/editor/live-preview/decorate'
 import { buildBlocks } from '../src/renderer/editor/live-preview/index'
 import { tableEditField } from '../src/renderer/editor/live-preview/table'
+import { loadKatex } from '../src/renderer/editor/live-preview/widgets'
 import { plainInline } from '../src/renderer/editor/inline-text'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 import { parsedTree } from '../src/renderer/editor/syntax'
@@ -12,9 +13,12 @@ import { collectCodeLangs, loadCodeLangs, renderBody } from '../src/renderer/exp
 import { EXPORT_CSS } from '../src/renderer/export/style'
 
 // widgets.ts 的 currentTheme（mermaid 分支用）读 document.documentElement，
-// node 测试环境补一个最小桩（同 test/block.test.ts）
-beforeAll(() => {
+// node 测试环境补一个最小桩（同 test/block.test.ts）。
+// katex 按需加载（P4-6②）：这里直接调 renderBody（绕过 export/index.ts 那句
+// `await loadKatex()`），所以要自己先把它拉进来，否则公式全退化成 `<code>`
+beforeAll(async () => {
   ;(globalThis as { document?: unknown }).document ??= { documentElement: { dataset: {} } }
+  await loadKatex()
 })
 
 function stateOf(doc: string): EditorState {
