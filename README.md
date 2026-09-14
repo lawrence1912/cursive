@@ -5,6 +5,18 @@
 macOS 上的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
 标记默认隐藏，光标移进哪一行，哪一行才回显源码。
 
+![Cursive 浅色界面](docs/shots/light.png)
+
+<details>
+<summary>深色（还有跟随系统与护眼两套，以及用户自定义皮肤）</summary>
+
+![Cursive 深色界面](docs/shots/dark.png)
+
+</details>
+
+> 图里这份文档就是仓库根目录的 [`demo.md`](demo.md) —— 装好之后直接打开它，
+> 上面这些构件（表格 / 公式 / 告示块 / mermaid / 代码块语言条）都能当场点着玩。
+
 ## 当前进度
 
 **已经是所见即所得了。** 打字即渲染，markdown 标记默认隐藏，光标移进某一行才回显源码。
@@ -247,8 +259,19 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
 # +4s 写 /tmp/cursive-shell-e2e.json    （read→save 逐字节往返 + 装饰计数 + 图片加载），然后退出
 ```
 
-`CURSIVE_SMOKE` 之外启动就是正常交互应用，绝不自动退出。可选：
-`CURSIVE_SMOKE_SHOT=<png>` 截图、`CURSIVE_SMOKE_THEME=dark|light|sepia|system` 切主题后截图、
+`CURSIVE_SMOKE` 之外启动就是正常交互应用，绝不自动退出。
+
+> **探针是会改东西的**：改标题层级、往表格里打字、追加 marker（自动保存还会落盘），
+> `treeProbe` 还会在**树根目录里真的建文件、改名、移动、删除**。所以永远只在
+> **夹具的副本**上跑（`release.sh` 就是先把 fixtures 拷进 `/tmp/cursive-e2e/` 才跑的），
+> 别拿自己在乎的文件和目录去试。只想拍张图就加 `CURSIVE_SMOKE_SHOT_CLEAN=1`，
+> 那条路跳过全部探针：文档一个字不动，树根一个文件不碰。
+
+可选：
+`CURSIVE_SMOKE_SHOT=<png>` 截图、`CURSIVE_SMOKE_SHOT_CLEAN=1` 只截图不跑探针、
+`CURSIVE_SMOKE_SHOT_JS=<js>` 快门前跑一段 JS 给截图「摆姿势」（挪光标、收格式栏、滚位置）、
+`CURSIVE_SMOKE_THEME=dark|light|sepia|system` 切主题后截图（**走查完记得用 system 复位** ——
+主题是写进 localStorage 的）、
 `CURSIVE_SMOKE_MENU=<菜单动作>` 截图前派一个菜单动作（目检设置面板这类）、
 `CURSIVE_SMOKE_SHOT_SEARCH=1` 截图前把跨文件搜索面板留在开着的状态、
 `CURSIVE_SMOKE_PDF=<路径>` 顺带导出 PDF（结果含页数与页尺寸；纸张与页边距用
