@@ -49,6 +49,39 @@ GFM 表格、KaTeX 数学公式（`$…$` / `$$…$$`，货币符号不吃，错
 mermaid 图表（随主题配色，语法错误保留源码+报错）、
 告示块（13 种类型 6 档配色，图标 + 中文类型名，`[!note]-` 可折叠）。
 
+## 安装
+
+需要 macOS 12 或更新。两条路，选一条。
+
+### 一、下载现成的包
+
+到 [Releases](../../releases) 拿 `Cursive-<版本>.dmg`，打开后把 Cursive 拖进「应用程序」。
+
+**第一次打开会被 macOS 拦住**，提示「无法验证开发者」或「已损坏，无法打开」。
+包没有坏 —— 它只做了 ad-hoc 签名，**没有 Apple Developer ID 证书**（那是 $99/年的付费项目，
+这个项目没买），而凡是从浏览器下载的文件都会被系统打上隔离属性，两者一撞 Gatekeeper 就拦。
+
+任选一种放行，做一次就够：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Cursive.app
+```
+
+或者不用终端：双击被拦之后打开「系统设置 → 隐私与安全性」，往下翻会多出一行
+「仍要打开」，点它。（新版 macOS 已经取消了「右键 → 打开」那个老办法，只剩这一处。）
+
+### 二、自己编译（不会被拦）
+
+本机编译出来的包**不带隔离属性**，Gatekeeper 不管它，省掉上面那一步：
+
+```bash
+npm install
+./shell-swift/release.sh          # 测试 + E2E 全绿才出包 → dist/Cursive.app
+CURSIVE_DMG=1 ./shell-swift/release.sh   # 顺带出 dist/Cursive-<版本>.dmg
+```
+
+只需要 Node 和 Xcode Command Line Tools（`xcode-select --install`），**不需要装 Xcode.app**。
+
 ## 快捷键
 
 | | |
@@ -193,8 +226,12 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 dist/Cursive-<versi
 
 `make-app.sh` 把 `out/renderer` 塞进 `Contents/Resources/renderer`，写入 `Info.plist`
 （`.md` 关联 rank=Alternate，不抢默认打开方式），再做 ad-hoc 签名
-（`codesign --force --deep --sign -`）。自用到此为止 —— 本机构建的包没有 quarantine
-属性，Gatekeeper 不拦。要发给别人才需要 Apple Developer 证书 + 公证。
+（`codesign --force --deep --sign -`）。本机构建的包没有 quarantine 属性，Gatekeeper 不拦；
+**从 Releases 下载的包会被拦**，放行办法见上面「安装」。
+
+**签名公证是有意不做的**：Developer ID 证书 + 公证要 Apple Developer Program（$99/年），
+换来的只是「下载版少点一次『仍要打开』」。这个项目选择把这笔钱省掉，代价写在安装说明里
+明说 —— 想要零提示的体验就自己编译，那条路本来就不经过 Gatekeeper。
 
 图标的矢量源只有 `brand/app-icon.svg` 一份，`npm run icon` 用系统 `sips` + `iconutil`
 打出 `build/icon.png`（1024 母版）和 `build/icon.icns`，**每一档尺寸都从矢量重新栅格**，
@@ -239,4 +276,12 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
   上限 800 处命中 / 6000 个文件，触顶会在结果区注明「已截断」
 - 自定义皮肤是叠在内置主题之后的一张 CSS，写坏了只能删文件重开（没有出错回滚）
 - 多窗口之间只共享 localStorage 里的偏好；窗口位置只记第一个窗口的
-- 尚无 pandoc 导出（docx / epub），也没有签名公证与自动更新
+- 尚无 pandoc 导出（docx / epub）
+- 没有签名公证，也没有自动更新：下载版第一次打开要手动放行一次（见「安装」），
+  新版本要自己回 Releases 拿
+
+## 许可
+
+[MIT](LICENSE) © 2026 Lawrence。
+
+依赖也都是宽松许可，不冲突：CodeMirror 6、@lezer/\*、KaTeX、mermaid、turndown 均为 MIT。

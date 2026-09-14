@@ -1,7 +1,7 @@
 # Cursive 路线图
 
 > 基准 `cd54408` 之后（2026-09-14，**P0 / P1 / P2 / P3 全部完成，P4-1 导出 HTML + P4-2 PDF 真分页 + P4-6①② 启动提速已落地**）。现状盘点 + 对标 Typora / MarkText + 按依赖顺序排的 P0–P4 清单。
-> **剩下的是 P4-3～P4-5（复制为 HTML / pandoc / 签名公证）、P4-6③（窗口提前建）和未排期的 P5。**
+> **剩下的是 P4-3（复制为 HTML）、P4-4（pandoc）、P4-6③（窗口提前建）和未排期的 P5；P4-5 签名公证已决定不做。**
 > 在线版（同一份内容，带样式）：<https://claude.ai/code/artifact/462ed29a-cc2f-4026-8e01-e4fa47e104a0>
 >
 > 开发上下文、契约、已踩的坑见 `CONTEXT.md`；这份只管「接下来做什么」。
@@ -588,7 +588,7 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 | ✅ P4-2 | PDF 真分页 | 全部完成：打印 P4-1 的导出 HTML（`printOperation`），A4/Letter + 三档页边距 + 页码，标题不落在页脚上。**明细见下方小节** | ✅ |
 | P4-3 | 复制为 HTML / 纯 Markdown | 选中内容复制为富文本（贴进飞书/邮件带格式）或纯源码。`NSPasteboard` 同时写两种类型 | 0.5 天 |
 | P4-4 | pandoc 桥接 | docx / epub / latex / rtf。检测不到 pandoc 就灰掉菜单并提示安装（本机未装，原计划已写明降级策略） | 1 天 |
-| P4-5 | 签名公证 + 自动更新 | 现在是 ad-hoc 签名，拷到别的机器会被 Gatekeeper 拦。要分发就需要 Developer ID 签名 + 公证 + Sparkle 通道。**纯自用则永远不做；一旦想给第二个人用，这项就变成 P0** | 2 天 |
+| ~~P4-5~~ | ~~签名公证 + 自动更新~~ | **有意不做**（2026-09-14 定）。开源发布选的是「源码 + 不签名的二进制」：源码自己编译的包不带 quarantine，Gatekeeper 根本不管；下载版第一次打开手动放行一次（README「安装」里写明了办法与原因）。Developer ID + 公证要 $99/年，换来的只是省掉那一次点击，不值。**想通了再做的话**：`make-app.sh` 的 ad-hoc 换成 `--options runtime --timestamp --sign "Developer ID Application: …"`（强化运行时是公证的硬前提，现在没开），再 `notarytool submit` + `stapler staple`；开了强化运行时之后 WKWebView / 两个自定义 scheme / 离屏打印都要重跑一遍 E2E。Sparkle 与签名可以拆开，GitHub Releases 本身就是分发渠道 | — |
 
 #### ✅ P4-1 导出 HTML —— 落地记录
 
@@ -766,4 +766,4 @@ electron-vite / electron-builder 依赖；构建改为根目录 `vite.config.ts`
 | 第 12 段 | P4-2 PDF 真分页 | ✅ 完成：⌘P 出的是 A4 真分页 PDF（可选 Letter / 三档页边距 / 页码），内容就是导出 HTML 那一份。**「导出 PDF 是单页长条」这条已知限制到此消除** |
 | 后补 | 界面语言切换（中文 ⇄ English） | ✅ 完成：设置面板一键切换，渲染层 UI 与原生菜单/对话框全量跟随（契约 v16）。默认语言：偏好记过的听偏好、老用户保持中文、全新安装跟随系统。字典可扩展 —— 加语言 = 加一个字典文件 |
 | 后补 | 跨窗口偏好同步（契约 v17） | ✅ 完成：主题 / 字号 / 行距 / 栏宽 / 皮肤 / 语言在多窗口之间实时一致。此前 localStorage 只是共享的**存储**、不是共享的**通知**，各窗口启动时各读一份进内存；而 `NSApp.appearance` 是 **app 级**的 —— A 窗切深色，B 窗会停在「标题栏是深的、正文是浅的」。壳只当总线（不读不存），收端 `Prefs.adopt()` 不落盘、不回广播、不重推 `setAppearance` |
-| 随后 | P4 剩下的三项 | 性价比排序：P4-3 复制为 HTML（选中内容贴进飞书/邮件带格式）→ P4-4 pandoc（docx/epub）。P4-5 签名公证只在「想给第二个人用」时才变成 P0 |
+| 随后 | P4 剩下的两项 | 性价比排序：P4-3 复制为 HTML（选中内容贴进飞书/邮件带格式）→ P4-4 pandoc（docx/epub）。P4-5 签名公证**已决定不做**（开源走「源码 + 不签名二进制」，见上） |
