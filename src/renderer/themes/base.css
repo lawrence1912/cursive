@@ -166,40 +166,50 @@
 /* ---- 护眼（P3-4）----
    暖纸色，算在**浅色一侧**：`setAppearance` 给壳的是 .aqua，系统面板跟着浅。
    只覆写 token，组件样式一条都不用改 —— 这正是当初把颜色全收进变量的回报。
-   语法高亮沿用浅色那套，只把绿/蓝往暖里挪一点，落在米底上才不发灰。 */
+
+   配色参考 Claude 那套暖中性纸：纸面 #faf9f5、次层 #f0eee6、一支陶土色强调。
+   原来那版 #f8f2e4 是 S59% / L93% 的**饱和米黄**，正文底 + 代码块 + 当行底三层叠上去
+   整页发暗 —— 「护眼」不等于「把纸调深」。现在改成**降饱和、提亮度**
+   （S44% / L96.5%）：暖意留在色相里而不是浓度里，少挨蓝光，纸却还是纸。
+   亮度梯子也收窄到三档：纸 96.5 → 浮层 93.9 → 代码/次层 91.8，跨度不到原来一半。 */
 :root[data-theme="sepia"] {
   color-scheme: light;
-  --bg: #f8f2e4;
-  --fg: #4a3f35;
-  /* 4.55:1 on --bg。原 #7d6f5f 只有 4.36 —— 护眼底色本来就亮，次要文字得再压一档 */
-  --muted: #7a6c5d;
-  --mark-idle: #a89982;
-  --accent: #96612f;
-  --border: #e6dbc3;
-  --sel: #ecdcb8;
-  --code-bg: #f0e7d2;
-  --surface: #f3ebd9;
-  --panel: #f8f2e4;
-  --divider: #ece1cb;
-  --accent-wash: #efe2c8;
-  --warn: #a8541f;
-  --match: rgb(214 150 40 / 30%);
-  --match-on: rgb(204 120 30 / 55%);
-  --focus-fg: #bcb09b;
-  --hl-keyword: #97528f;
-  --hl-string: #2f7d52;
-  --hl-number: #a35f21;
-  --hl-func: #2f6ba8;
-  --hl-type: #7d6118;
-  --hl-prop: #1d6f79;
-  --hl-ins: #2f7d52;
-  --hl-del: #b23a2c;
-  --cal-note: #3a72b8;
-  --cal-tip: #2c7f50;
-  --cal-warn: #a35f21;
-  --cal-danger: #b23a2c;
-  --cal-example: #7a51c0;
-  --cal-quote: #7d6f5f;
+  --bg: #faf8f2;
+  /* 10.6:1 on --bg。暖近黑，不是棕 —— 原 #4a3f35 偏红，长文看着像褪色旧书 */
+  --fg: #3e3a33;
+  --muted: #6f6a5e;      /* 5.1:1 */
+  --mark-idle: #a49c8b;  /* 2.6:1，装饰档 */
+  /* 陶土红：Claude 那支珊瑚 #d97757 压到正文可读档 —— 原色在这张纸上只有 2.9:1，
+     当链接色不合格；这里 4.7:1 */
+  --accent: #b0552e;
+  --border: #e7e0d0;
+  --sel: #efdfcc;
+  --code-bg: #f2eee2;
+  --surface: #f6f2e9;
+  --panel: #faf8f2;
+  --divider: #f0ebdf;
+  /* 当行浅底：从 --accent 兑出来的一层陶土。原 #efe2c8 是块实心米砖，
+     侧栏活动行 / 大纲当前行整天顶在那儿，正是「太深」最扎眼的一处 */
+  --accent-wash: #f6e9df;
+  --warn: #9d6118;       /* 4.8:1。比 --accent 黄一档，标签上的 ⚠ 才不会看成链接 */
+  --match: rgb(214 158 48 / 28%);
+  --match-on: rgb(204 128 34 / 52%);
+  --focus-fg: #b9b2a1;
+  /* 纸亮起来之后高亮不用再往深里压：回到浅色那套的亮度，只留一点暖偏移 */
+  --hl-keyword: #9d55ab;
+  --hl-string: #2d8659;
+  --hl-number: #a4651b;
+  --hl-func: #3072b8;
+  --hl-type: #85681c;
+  --hl-prop: #1f7581;
+  --hl-ins: #2d8659;
+  --hl-del: #bb3d2e;
+  --cal-note: #3b76c4;
+  --cal-tip: #2e855a;
+  --cal-warn: #a4651b;
+  --cal-danger: #bb3d2e;
+  --cal-example: #8154cc;
+  --cal-quote: #6f6a5e;
 }
 
 * { box-sizing: border-box; }
@@ -313,7 +323,9 @@ body {
 
 /* ---------- P2-8 底部悬浮格式栏 ----------
    贴编辑区（不是窗口）底部居中：#center 是定位上下文，侧边栏/大纲一开一关，
-   条子跟着编辑区一起挪。它盖在正文上，滚动下边距由 setup.ts 的 bottomOverlay 让出 */
+   条子跟着编辑区一起挪。它盖在正文上，滚动下边距由 setup.ts 的 bottomOverlay 让出。
+   **贴着状态栏坐**（下沿只留 6px）：它是压在正文上的浮层，离底越近压住的正文越少，
+   而且与状态栏连成一片，读起来是「窗口底下那一条」而不是半空中飘着的一块补丁 */
 #center {
   position: relative;
 }
@@ -321,7 +333,7 @@ body {
 #format-bar {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: 6px;
   transform: translateX(-50%);
   z-index: 5;
   max-width: calc(100% - 32px);
@@ -334,6 +346,61 @@ body {
 }
 #format-bar.is-hidden {
   display: none;
+}
+
+/* 收起态：条子让位给一颗手柄。两者互斥显示，位置不变 —— 点哪儿收起来的，就从哪儿回来 */
+#format-bar.is-collapsed .fb-bar {
+  display: none;
+}
+#format-bar:not(.is-collapsed) .fb-handle {
+  display: none;
+}
+
+/* 手柄：一颗窄药丸。与条子同一套材质（半透明 + 背景模糊），只是矮一半 */
+.fb-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 20px;
+  padding: 0;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  box-shadow:
+    0 6px 20px rgb(0 0 0 / 12%),
+    0 1px 3px rgb(0 0 0 / 8%);
+  cursor: pointer;
+}
+.fb-handle:hover {
+  color: var(--fg);
+}
+.fb-handle .ic {
+  width: 12px;
+  height: 12px;
+}
+/* 折角那颗与别的按钮同宽，但它不是命令 —— 颜色压淡一档，别跟开关抢视线。
+   **必须 sticky 钉在右端**：条子按钮多，窄窗口下 `.fb-bar` 是横着滚的，
+   折角要是跟着滚走，「把这条让开」的开关就恰好在最需要它的时候够不着了。
+   钉住就得有不透明底色 —— 滚过去的按钮从它底下过，左边那道阴影交代「后面还有」 */
+.fb-fold {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  background: var(--surface);
+  box-shadow: -8px 0 8px -6px rgb(0 0 0 / 12%);
+}
+.fb-fold:hover {
+  color: var(--fg);
+  background: var(--surface);
+}
+.fb-fold .ic {
+  width: 13px;
+  height: 13px;
 }
 
 .fb-bar {
@@ -1122,7 +1189,9 @@ body.is-dragging-row * { cursor: grabbing !important; }
   border-radius: 2px;
 }
 
-/* 右边缘的拖拽手柄 */
+/* 右边缘的拖拽手柄。抓取区留 6px（手感），但**画出来的只有一条线** ——
+   悬停时是那条 1px 分隔线自己亮起来，不是多出来一根 6px 的色条。
+   ::after 的 left:50% 正落在 #sidebar 的 border-right 上（手柄跨在分隔线两边）。 */
 .sb-resize {
   position: absolute;
   top: 0;
@@ -1132,7 +1201,20 @@ body.is-dragging-row * { cursor: grabbing !important; }
   cursor: col-resize;
   z-index: 5;
 }
-.sb-resize:hover { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.sb-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.sb-resize:hover::after { opacity: 0.4; }
+/* 拖动中一直亮着：拖到宽度上下限后指针会跑出手柄，:hover 就没了 —— 那时候灭掉最不该 */
+body.is-resizing .sb-resize::after { opacity: 0.7; }
 
 /* ---------- 标签栏 ----------
    标签**等宽**（flex: 1 1 0）：宽度只跟数量走，不跟文件名长短走 —— 名字一长一短
