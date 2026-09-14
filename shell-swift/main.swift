@@ -67,6 +67,7 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.file.saveAs":     ["另存为…", "Save As…"],
     "menu.file.exportHtml": ["导出为 HTML…", "Export as HTML…"],
     "menu.file.exportPdf":  ["导出为 PDF…", "Export as PDF…"],
+    "menu.file.closeTab":   ["关闭标签", "Close Tab"],
     "menu.file.close":      ["关闭窗口", "Close Window"],
     // ---- 编辑 ----
     "menu.edit":            ["编辑", "Edit"],
@@ -258,7 +259,7 @@ let BRIDGE_JS = """
     userThemes: () => call('userThemes'),
     exportHtml: (html, name) => call('exportHtml', [html, name]),
     newWindow: (path) => call('newWindow', [path ?? null]),
-    lastFolder: () => call('lastFolder'),
+    workspaceRoot: () => call('workspaceRoot'),
     readClipboardText: () => call('readClipboardText'),
     writeClipboardText: (text) => call('writeClipboardText', [text]),
     pasteImage: (dir) => call('pasteImage', [dir]),
@@ -916,6 +917,51 @@ func mark(_ what: String) {
     FileHandle.standardError.write("[timing] \(ms)ms \(what)\n".data(using: .utf8)!)
 }
 
+/// 崩溃恢复的**候选集**：进程启动那一刻盘上已经有的 scratch id。
+///
+/// 没有这一层，`scratchList` 会把**当前正开着的窗口刚落盘的草稿**也当成「上次崩溃留下的」
+/// 递给后开的窗口：在 A 窗口的未命名文档里打几个字（停 2s 自动落盘），再开一个窗口，
+/// 那几个字就跟过去了 —— 而且两边各存一份、各自再落盘，越滚越多。
+///
+/// 两条规矩合起来才够：① 只认**启动前**就在盘上的（那才叫「上次留下的」）；
+/// ② 交出去一份就划掉 —— 恢复是**一次性**的，第二个窗口不该再拿到同一份。
+var recoverableScratch: Set<String> = []
+/// E2E 用：`scratchList` 被问过几次 / 一共交出去过几份。「一次性」这条不变量光看一个窗口看不出来
+var scratchQueries = 0
+var scratchHandouts = 0
+
+/// 无路径文档的暂存目录（崩溃恢复）。窗口与 AppDelegate 都要够得着，所以摆在文件级
+func scratchDirURL() -> URL {
+    let fm = FileManager.default
+    let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let dir = base.appendingPathComponent("cursive/scratch", isDirectory: true)
+    // 改名 typmd → cursive：旧目录还在、新的还没建过，就把崩溃恢复的暂存整个挪过来
+    let legacy = base.appendingPathComponent("typmd", isDirectory: true)
+    if fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: dir.path) {
+        try? fm.createDirectory(at: dir.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.moveItem(at: legacy.appendingPathComponent("scratch"), to: dir)
+        try? fm.removeItem(at: legacy)
+    }
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+/// **必须在第一个窗口出现之前调**（`applicationWillFinishLaunching`）：晚一步，
+/// 这一轮自己写的草稿就会混进候选集，等于没修
+func snapshotRecoverableScratch() {
+    let files = (try? FileManager.default.contentsOfDirectory(
+        at: scratchDirURL(), includingPropertiesForKeys: nil)) ?? []
+    recoverableScratch = Set(
+        files.filter { $0.pathExtension == "json" }.map { $0.deletingPathExtension().lastPathComponent })
+}
+
+/// `/a/b/c.md` → `/a/b`。**必须是绝对路径**（树根同时是防穿越守卫的界，相对路径守不住），
+/// 根目录不算 —— 把 `/` 挂成树根等于让文件树去读整个磁盘
+func parentDir(_ path: String) -> String? {
+    let dir = (path as NSString).deletingLastPathComponent
+    return dir.hasPrefix("/") && dir != "/" ? dir : nil
+}
+
 /// 文件级：WindowController 与 AppDelegate 都要判「这是个文件夹吗」
 func isDirectory(_ path: String) -> Bool {
     var flag: ObjCBool = false
@@ -934,7 +980,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 待推给渲染层的「树根文件夹」（新窗口带着文件夹开出来时用），同 pendingOpen 要等就绪
     var pendingFolder: String?
     var lastDocPath: String?
-    /// pickFolder 选中的文件树根：文件树增删的防穿越守卫以它为界（P3-1）
+    /// **这个窗口的工作区根**（契约 v19）：带文件夹开出来的 = 那个文件夹，带文件开出来的
+    /// = 文件所在的目录，空手开的 = 上次 pickFolder 选过的那个。同时是文件树增删的
+    /// 防穿越守卫之界（P3-1）
     var treeRoot: String?
     /// 渲染层推来的当前文档路径（setDocState），用于导出文件名与相对图片解析
     var docPath: String?
@@ -942,20 +990,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     var watchers: [String: DispatchSourceFileSystemObject] = [:]
     var lastNotify: [String: Date] = [:]
 
-    var scratchDir: URL {
-        let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("cursive/scratch", isDirectory: true)
-        // 改名 typmd → cursive：旧目录还在、新的还没建过，就把崩溃恢复的暂存整个挪过来
-        let legacy = base.appendingPathComponent("typmd", isDirectory: true)
-        if fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: dir.path) {
-            try? fm.createDirectory(at: dir.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.moveItem(at: legacy.appendingPathComponent("scratch"), to: dir)
-            try? fm.removeItem(at: legacy)
-        }
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
+    var scratchDir: URL { scratchDirURL() }
 
     /// P0-3：外部变更监听。rename/delete 后必须重开重注册（rename-replace 保存会让 fd 失效）
     private func watch(_ path: String) {
@@ -1015,8 +1050,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 上次打开的文件夹：渲染层 restore() 会把它挂成树根，防穿越守卫也得先认得它。
         // **自检下一律不恢复** —— treeProbe 会在树根里真的建文件、删文件，
         // 恢复用户上次那个文件夹等于拿人家的目录做实验
-        // 带着文件夹开出来的窗口：树根立刻就位（防穿越守卫要用，不能等渲染层就绪）
-        treeRoot = pendingFolder ?? (smokeAuto ? nil : UserDefaults.standard.string(forKey: "lastFolder"))
+        // 带着文件夹开出来的窗口：树根立刻就位（防穿越守卫要用，不能等渲染层就绪）。
+        // **带着文件开出来的窗口：树根 = 它所在的目录** —— 一个窗口 = 一个工作区，从 Finder
+        // 双击一个 .md 进来，工作区就是它旁边那些文件。这里回落到 `lastFolder` 的话，侧栏会
+        // 挂着一棵与这份文档毫不相干的树（「打开一个文件，带出上次那个文件夹」就是这么来的），
+        // 而且渲染层 `setActive` 的兜底（「没开过文件夹就挂文档所在目录」）也顶不上 ——
+        // 它的条件是 `!root`，而这时 root 已经被那个历史文件夹占住了
+        treeRoot = pendingFolder
+            ?? pendingOpen.flatMap(parentDir)
+            ?? (smokeAuto ? nil : UserDefaults.standard.string(forKey: "lastFolder"))
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(FileSchemeHandler(root: findRendererRoot()), forURLScheme: "app")
         config.setURLSchemeHandler(FileSchemeHandler(root: nil), forURLScheme: "safe-file")
@@ -1099,11 +1141,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        let wv = webView!
-        let staleCache: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
-        WKWebsiteDataStore.default().removeData(ofTypes: staleCache, modifiedSince: .distantPast) {
-                wv.load(URLRequest(url: URL(string: "app://r/index.html")!))
-        }
+        // 直接 load。这里曾经先 `removeData` 清一遍 WebKit 磁盘/内存缓存、在它的回调里才
+        // 加载 —— 用 CURSIVE_TIMING 量过，那个回调要等 140–250ms，**而且等的是一件不必做
+        // 的事**：`FileSchemeHandler` 每条响应都显式带 `Cache-Control: no-store`（原因见那边
+        // 的注释），app://r 的东西根本进不了缓存，没有「旧 bundle」可清。
+        webView.load(URLRequest(url: URL(string: "app://r/index.html")!))
 
     }
 
@@ -1643,9 +1685,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             appDelegate?.newWindow(open: args.first as? String)
             respond(id, NSNull())
 
-        case "lastFolder":
-            let last = smokeAuto ? nil : UserDefaults.standard.string(forKey: "lastFolder")
-            respond(id, last ?? NSNull())
+        case "workspaceRoot":
+            // 契约 v19：**这个窗口的**工作区根，不是全局的「上次那个文件夹」。
+            // 三种来源（带文件夹 / 带文件 / 空手开）都在 `setup()` 里一次定好，这里只管报
+            respond(id, treeRoot ?? NSNull())
 
         case "readClipboardText":
             // ⇧⌥⌘V 粘贴为纯文本：剪贴板由壳侧读（判断 3：渲染层不碰原生）
@@ -1693,14 +1736,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
         case "scratchList":
             var list: [[String: Any]] = []
+            scratchQueries += 1
             if let files = try? FileManager.default.contentsOfDirectory(at: scratchDir, includingPropertiesForKeys: nil) {
                 for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where f.pathExtension == "json" {
+                    let sid = f.deletingPathExtension().lastPathComponent
+                    // 只认启动前就在盘上的，而且只认一次（见 `recoverableScratch`）——
+                    // 少了这一句，A 窗口正在编辑的未命名文档会被当成崩溃残留递给每个新窗口
+                    guard recoverableScratch.contains(sid) else { continue }
                     if let data = try? Data(contentsOf: f),
                        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let content = obj["content"] as? String,
                        let fp = obj["fingerprint"] as? [String: Any] {
+                        recoverableScratch.remove(sid)
+                        scratchHandouts += 1
                         list.append([
-                            "id": f.deletingPathExtension().lastPathComponent,
+                            "id": sid,
                             "content": content,
                             "fp": ["eol": fp["eol"] ?? "\n", "bom": fp["bom"] ?? false]
                         ])
@@ -1914,6 +1964,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           sidebar: !!document.querySelector('#sidebar'),
           status: (document.querySelector('#status-file') || {}).textContent || null,
           sbRows: document.querySelectorAll('.sb-row').length,
+          // 契约 v19：侧栏真的挂在这份文档所在的目录上（`.sb-title` 的 title = 树根全路径）
+          sbRoot: (document.querySelector('.sb-title') || {}).title || null,
           sbDisplay: getComputedStyle(document.getElementById('sidebar')).display,
           cmTextLen: (document.querySelector('.cm-content')?.textContent || '').length,
           tabs: document.querySelectorAll('.tab-item').length,
@@ -2825,8 +2877,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // P3-7 多窗口：放在**最末尾** —— 新窗口会抢走 key，前面那些量位置/焦点的断言
         // 必须都跑完了。窗口数由壳侧在写 JSON 时补上（网页看不到原生的窗口表）
         // 契约 v14：带文件夹开新窗口（「打开文件夹 = 新窗口」走的就是这条）
-        if (path.indexOf('kitchen-sink.md') >= 0) window.api.newWindow(docDir)
-        await new Promise((r) => setTimeout(r, 700))
+        // secondWindow：崩溃恢复用例也开一个 —— 「草稿只交出去一次」这条不变量，
+        // 得有第二个窗口真去问一次 scratchList 才测得出来。它要跑完整条启动路径，等久一点
+        const wantsSecond = path.indexOf('kitchen-sink.md') >= 0 || secondWindow
+        if (wantsSecond) window.api.newWindow(docDir)
+        await new Promise((r) => setTimeout(r, secondWindow ? 1600 : 700))
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
@@ -2870,7 +2925,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             body,
             arguments: ["path": source, "outPath": outPath, "docDir": docDir,
                         // 目检开关：截图前把跨文件搜索面板留在开着的状态
-                        "shotSearch": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_SEARCH"] != nil],
+                        "shotSearch": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_SEARCH"] != nil,
+                        // 崩溃恢复那一轮（种了草稿 + 拖慢应答）末尾也开第二个窗口
+                        "secondWindow": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SCRATCH_DELAY"] != nil],
             in: nil, in: .page
         ) { [weak self] result in
             guard let self else { return }
@@ -2882,6 +2939,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             out["windows"] = appDelegate?.windows.count ?? 0
             // 每个窗口的树根：带文件夹开出来的那个应该立刻就位（守卫要用）
             out["windowRoots"] = appDelegate?.windows.map { $0.treeRoot ?? "" } ?? []
+            // 崩溃恢复的「一次性」不变量（见 `recoverableScratch`）：
+            // 问过几次 / 交出去几份 / 候选集里还剩几份
+            out["scratchQueries"] = scratchQueries
+            out["scratchHandouts"] = scratchHandouts
+            out["scratchPending"] = recoverableScratch.count
             switch result {
             case .success(let v):
                 out["result"] = v
@@ -3010,6 +3072,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         mark("willFinishLaunching")
         appDelegate = self
+        // **在任何窗口出现之前**把「上次留下的草稿」定下来（见 `recoverableScratch`）
+        snapshotRecoverableScratch()
         buildMenu()
     }
 
@@ -3045,12 +3109,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows.removeAll { $0 === wc }
     }
 
-    /// Finder 双击 .md：开在当前窗口的新标签里（Typora 同款）；一个窗口都没有就先开一个。
+    /// Finder 双击 .md / 「打开方式」/ `open -a`：**开在一个工作区罩得住它的那个窗口里**。
+    /// 有窗口的树根正好是它所在的目录（或祖先目录）→ 在那儿开一个新标签（同一个文件夹里的
+    /// 第二个文件不该再弹一个窗口）；没有 → 新开一个，树根落在它自己的目录上。
+    /// 从前是「一律塞给当前窗口」，于是一个窗口里会同时摆着 A 文件夹的树和 B 文件夹的文档。
     /// **文件夹一律开新窗口** —— 一个窗口 = 一个工作区（与渲染层的「打开文件夹」同一条规矩）
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        if isDirectory(filename) { newWindow(open: filename); return true }
-        if let wc = key { wc.openFile(filename) } else { newWindow(open: filename) }
+        // **先转成绝对路径**：命令行 `cursive-shell a.md` 也会先走这一发（见
+        // `applicationDidFinishLaunching` 的注释），AppKit 把 argv 里那个相对路径原样递过来。
+        // 相对路径进了渲染层，`shared/path.ts` 的 `dirname()` 找不到目录分隔符 → 返回 null
+        // → `docDir` 是 null → 正文里 `![](docs/x.png)` 这类相对路径图片**一张都渲染不出来**
+        // （退化成 alt + 灰路径），侧边栏也开不出文件树。argv 那条路本来就 standardize 过，
+        // 这里补齐的是「openFile: 抢先到达」的那条。
+        let path = URL(fileURLWithPath: filename).standardizedFileURL.path
+        if isDirectory(path) { newWindow(open: path); return true }
+        if let wc = windowOwning(path) {
+            wc.window?.makeKeyAndOrderFront(nil)
+            wc.openFile(path)
+        } else {
+            newWindow(open: path)
+        }
         return true
+    }
+
+    /// 工作区罩得住这个文件的窗口：树根就是它所在的目录，或者是它的祖先目录
+    /// （后者正是渲染层 `setActive` 会逐级展开到它的那种情形）。当前窗口优先。
+    private func windowOwning(_ path: String) -> WindowController? {
+        guard let dir = parentDir(path).map({ ($0 as NSString).standardizingPath }) else { return nil }
+        let owns = { (wc: WindowController) -> Bool in
+            guard let root = wc.treeRoot.map({ ($0 as NSString).standardizingPath }), !root.isEmpty
+            else { return false }
+            return dir == root || dir.hasPrefix(root + "/")
+        }
+        if let current = key, owns(current) { return current }
+        return windows.first(where: owns)
     }
 
     /// 最后一个窗口关掉后应用不退出（多窗口应用的标准行为）；
@@ -3095,7 +3187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(item(L("menu.file.exportHtml"), "file:export-html", key: "e", modifiers: [.command, .shift]))
         file.addItem(NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)), keyEquivalent: "p"))
         file.addItem(.separator())
-        file.addItem(NSMenuItem(title: L("menu.file.close"), action: Selector(("performClose:")), keyEquivalent: "w"))
+        // ⌘W 关标签（渲染层管标签表）、⇧⌘W 关窗口 —— macOS 上有标签的应用都是这么分的
+        file.addItem(item(L("menu.file.closeTab"), "file:close-tab", key: "w"))
+        file.addItem(NSMenuItem(title: L("menu.file.close"), action: Selector(("performClose:")), keyEquivalent: "W"))
         fileItem.submenu = file
 
         let editItem = NSMenuItem(); main.addItem(editItem)

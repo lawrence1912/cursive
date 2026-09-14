@@ -21,7 +21,9 @@ rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md \
    test/fixtures/dialect.md test/fixtures/callout.md "$FIX/"
 cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
-printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n' > "$FIX/img.md"
+# 三张图各守一条链：① 百分号编码的中文文件名；② 尺寸语法 `=宽x高`；
+# ③ 尖括号目的地（文件名带空格时**唯一**的写法）+ 尺寸。②③ 以前在编辑器里从来没生效过
+printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n\n![尺寸图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png =120x80)\n\n![尖括号图](<assets/中文 图.png> =60x40)\n' > "$FIX/img.md"
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
 
@@ -48,6 +50,11 @@ r = e['result']; img = r.get('img')
 ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and e['bytesEqual'] and (img is None or img['loaded'])
       and c.get('sbRows', 0) >= 1 and c.get('tabs', 0) >= 1
+      # 契约 v19：带文件开出来的窗口，工作区 = 那个文件所在的目录。壳侧（树根 = 防穿越
+      # 守卫之界）与渲染层（侧栏真挂在那儿）各守一条 —— 从前壳侧是空的、侧栏靠渲染层
+      # 兜底才挂上，于是真机上会带出「上次那个文件夹」
+      and (e.get('windowRoots') or [''])[0] == '/tmp/cursive-e2e'
+      and c.get('sbRoot') == '/tmp/cursive-e2e'
       and r.get('autosaved') is True and r.get('reloaded') is True
       and r.get('tabHit') is True    # 文件树藏起来后没有浮层压住第一个标签
       # 标题栏开关：原生条子给两端挖了洞（否则点击到不了网页）+ 渲染层点击真的切了面板
@@ -74,6 +81,13 @@ if sys.argv[1] == 'img.md':
     # P4-1：图片嵌成 data: URI —— 文档里写的是百分号编码的中文文件名，
     # 这一条同时守着「渲染层给绝对路径 → 壳逐级解码找到文件 → base64 嵌进去」整条链
     ok = ok and 'data:image/png;base64,' in page
+    # P1-5 的尾巴：尺寸语法端到端。解析器不给节点的那一版，这两条都会落空 ——
+    # `renderImage` 拿不到 parseImage 的结果就退回 escapeHtml(raw)，导出物里是一行裸源码
+    ok = ok and 'width="120" height="80"' in page
+    # 尖括号目的地：解析器认领了、parseImage 却读不出 src 的话，这张图整个不出现
+    ok = ok and 'width="60" height="40"' in page and '![尖括号图]' not in page
+    # 编辑器那一侧：三张都渲染成了真图片（有一张没认出来就是 2，屏幕上是裸源码）
+    ok = ok and r['counts'].get('cm-lp-image', 0) >= 3
     # P2-5：截图粘贴 + 拖拽落盘都写到 <docDir>/assets/
     pp = r.get('pasteProbe') or ''
     ok = ok and pp.startswith('assets/') and os.path.exists(os.path.join('/tmp/cursive-e2e', pp))
@@ -291,14 +305,23 @@ PAGED
 # 启动空白页之后 activeId 悬空，状态栏会一直挂着一个已经不存在的文件名
 printf '{"content":"# 崩溃前的草稿","fingerprint":{"eol":"\\n","bom":false},"savedAt":"2026-01-01T00:00:00Z"}' \
     > "$SCRATCH/tab-e2e-recovery.json"
-rm -f /tmp/cursive-shell-check.json
+rm -f /tmp/cursive-shell-check.json /tmp/cursive-shell-e2e.json
 CURSIVE_SMOKE=1 CURSIVE_SMOKE_SCRATCH_DELAY=1200 ./shell-swift/cursive-shell "$FIX/img.md" 2>/dev/null
 python3 - <<'RECOVERY'
 import json, sys, os
 c = json.load(open('/tmp/cursive-shell-check.json'))
+e = json.load(open('/tmp/cursive-shell-e2e.json'))
 tabs = c.get('tabList') or []
 ok = c.get('status') == 'img.md' and '未命名' in tabs
-print(('PASS ' if ok else 'FAIL ') + '崩溃恢复不抢焦点 ' + str(tabs))
+# 恢复是**一次性**的：探针末尾开了第二个窗口，它照样会问一次 scratchList，
+# 但那份草稿已经交出去了 —— 交出 1 份、候选集清空。
+# 原 bug：`scratchList` 把目录里的东西全发一遍，于是 A 窗口正在编辑的未命名文档
+# 会跟着每一个新开的窗口跑一份（两份各自再落盘，越滚越多）
+once = (e.get('scratchQueries', 0) >= 2 and e.get('scratchHandouts') == 1
+        and e.get('scratchPending') == 0)
+ok = ok and once
+print(('PASS ' if ok else 'FAIL ') + '崩溃恢复不抢焦点 ' + str(tabs)
+      + ' 草稿交出 %s/问 %s 次，剩 %s' % (e.get('scratchHandouts'), e.get('scratchQueries'), e.get('scratchPending')))
 sys.exit(0 if ok else 1)
 RECOVERY
 rm -f "$SCRATCH"/*.json
