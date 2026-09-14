@@ -1836,7 +1836,14 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         mark("didFinish (页面加载完)")
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.runProbe() }
-        // P0-3 验收：+1.5s 模拟外部修改（干净标签应静默重载）
+        // P0-3 验收：+1.5s 模拟一次外部修改（干净标签应静默重载）。
+        // **必须锁在自检里**：这一句是往用户的文件末尾真写字节。少了这个 guard，
+        // 每一次正常打开文档都会在 1.5 秒后被追加一行 marker —— 编辑器把自己打开的
+        // 每一份文件都改了。曾经就是这样（漏了 guard，2026-09-14 修）。
+        // SHOT_CLEAN 也要挡掉：那条路要的就是「文档一个字不动」，不然拍进去的图里
+        // 文末挂着一行 marker
+        guard ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil,
+              ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_CLEAN"] == nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, let p = self.lastDocPath,
                   let h = FileHandle(forWritingAtPath: p) else { return }
@@ -1884,6 +1891,18 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 探针/E2E 只在 CURSIVE_SMOKE 下运行；普通启动是正常交互应用，绝不自动退出
         guard isPrimary,
               ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil else { return }
+
+        // CURSIVE_SMOKE_SHOT_CLEAN=1：**只截图，不跑探针**。
+        // 探针会改东西 —— 改标题层级、往表格里打字、追加 marker，自动保存还会落盘；
+        // treeProbe 更狠，会在**树根目录里真的建文件、改名、移动、删除**。
+        // 而 captureShot 特意排在探针之后，那是给「目检 chrome」用的：右键菜单还开着、
+        // 表格工具栏还浮着、搜索面板还留着，正好看得见。
+        // 要拍一张给人看的图，这些全是噪声，文档还会被改花 —— 所以这条分支直接跳到
+        // 截图再退出：文档一个字不动，树根一个文件不碰。
+        if ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_CLEAN"] != nil {
+            captureShot { NSApp.terminate(nil) }
+            return
+        }
         let probe = """
         (() => ({
           title: document.title,
@@ -2921,16 +2940,29 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         if let theme = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_THEME"],
            ["dark", "light", "sepia", "system"].contains(theme) {
             webView.evaluateJavaScript("window.__shellEmit('menu', 'view:theme-\(theme)')")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.snapshot(to: out, then: next) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.shotJS(to: out, then: next) }
             return
         }
         // CURSIVE_SMOKE_MENU=<action>：截图前派一个任意菜单动作（目检设置面板这类用）
         if let action = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_MENU"] {
             webView.evaluateJavaScript("window.__shellEmit('menu', \(jsonLiteral(action)))")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.snapshot(to: out, then: next) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.shotJS(to: out, then: next) }
             return
         }
-        snapshot(to: out, then: next)
+        shotJS(to: out, then: next)
+    }
+
+    /// CURSIVE_SMOKE_SHOT_JS=<一段 JS>：快门按下之前跑一次，用来给截图「摆姿势」——
+    /// 把光标挪走（不然光标所在行会回显源码，标题上挂着个 `#`，不知情的人会以为没渲染）、
+    /// 收掉浮动格式栏、滚到某一处。跑完等一帧再拍。
+    private func shotJS(to out: String, then next: @escaping () -> Void) {
+        guard let js = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_JS"] else {
+            return snapshot(to: out, then: next)
+        }
+        webView.evaluateJavaScript(js) { _, err in
+            if let err { FileHandle.standardError.write("[shotJS] \(err)\n".data(using: .utf8)!) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.snapshot(to: out, then: next) }
+        }
     }
 
     private func snapshot(to out: String, then next: @escaping () -> Void) {
