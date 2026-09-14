@@ -12,9 +12,16 @@
   --border: #e6e8eb;
   --sel: #d7e6fb;
   --code-bg: #f4f5f7;
-  /* 面板底色：侧边栏 / 标签栏 / 大纲 / 状态栏 / 浮标 共用（原名 --status-bg，
-     但它从来就不只服务状态栏）*/
+  /* --surface 只剩**浮层**：格式栏 / 查找面板 / 右键菜单 / 统计浮窗 / 表格工具条。
+     它们浮在正文之上，必须与纸面分得开，所以这一档保留原来的灰。
+     停靠面板（侧栏/标签栏/大纲/状态栏/拖拽条）另走 --panel —— 原先两者共用一个
+     token，于是四块灰面板把白底正文框在中间，整个界面像「文档装在控制台里」 */
   --surface: #fafbfc;
+  /* 停靠面板 = 纸。与 --bg 同色，靠 --divider 的发丝线和留白分区，不靠填色 */
+  --panel: #ffffff;
+  /* chrome 分隔线。比 --border 更淡：--border 要画组件边（输入框/表格/代码块），
+     那是构件的轮廓；这一条只是两块纸的接缝，不该有同样的存在感 */
+  --divider: #ededf0;
   /* 激活态的浅底。比 --sel 淡得多 —— --sel 是文本选区色，当行背景太重，
      一棵长树里会不停抢视线 */
   --accent-wash: #eaf2fd;
@@ -97,6 +104,8 @@
     --sel: #2b415e;
     --code-bg: #262a30;
     --surface: #191c20;
+    --panel: #1c1f24;
+    --divider: #272b31;
     --accent-wash: #1e2831;
     --warn: #d08a52;
     --match: rgb(255 210 90 / 26%);
@@ -130,6 +139,8 @@
   --sel: #2b415e;
   --code-bg: #262a30;
   --surface: #191c20;
+  --panel: #1c1f24;
+  --divider: #272b31;
   --accent-wash: #1e2831;
   --warn: #d08a52;
   --match: rgb(255 210 90 / 26%);
@@ -160,13 +171,16 @@
   color-scheme: light;
   --bg: #f8f2e4;
   --fg: #4a3f35;
-  --muted: #7d6f5f;
+  /* 4.55:1 on --bg。原 #7d6f5f 只有 4.36 —— 护眼底色本来就亮，次要文字得再压一档 */
+  --muted: #7a6c5d;
   --mark-idle: #a89982;
   --accent: #96612f;
   --border: #e6dbc3;
   --sel: #ecdcb8;
   --code-bg: #f0e7d2;
   --surface: #f3ebd9;
+  --panel: #f8f2e4;
+  --divider: #ece1cb;
   --accent-wash: #efe2c8;
   --warn: #a8541f;
   --match: rgb(214 150 40 / 30%);
@@ -205,7 +219,7 @@ html, body {
   -webkit-app-region: drag;
   /* 与侧栏/标签栏/大纲/状态栏同属 chrome 层（--surface），正文那张纸才是 --bg。
      原来标题栏用 --bg，白条压在灰侧栏上，顶部像断了一截 */
-  background: var(--surface);
+  background: var(--panel);
   flex: none;
   display: flex;
   /* 与红绿灯同一条水平线：灯是 14×14、圆心离窗口顶 16pt（探针 trafficMidFromTop 实测），
@@ -576,8 +590,8 @@ body {
   padding: 0 16px;
   font-size: var(--chrome-label);
   color: var(--muted);
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  background: var(--panel);
+  border-top: 1px solid var(--divider);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -670,8 +684,8 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: var(--panel);
+  border-right: 1px solid var(--divider);
   font-size: var(--chrome-size);
   user-select: none;
   -webkit-user-select: none;
@@ -758,10 +772,9 @@ body.is-resizing {
 }
 .sb-row:hover .sb-item { background: var(--code-bg); }
 .sb-row.is-active .sb-item {
+  /* 一个状态只用一个信号。原先是底色 + 加粗 + 左侧 2px 强调条三重编码 ——
+     面板还是灰底时那条竖条才需要，现在面板是纸，淡蓝底自己就读得出来 */
   background: var(--accent-wash);
-  font-weight: 500;
-  /* 左边 2px 强调条：安静但明确，和「强调色只标当前位置」这条对得上 */
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .sb-row.is-dir .sb-name { font-weight: 550; }
 
@@ -1102,8 +1115,8 @@ body.is-dragging-row * { cursor: grabbing !important; }
   gap: 2px;
   height: var(--tabbar-h);
   padding: 6px 8px 0;
-  background: var(--surface);
-  box-shadow: inset 0 -1px 0 var(--border);
+  background: var(--panel);
+  box-shadow: inset 0 -1px 0 var(--divider);
   overflow-x: auto;
   user-select: none;
   -webkit-user-select: none;
@@ -1125,11 +1138,14 @@ body.is-dragging-row * { cursor: grabbing !important; }
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
 }
-.tab-item:hover { background: var(--code-bg); color: var(--fg); }
+.tab-item:hover { color: var(--fg); }
 .tab-item.is-active,
 .tab-item.is-active:hover {
-  background: var(--bg);
-  border-color: var(--border);
+  /* 标签栏与正文同色之后，原来那套「白底 + 三条边」就失效了（底色一样，只剩框），
+     换成灰底又变成一个笨重的方块。这里改用**一条线**代替三条边：
+     标签栏底部那道缝从所有标签下面穿过，只在当前标签这一段被同色盖掉 ——
+     当前标签于是「通」向正文，像一张翻开的纸。信息量和文件夹标签一样，代价是 1px */
+  box-shadow: inset 0 -1px 0 var(--panel);
   color: var(--fg);
   font-weight: 500;
 }
@@ -1203,8 +1219,8 @@ body.is-dragging-row * { cursor: grabbing !important; }
   width: 220px;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  background: var(--panel);
+  border-left: 1px solid var(--divider);
   font-size: var(--chrome-size);
   overflow: hidden;
   user-select: none;
@@ -1268,7 +1284,7 @@ body.is-dragging-row * { cursor: grabbing !important; }
 }
 .ol-filter input::-webkit-search-decoration,
 .ol-filter input::-webkit-search-cancel-button { -webkit-appearance: none; }
-.ol-filter input::placeholder { color: var(--mark-idle); }
+.ol-filter input::placeholder { color: var(--muted); }
 .ol-filter input:focus { outline: none; border-color: var(--accent); }
 .ol-clear {
   position: absolute;
@@ -1342,18 +1358,18 @@ body.is-dragging-row * { cursor: grabbing !important; }
   color: inherit;
   border-radius: 2px;
 }
-/* 每节字数：行尾的灰色小字，等宽数字才不会一行一个宽度 */
+/* 每节字数：行尾的灰色小字，等宽数字才不会一行一个宽度。
+   用 --muted 而不是 --mark-idle：后者是「预览态残留标记」那一档的淡，
+   放在 10px 的数字上只有 2.5:1，等于印了个看不见的东西 */
 .ol-words {
   flex: none;
-  color: var(--mark-idle);
+  color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 .ol-row:hover .ol-item { background: var(--code-bg); }
 .ol-row.is-active .ol-item {
   background: var(--accent-wash);
-  font-weight: 500;
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .ol-row.is-context .ol-item { box-shadow: inset 0 0 0 1px var(--accent); }
 .ol-row.is-dragging { opacity: 0.45; }
