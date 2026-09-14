@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
@@ -17,6 +18,14 @@ function nodes(doc: string): Set<string> {
 }
 
 describe('cursive 的 markdown 方言', () => {
+  // 上面每一条都是对着片段跑的。这一条盯的是**真夹具整份**能不能在预算内解析完 ——
+  // 片段全过、整份超时是可能的（增量解析的工作预算按文档长度算）
+  it('真夹具 dialect.md 整份能在预算内解析完', () => {
+    const doc = readFileSync('test/fixtures/dialect.md', 'utf8')
+    const state = EditorState.create({ doc, extensions: [cursiveMarkdown()] })
+    expect(ensureSyntaxTree(state, doc.length, 2000), '解析超时').not.toBeNull()
+  })
+
   it('YAML front matter 解析成 Frontmatter，而不是 setext 标题', () => {
     const n = nodes('---\ntitle: 语料\ntags: [a, b]\n---\n\n# 标题\n')
     expect(n).toContain('Frontmatter')

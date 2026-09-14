@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# 同一分支上新的推送把旧的跑中任务顶掉，别排队浪费 runner
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 渲染层：类型检查 + 单测 + 构建。纯 Node，放 ubuntu 上跑最快也最省。
+  renderer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  # 原生壳：只验证能编译。真正的 E2E（八用例 + 崩溃恢复竞态 + PDF 真分页）
+  # 要开真窗口、跑 WKWebView、走打印流程，**留在本地 `./shell-swift/release.sh` 把关** ——
+  # 托管 runner 上这类 GUI 流程既慢又飘，红一次分不清是代码坏了还是 runner 抽风。
+  shell:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build          # 壳要找 out/renderer，先构建出来
+      - run: ./shell-swift/build.sh

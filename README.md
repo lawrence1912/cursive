@@ -7,12 +7,7 @@ macOS 上的 Markdown 编辑器：单窗格、无分屏、打字即渲染。
 
 ![Cursive 浅色界面](docs/shots/light.png)
 
-<details>
-<summary>深色（还有跟随系统与护眼两套，以及用户自定义皮肤）</summary>
-
-![Cursive 深色界面](docs/shots/dark.png)
-
-</details>
+深色是 [这个样子](docs/shots/dark.png)，另外还有跟随系统、护眼两套，以及用户自定义皮肤。
 
 > 图里这份文档就是仓库根目录的 [`demo.md`](demo.md) —— 装好之后直接打开它，
 > 上面这些构件（表格 / 公式 / 告示块 / mermaid / 代码块语言条）都能当场点着玩。
