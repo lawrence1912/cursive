@@ -12,6 +12,7 @@ import {
   keymap,
   rectangularSelection
 } from '@codemirror/view'
+import { stableNavigation } from './navigation'
 import { expandOnEnter } from './input-rules'
 import { t } from '../i18n'
 import { changeListIndent } from './list-ops'
@@ -83,6 +84,7 @@ export function createState(
     doc,
     extensions: [
       history(),
+      stableNavigation,
       drawSelection(),
       dropCursor(),
       rectangularSelection(),

@@ -11,7 +11,7 @@ import { EditorView, WidgetType, type KeyBinding } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { t, type Key } from '../../i18n'
 import { EMOJI } from '../emoji'
-import { INLINE_MARKS } from '../inline-text'
+import { isHiddenInline } from '../inline-text'
 import { parsedTree } from '../syntax'
 import { Reveal, revealScope } from './reveal'
 import { fillMath } from './widgets'
@@ -661,7 +661,7 @@ export function cellTokens(state: EditorState, from: number, to: number): CellTo
       // 祖先（Document / Table / TableRow / TableCell）只管往下走，不产出片段
       if (node.from < from || node.to > to) return
       const name = node.name
-      if (INLINE_MARKS.has(name) || (name === 'URL' && node.node.parent?.name === 'Link')) {
+      if (isHiddenInline(name, node.node.parent?.name)) {
         flush(node.from)
         pos = Math.max(pos, node.to)
         return false
@@ -878,6 +878,20 @@ function fillCell(
  */
 let rowH = 34
 const TABLE_PAD = 16
+/**
+ * `learn()` 那条 measure 请求的去重键。**必须有**：不带 key 的 `requestMeasure`
+ * 每调一次就往 `measureRequests` 里压一条，而同屏十几张表、每次重画都要学一遍。
+ * 视口只要还在动（快速滚动、开关面板、异步内容落地），CM 那一轮就整批跳过排空
+ * （源码里 `changed & UpdateFlag.Viewport` 时不交换队列）—— 六轮下来队列还没空，
+ * 控制台里那句 `Measure loop restarted more than 5 times` 就是这么来的。
+ * 所有表共用一个键：它们写的本来就是同一个全局 rowH，留最后一条足够。
+ */
+const ROW_H_KEY = 'cursive-table-rowH'
+
+/** 排版偏好变了（字号/行距/栏宽），学到的行高作废 —— 见 `learn()` 里「只往上学」那段 */
+export function forgetRowHeight(): void {
+  rowH = 34
+}
 
 export class TableWidget extends WidgetType {
   constructor(
@@ -921,9 +935,16 @@ export class TableWidget extends WidgetType {
   private learn(view: EditorView, dom: HTMLElement): void {
     const rows = this.data.rows.length + 1
     view.requestMeasure({
+      key: ROW_H_KEY,
       read: () => dom.offsetHeight,
       write: (h) => {
-        if (h > 0) rowH = Math.ceil(h / rows)
+        if (h <= 0) return
+        const next = Math.ceil(h / rows)
+        // **只往上学**：一份文档里矮表和高表交替出现时，全局估值来回跳，
+        // 每跳一次整张高度图就作废一次 —— 而作废一次就是新一轮 measure。
+        // 宁高勿低本来就是这里的取舍（见 estimatedHeight 的注释），
+        // 真要往下退，等排版偏好变了由 forgetRowHeight() 清零
+        if (next > rowH) rowH = next
       }
     })
   }

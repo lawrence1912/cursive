@@ -1,11 +1,12 @@
+import { pointerSelection } from '../pointer-selection'
 import { syntaxTree } from '@codemirror/language'
 import { Facet, type EditorState } from '@codemirror/state'
 
 /**
  * 光标「碰到」多大范围就回显原始标记，直接决定手感：
- * - node  只露出光标所在的那个行内元素。最贴近 Typora，但每动一次光标就重排一次。
+ * - node  只露出光标所在的那个行内元素。最贴近纯所见即所得，但每动一次光标就重排一次。
  * - line  光标所在整行露出源码。默认值：抖动降到「每换一行一次」，稳得多。
- * - block 整个段落/块露出。最稳，但离 Typora 最远。
+ * - block 整个段落/块露出。最稳，但离所见即所得最远。
  */
 export type RevealScope = 'node' | 'line' | 'block'
 
@@ -13,7 +14,7 @@ export const revealScope = Facet.define<RevealScope, RevealScope>({
   combine: (values) => values[0] ?? 'line'
 })
 
-interface Span {
+export interface Span {
   from: number
   to: number
 }
@@ -24,7 +25,8 @@ export class Reveal {
 
   constructor(state: EditorState, scope: RevealScope) {
     const raw: Span[] = []
-    for (const range of state.selection.ranges) {
+    const selection = state.field(pointerSelection, false) ?? state.selection
+    for (const range of selection.ranges) {
       raw.push(expand(state, range.from, range.to, scope))
     }
     raw.sort((a, b) => a.from - b.from)
@@ -36,6 +38,15 @@ export class Reveal {
       if (last && span.from <= last.to) last.to = Math.max(last.to, span.to)
       else this.spans.push({ ...span })
     }
+  }
+
+  /**
+   * 展开并合并之后的露出区间（按 from 升序）。
+   * 选区一动，会翻面的块级装饰只可能与「动前」「动后」这些区间相交 ——
+   * `live-preview` 的增量重建按这个算脏区（见那边的 `patchBlocks`）。
+   */
+  get ranges(): readonly Span[] {
+    return this.spans
   }
 
   /** 节点与任一露出区间有交集就回显源码 */

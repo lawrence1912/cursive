@@ -1,3 +1,5 @@
+import { pointerSelection } from './pointer-selection'
+import { hasNavigationTarget } from './navigation'
 import type { EditorState, Extension, Range } from '@codemirror/state'
 import {
   Decoration,
@@ -32,7 +34,7 @@ const MAX_SCAN = 400
 const focusLine = Decoration.line({ class: 'cm-focus-line' })
 
 /**
- * 专注单元 = 光标所在的**段落**（空行分隔的连续非空行），与 Typora / MarkText 一致。
+ * 专注单元 = 光标所在的**段落**（空行分隔的连续非空行），与主流 WYSIWYG 一致。
  * 有选区时取选区覆盖到的所有段落；光标停在空行上就只亮那一行（本来也没东西可亮）。
  *
  * 纯函数，不碰 DOM：test/writing-modes.test.ts 直接断言它。
@@ -101,7 +103,7 @@ const focusPlugin = ViewPlugin.fromClass(
 )
 
 /**
- * 打字机模式：每次光标动 / 文档变，把光标行拉回 ANCHOR 那条线上。
+ * 打字机模式：键盘移动 / 文档变更时，把光标行拉回 ANCHOR；鼠标选区不抢滚动。
  *
  * 走的是 CM 自己的滚动目标（`EditorView.scrollIntoView`，`y:'start'` + 半屏 yMargin
  * = 把该行顶边摆到视口 42% 处），**不是手写 `scrollDOM.scrollTop`**。手写那版实测
@@ -129,6 +131,11 @@ const typewriterPlugin = ViewPlugin.fromClass(
 
     update(u: ViewUpdate): void {
       if (u.view.composing) return // 合成中滚动会把候选词框甩飞
+      if (u.state.field(pointerSelection, false) || u.transactions.some((tr) => tr.isUserEvent('select.pointer'))) {
+        if (this.timer) clearTimeout(this.timer)
+        this.timer = 0
+        return
+      }
       if (u.docChanged || u.selectionSet) this.schedule(u.view)
     }
 
@@ -140,6 +147,7 @@ const typewriterPlugin = ViewPlugin.fromClass(
       if (this.timer) return
       this.timer = window.setTimeout(() => {
         this.timer = 0
+        if (hasNavigationTarget(view) || view.state.field(pointerSelection, false)) return
         view.dispatch({
           effects: EditorView.scrollIntoView(view.state.selection.main.head, {
             y: 'start',

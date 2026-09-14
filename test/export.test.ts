@@ -188,11 +188,17 @@ describe('导出 HTML：行内', () => {
     expect(html('![图](https://a.b/c.png)\n')).not.toContain('data-abs')
   })
 
-  it('Typora 的 `=宽x高` 尺寸语法：解析器不认，于是两边都是字面量', () => {
-    // `![图](a.png =120x80)` 在 lezer 里只得到 `![图]` 这一个 shortcut 形状的 Image 节点
-    // （`=120x80` 不是合法的链接标题），装饰层的 parseImage 因此返回 null、原样显示。
-    // 导出照抄这一条 —— 这里断言的是**一致**，不是「对」：真要支持得先教解析器（P1-5 的尾巴）
-    expect(html('![图](a.png =120x80)\n')).toContain('![图](a.png =120x80)')
+  it('尺寸图片经过真实解析器后导出宽高', () => {
+    expect(html('![图](a.png =120x80)\n')).toContain('alt="图" width="120" height="80"')
+    expect(html('![图](a.png =120x)\n')).toContain('alt="图" width="120"')
+  })
+
+  it('尖括号目的地（文件名带空格）整条链都通，不退回裸源码', () => {
+    const out = html('![图](<中文 图.png> =120x80)\n', '/docs')
+    expect(out).toContain('src="中文 图.png"')
+    expect(out).toContain('data-abs="/docs/中文 图.png"')
+    expect(out).toContain('width="120" height="80"')
+    expect(out).not.toContain('![图]')
   })
 
   it('正文里的尖括号与 & 一律转义', () => {

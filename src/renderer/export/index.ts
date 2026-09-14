@@ -1,5 +1,5 @@
 import type { EditorState } from '@codemirror/state'
-import { loadKatex, loadMermaid } from '../editor/live-preview/widgets'
+import { loadKatex, loadMermaid, renderMermaid } from '../editor/live-preview/widgets'
 import { collectCodeLangs, escapeHtml, loadCodeLangs, renderBody, type ExportOpts } from './render'
 import { EXPORT_CSS } from './style'
 
@@ -56,8 +56,9 @@ async function renderMermaidSvg(src: string): Promise<string | null> {
     // 自己 initialize 一遍，配色不会被这里带偏
     mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' })
     await mermaid.parse(src)
-    const { svg } = await mermaid.render(`cursive-export-${exportSeq++}`, src)
-    return svg
+    // 屏幕外渲染（见 renderMermaid）：导出时一份文档里的图是连着渲的，
+    // 挂 body 上的话底部就是连闪好几下
+    return await renderMermaid(mermaid, `cursive-export-${exportSeq++}`, src)
   } catch {
     return null
   }

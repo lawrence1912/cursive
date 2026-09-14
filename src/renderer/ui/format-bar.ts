@@ -12,6 +12,11 @@ import { icon, type IconName } from './icons'
  *
  * 形态：贴编辑区底部居中悬浮的胶囊条（不是常驻顶栏，也不是选中才浮出的气泡）——
  * 标题 / 引用 / 列表这些**只要光标就能用**的行级命令，气泡形态根本够不着。
+ * 位置**贴着状态栏坐**：条子盖在正文上，离底越近，被它压住的正文就越少。
+ *
+ * **两级显隐**：视图菜单那个开关管「有没有这条工具栏」（`is-hidden`，连手柄一起收），
+ * 条子右端那颗折角管「摊开还是收起」（`is-collapsed`，只剩一颗手柄贴在原地）——
+ * 后者是常用动作（写几段就想把底下这条让开），不该每次都去翻菜单。
  *
  * 三个必须记住的点：
  *   1. 条子上 `mousedown` 一律 `preventDefault()`，否则焦点从编辑器跑到按钮上，
@@ -23,8 +28,11 @@ import { icon, type IconName } from './icons'
  *      而且条子已经是 `overflow-x:auto`，再多八颗窄窗口就只能横着滚。
  */
 
-/** 条子高度 + 下沿间距，给 scrollMargins 用 */
-export const FORMAT_BAR_SPACE = 64
+/** 摊开时占多高（条子 42 + 下沿 6 + 一点呼吸），给 scrollMargins 用 */
+export const FORMAT_BAR_SPACE = 52
+
+/** 收起时只剩一颗手柄，让出的边距跟着缩 —— 否则收起来了正文底下还空着一条 */
+export const FORMAT_BAR_COLLAPSED_SPACE = 30
 
 interface Btn {
   action: MenuAction
@@ -103,7 +111,11 @@ export class FormatBar {
   private readonly triggers: Record<MenuId, HTMLButtonElement>
   private open: MenuId | null = null
 
-  constructor(private readonly run: (action: MenuAction) => void) {
+  constructor(
+    private readonly run: (action: MenuAction) => void,
+    /** 收起/展开之后回调一次：持久化和滚动下边距归 main.ts 管 */
+    private readonly onCollapsedChange?: () => void
+  ) {
     this.el = document.createElement('div')
     this.el.id = 'format-bar'
     this.el.setAttribute('role', 'toolbar')
@@ -141,7 +153,14 @@ export class FormatBar {
                 title="${t('fb.insertTitle')}" data-i18n-title="fb.insertTitle">
           ${icon('plus')}<span data-i18n="fb.insert">${t('fb.insert')}</span>${icon('chevron-down')}
         </button>
+        <i class="fb-sep"></i>
+        <button type="button" class="fb-btn fb-fold" aria-expanded="true"
+                aria-label="${t('fb.collapse')}" data-i18n-aria="fb.collapse"
+                title="${t('fb.collapse')}" data-i18n-title="fb.collapse">${icon('chevron-down')}</button>
       </div>
+      <button type="button" class="fb-handle" aria-expanded="false"
+              aria-label="${t('fb.expand')}" data-i18n-aria="fb.expand"
+              title="${t('fb.expand')}" data-i18n-title="fb.expand">${icon('chevron-up')}</button>
     `
     applyI18n(this.el)
     this.menus = {
@@ -159,6 +178,12 @@ export class FormatBar {
 
     this.el.addEventListener('click', (e) => {
       const target = e.target as HTMLElement
+      // 折角与手柄是同一个开关的两半：摊开时在条子右端，收起后就是那颗手柄本身
+      if (target.closest('.fb-fold, .fb-handle')) {
+        this.setCollapsed(!this.collapsed)
+        this.onCollapsedChange?.()
+        return
+      }
       if (target.closest('.fb-ins')) return this.setMenuOpen(this.open === 'insert' ? null : 'insert')
       if (target.closest('.fb-pick')) return this.setMenuOpen(this.open === 'pick' ? null : 'pick')
       const btn = target.closest<HTMLElement>('[data-action]')
@@ -185,6 +210,16 @@ export class FormatBar {
   setVisible(on: boolean): void {
     this.el.classList.toggle('is-hidden', !on)
     if (!on) this.setMenuOpen(null)
+  }
+
+  /** 收起 = 条子换成一颗手柄。与 `visible` 正交：菜单关掉时手柄也不留 */
+  get collapsed(): boolean {
+    return this.el.classList.contains('is-collapsed')
+  }
+
+  setCollapsed(on: boolean): void {
+    this.el.classList.toggle('is-collapsed', on)
+    if (on) this.setMenuOpen(null)
   }
 
   /**

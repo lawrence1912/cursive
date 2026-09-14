@@ -113,6 +113,9 @@ const zh = {
   'fb.mermaid': '流程图',
   'fb.footnote': '脚注',
   'fb.toc': '目录',
+  // ---- 收起 / 展开（条子右端那颗折角）----
+  'fb.collapse': '收起格式栏',
+  'fb.expand': '展开格式栏',
 
   // ---------- 设置面板（prefs.ts）----------
   'pf.title': '设置',
@@ -185,6 +188,9 @@ const zh = {
   'hd.new': '新标题',
 
   // ---------- 块级 widget（live-preview/widgets.ts）----------
+  'w.editSource': '编辑源码',
+  'w.zoom': '放大预览',
+  'w.closePreview': '关闭预览',
   'w.toc': '目录',
   'w.imgBroken': '图片加载失败',
   'w.calloutExpand': '展开告示块',

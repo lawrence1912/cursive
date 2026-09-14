@@ -177,6 +177,12 @@ const LBRACKET = 91
 const CARET2 = 94
 const RBRACKET = 93
 
+/**
+ * 尺寸图片的形状：`![alt](目的地 =宽x高)`，目的地可以写成 `<a b.png>`。
+ * 只在行内解析阶段用一次，跟 `CALLOUT_SHAPE` 一样单独摆在上面，方便对着源码改。
+ */
+const SIZED_IMAGE = /^!\[([^\]\n]*)\]\([ \t]*(<[^<>\n]*>|[^\s()]+)([ \t]+=[ \t]*\d+[xX]\d*)[ \t]*\)/
+
 /** 成对单字符定界符（^…^ / ~…~）的通用行内解析器 */
 function makePairedParser(
   name: string,
@@ -309,6 +315,43 @@ function parseCalloutMark(cx: InlineContext, next: number, pos: number): number 
   return cx.addElement(cx.elt('CalloutMark', pos, pos + m[0].length))
 }
 
+/**
+ * `![alt](图.png =600x400)`：宽高尺寸语法。
+ *
+ * 为什么内置的 Image 解析器认不了它：CommonMark 里链接目的地不能带空格，`=600x400`
+ * 也不是合法的链接标题（标题必须引号/括号包裹）。于是内置解析器只把 `![alt]` 认成
+ * shortcut 形状的 Image，后面那串 `(…)` 原样落进正文 —— 装饰层拿到的切片对不上
+ * `parseImage`，屏幕上就是「alt + 一串源码」。这里补一条更靠前的行内解析器认领它。
+ *
+ * 节点形状**与内置图片完全一致**（`LinkMark` + `URL` + 尺寸标记 + 括号标记），
+ * 因此装饰（decorate.ts 的 Image 分支）、导出（parseImage）、大纲取词（plainInline）、
+ * 表格格内（cellTokens）都不必为它各加一条分支 —— 它们看到的仍然是一张图片。
+ * 尺寸段单独叫 `SizeMark`，是为了让「只取人看的文字」的那几处把它一起藏掉。
+ */
+function parseSizedImage(cx: InlineContext, next: number, pos: number): number {
+  if (next !== BANG) return -1
+  // 切一段有上界的出来（同 `parseCalloutMark`）：`cx.end` 是整个块的末尾，
+  // 一个长段落里每遇到一个 `!` 就复制一遍全段 = O(n²)。一张图的
+  // `![alt](目的地 =宽x高)` 写到 512 字节已经离谱，够用
+  const m = SIZED_IMAGE.exec(cx.slice(pos, Math.min(cx.end, pos + 512)))
+  if (!m) return -1
+  const [raw = '', alt = '', dest = '', size = ''] = m
+  const marks = (b: number, e: number) => cx.elt('LinkMark', b, e)
+  const altEnd = pos + 2 + alt.length
+  const destStart = altEnd + 2
+  const sizeStart = destStart + dest.length
+  return cx.addElement(
+    cx.elt('Image', pos, pos + raw.length, [
+      marks(pos, pos + 2), // ![
+      marks(altEnd, altEnd + 1), // ]
+      marks(altEnd + 1, altEnd + 2), // (
+      cx.elt('URL', destStart, sizeStart),
+      cx.elt('SizeMark', sizeStart, sizeStart + size.length),
+      marks(sizeStart + size.length, sizeStart + size.length + 1) // )
+    ])
+  )
+}
+
 const extras: MarkdownConfig = {
   defineNodes: [
     { name: 'Highlight', style: t.emphasis },
@@ -321,9 +364,11 @@ const extras: MarkdownConfig = {
     { name: 'FootnoteRef', style: t.link },
     { name: 'FootnoteDefinition', block: true },
     { name: 'TocBlock', block: true },
-    { name: 'CalloutMark', style: t.processingInstruction }
+    { name: 'CalloutMark', style: t.processingInstruction },
+    { name: 'SizeMark', style: t.processingInstruction }
   ],
   parseInline: [
+    { name: 'SizedImage', before: 'Image', parse: parseSizedImage },
     makePairedParser('Superscript', 'Superscript', 'SuperscriptMark', CARET),
     makePairedParser('Subscript', 'Subscript', 'SubscriptMark', TILDE),
     { name: 'Highlight', parse: parseHighlight },

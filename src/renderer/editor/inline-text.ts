@@ -19,9 +19,24 @@ export const INLINE_MARKS = new Set([
   'LinkMark',
   'LinkTitle',
   'MathMark',
+  // 尺寸图片的 ` =600x400` 那一段（markdown-lang.ts 的 SizedImage）
+  'SizeMark',
   // 标题的 `##` 与 setext 的 `=====` 都是它。表格格里出现不了，放进公共表无副作用
   'HeaderMark'
 ])
+
+/**
+ * 行内语法标记、以及链接/图片的目的地：渲染成人看的文字时一律藏掉，只留内容。
+ *
+ * 表格格内（`live-preview/table.ts` 的 `cellTokens`）与标题取词（下面的 `plainInline`）
+ * 共用这一条判断 —— 各写一份的话，加一种行内语法就会出现「表格认得、大纲不认」的漂移。
+ *
+ * 图片的 URL 也要藏：`## ![图](a.png)` 剪出来的标题文字只该是 `图`，
+ * 把 `a.png` 一起带出来的话，大纲和 TOC 里会挂着一条文件路径。
+ */
+export function isHiddenInline(name: string, parent?: string): boolean {
+  return INLINE_MARKS.has(name) || (name === 'URL' && (parent === 'Link' || parent === 'Image'))
+}
 
 /**
  * 把 [from,to) 这段源码摘成纯文本：语法标记去掉，链接只留文字，
@@ -47,7 +62,7 @@ export function plainInline(state: EditorState, from: number, to: number): strin
       // 祖先（Document / Paragraph / ATXHeading…）只管往下走，不产出文字
       if (node.from < from || node.to > to) return
       const name = node.name
-      if (INLINE_MARKS.has(name) || (name === 'URL' && node.node.parent?.name === 'Link')) {
+      if (isHiddenInline(name, node.node.parent?.name)) {
         flush(node.from)
         pos = Math.max(pos, node.to)
         return false

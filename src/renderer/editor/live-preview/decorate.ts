@@ -415,22 +415,37 @@ function bulletDepth(item: SyntaxNode): number {
   return Math.max(0, depth - 1)
 }
 
-/** 解析图片：alt、src、可选 `=宽x高` 尺寸语法（Typora 兼容，不写高则按比例） */
+/**
+ * 解析图片：alt、src、可选 `=宽x高` 尺寸语法（不写高则按比例）。
+ *
+ * **目的地两种写法都要认**：裸写 `a.png`，以及 CommonMark 的尖括号形式 `<a b.png>`
+ * —— 后者是文件名带空格时唯一的写法，`markdown-lang.ts` 的 `SizedImage` 解析器
+ * 也认领它（`SIZED_IMAGE` 里那半个 `<[^<>\n]*>`）。两边必须对得上：解析器给了节点、
+ * 这里却读不出 src 的话，装饰层 `return` 掉、导出退回 `escapeHtml(raw)`，
+ * 屏幕上和导出物里都是一行裸源码。
+ *
+ * 尖括号那半必须**单独一组**：写成 `<?([^)\s]+)>?` 的话，`[^)\s]+` 贪婪地把收尾的 `>`
+ * 一起吃进 src（`<ab.png>` → `ab.png>`），拼出来的 `safe-file://` 找不到文件，图必裂。
+ */
 export function parseImage(text: string): {
   alt: string
   src: string
   width?: number
   height?: number
 } | null {
-  const m = /^!\[([^\]]*)\]\(\s*<?([^)\s]+)>?(?:\s+=[ \t]*(\d+)[xX](?:\s*(\d+))?)?(?:\s+["'(][^)]*)?\s*\)$/.exec(
-    text
-  )
+  const m =
+    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)\s]+))(?:\s+=[ \t]*(\d+)[xX](?:\s*(\d+))?)?(?:\s+["'(][^)]*)?\s*\)$/.exec(
+      text
+    )
   if (!m) return null
+  const src = m[2] ?? m[3] ?? ''
+  // `![图](<>)`：解析得出来但没有目的地。当成「不是图片」，编辑器与导出一致地留下源码
+  if (!src) return null
   return {
     alt: m[1] ?? '',
-    src: m[2] ?? '',
-    width: m[3] ? Number(m[3]) : undefined,
-    height: m[4] ? Number(m[4]) : undefined
+    src,
+    width: m[4] ? Number(m[4]) : undefined,
+    height: m[5] ? Number(m[5]) : undefined
   }
 }
 

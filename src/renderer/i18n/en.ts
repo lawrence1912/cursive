@@ -107,6 +107,8 @@ const en: Record<Key, string> = {
   'fb.mermaid': 'Diagram',
   'fb.footnote': 'Footnote',
   'fb.toc': 'Table of contents',
+  'fb.collapse': 'Collapse toolbar',
+  'fb.expand': 'Show toolbar',
 
   // ---------- 设置面板 ----------
   'pf.title': 'Settings',
@@ -179,6 +181,9 @@ const en: Record<Key, string> = {
   'hd.new': 'New heading',
 
   // ---------- 块级 widget ----------
+  'w.editSource': 'Edit source',
+  'w.zoom': 'Enlarge preview',
+  'w.closePreview': 'Close preview',
   'w.toc': 'Contents',
   'w.imgBroken': 'Image failed to load',
   'w.calloutExpand': 'Expand callout',

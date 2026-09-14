@@ -5,12 +5,71 @@ import type { SyntaxNode } from '@lezer/common'
 import { icon, type IconName } from '../../ui/icons'
 import { t } from '../../i18n'
 import { toggleCalloutFold } from '../callout'
+import { jumpTo } from '../navigation'
+import { focusKeepScroll } from '../focus'
+import {
+  browserStorage,
+  heightsForLayout,
+  loadHeightStore,
+  packHeightStore,
+  saveHeightStore,
+  type HeightStore
+} from './height-store'
 import type { Heading } from '../headings'
 
 /**
  * 每个 widget 都必须实现 eq()：CodeMirror 靠它判断能否复用 DOM。
  * 不实现的话每次按键都会把所有 widget 重建一遍（图片重新解码、图表重画）。
  */
+
+/** 先拦住 mousedown 的默认选区，再由 click 精确进入这个 widget 的源码。 */
+function sourceControl(view: EditorView, dom: HTMLElement, control = dom): void {
+  control.tabIndex = 0
+  control.setAttribute('role', 'button')
+  control.setAttribute('aria-label', t('w.editSource'))
+  control.title = t('w.editSource')
+  control.classList.add('cm-lp-source-control')
+  const edit = (pointer = false) => {
+    const from = view.posAtDOM(dom)
+    view.dispatch({
+      selection: { anchor: Math.min(from + 1, view.state.doc.length) },
+      scrollIntoView: true,
+      userEvent: pointer ? 'select.pointer' : 'select'
+    })
+    focusKeepScroll(view)
+  }
+  control.addEventListener('mousedown', (e) => {
+    if (e.button === 0) e.preventDefault()
+  })
+  control.addEventListener('click', (e) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    edit(true)
+  })
+  control.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    e.stopPropagation()
+    edit()
+  })
+}
+
+function zoomControl(open: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'cm-lp-zoom'
+  button.title = t('w.zoom')
+  button.setAttribute('aria-label', t('w.zoom'))
+  button.innerHTML = icon('search')
+  button.addEventListener('mousedown', (e) => e.preventDefault())
+  button.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    open()
+  })
+  return button
+}
 
 // ---------- 数学公式（KaTeX） ----------
 
@@ -64,7 +123,12 @@ export function renderMath(tex: string, display: boolean): string | null {
  * 正文里的 `MathWidget` 和表格格子里的行内公式共用这一条 —— 两处的占位与补渲染
  * 必须是同一套，否则「公式在表格里不显示」这种毛病只会在其中一边出现。
  */
-export function fillMath(el: HTMLElement, tex: string, display: boolean): void {
+export function fillMath(
+  el: HTMLElement,
+  tex: string,
+  display: boolean,
+  view?: EditorView
+): void {
   const html = renderMath(tex, display)
   if (html !== null) {
     el.innerHTML = html
@@ -77,6 +141,9 @@ export function fillMath(el: HTMLElement, tex: string, display: boolean): void {
     if (!el.isConnected) return
     const done = renderMath(tex, display)
     if (done !== null) el.innerHTML = done
+    // 内容是**量完之后**才换进来的：不说一声，CM 的行高表就一直停在占位那一版，
+    // 点击定位、滚动锚定全按旧高度算 —— 鼠标点一处、光标落在另一处就是这么来的
+    view?.requestMeasure()
   })
 }
 
@@ -91,10 +158,19 @@ export class MathWidget extends WidgetType {
   eq(other: MathWidget): boolean {
     return other.tex === this.tex && other.display === this.display
   }
-  toDOM(): HTMLElement {
+  override get estimatedHeight(): number {
+    // 只有块级（$$…$$）需要报：行内公式不进高度图
+    return this.display ? heightMemo.get(`math:${this.tex}`) ?? 64 : -1
+  }
+  override destroy(dom: HTMLElement): void {
+    unwatchHeight(dom)
+  }
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement(this.display ? 'div' : 'span')
     el.className = this.display ? 'cm-lp-mathview' : 'cm-lp-math-inline'
-    fillMath(el, this.tex, this.display)
+    fillMath(el, this.tex, this.display, view)
+    sourceControl(view, el)
+    watchHeight(view, el, this.display ? `math:${this.tex}` : null)
     return el
   }
 }
@@ -121,6 +197,207 @@ export function loadMermaid() {
 let renderSeq = 0
 const cancelRender = new WeakMap<HTMLElement, () => void>()
 
+let sandbox: HTMLElement | null = null
+
+/**
+ * 给 mermaid 的屏幕外画布。图必须**真进 DOM** 才量得出文字（getBBox），
+ * 而 mermaid 不给容器时是直接往 `<body>` 末尾挂临时节点的 —— body 是 flex 列，
+ * 那节点就成了状态栏后面的又一个 flex item：渲染的那几十毫秒里，窗口底部会闪出
+ * 一块默认配色的图（快速滚动时 widget 反复重建，闪的就是连成串的）。所以自带一块地方。
+ * 另外 mermaid 在 draw 抛错那条路上不删临时节点，挂在 body 上的话那块就永远留在底下了。
+ * 不能 display:none / visibility:hidden —— 那样量出来的尺寸是 0，只能挪到屏幕外。
+ * 宽度取 100vw：和挂在 body 上时一样宽（gantt 的宽度取自父元素）。
+ */
+function mermaidCanvas(): HTMLElement {
+  if (!sandbox?.isConnected) {
+    sandbox = document.createElement('div')
+    sandbox.setAttribute('aria-hidden', 'true')
+    sandbox.style.cssText = 'position:fixed;top:0;left:-10000px;width:100vw;pointer-events:none'
+    document.body.appendChild(sandbox)
+  }
+  return sandbox
+}
+
+/**
+ * 渲染一张图，返回 SVG 源码。每次渲染各用各的容器 ——
+ * mermaid 拿到容器的第一件事是 `innerHTML = ''`，共用一个的话同屏几张图会互相清掉。
+ */
+export async function renderMermaid(
+  m: Awaited<ReturnType<typeof loadMermaid>>,
+  id: string,
+  src: string
+): Promise<string> {
+  const host = document.createElement('div')
+  mermaidCanvas().appendChild(host)
+  try {
+    return (await m.render(id, src, host)).svg
+  } finally {
+    host.remove()
+  }
+}
+
+/**
+ * 渲染结果缓存（LRU，按 主题+源码 存）。widget 一滚出视口就被销毁，滚回来 `toDOM()`
+ * 会重跑一遍完整渲染 —— 没有缓存的话，上下拉一趟一路都是「空占位 →（几十毫秒）→ 图」，
+ * 每张图上屏时块高度还要跳一下。命中就同步填好，滚回来的那张是现成的。
+ */
+const svgCache = new Map<string, { id: string; svg: string }>()
+const CACHE_MAX = 32
+
+function cacheKey(src: string, theme: ThemeName): string {
+  return `${theme}:${src}`
+}
+
+/** 取一份能直接塞进 DOM 的 SVG：临用临换一身 id —— 同一张图可能同屏出现两次，id 不能撞 */
+function cachedSvg(key: string): string | null {
+  const hit = svgCache.get(key)
+  if (!hit) return null
+  svgCache.delete(key) // 重新插到队尾 = 最近用过
+  svgCache.set(key, hit)
+  return hit.svg.split(hit.id).join(`cursive-mmd-${renderSeq++}`)
+}
+
+function cacheSvg(key: string, id: string, svg: string): void {
+  svgCache.set(key, { id, svg })
+  if (svgCache.size > CACHE_MAX) {
+    const oldest = svgCache.keys().next()
+    if (!oldest.done) svgCache.delete(oldest.value)
+  }
+}
+
+/**
+ * 块级 widget 的高度记忆。
+ *
+ * CM 只渲染视口附近那一段，视口之外的块按 `WidgetType.estimatedHeight` 估高度 ——
+ * 默认是 -1，意思是「不知道」，CM 于是按**一行**算。一张 300px 的图、一张 20 行的表
+ * 都被当成一行的话，高度表就是错的：滚动条长度不对、跳转落点差出一整屏、
+ * 点击定位落在别的行上，而且每次真渲染到那一块，高度一换、上下文就跟着跳一下。
+ *
+ * 所以渲染过一次就把实测高度记下来，下次同一张图/同一张表再进估算时就有谱了。
+ * 记在模块级：同一份文档滚上滚下，widget 反复销毁重建，这份记忆得活得比它们长。
+ *
+ * 这份记忆还要**活过进程**：应用每次重开都得重新量一遍的话，那就不是「第一次有点抖」，
+ * 而是「每次开都抖」。落盘那一半在 `height-store.ts`（带排版条件校验，条件变了整份丢）。
+ */
+const heightMemo = new Map<string, number>()
+const HEIGHT_MEMO_MAX = 256
+
+/**
+ * 与 `.cm-lp-image img { max-height: 60vh }` 同一个上限（live-preview.css）。
+ * 只用来**截估值** —— 实测高度是量出来的，不必也不该走这里。
+ * node 单测没有 window，退回不截（`Math.min(x, Infinity) === x`）。
+ */
+function cssMaxHeight(): number {
+  return typeof window === 'undefined' ? Infinity : window.innerHeight * 0.6
+}
+
+// 排版条件变化后不能沿用旧的像素高度；缓存有上限，避免编辑过程无限积累源码。
+let heightLayout = ''
+const heightObservers = new WeakMap<HTMLElement, ResizeObserver>()
+
+/**
+ * 落盘那份读到手就一直拿着（`??=` 遇到 null 会重试，所以「上次没读到」不会被钉死）。
+ * 读的时机是第一次 `adoptLayout` —— 要么预热（文档进来之前），要么第一次量高。
+ */
+let diskStore: HeightStore | null | undefined
+
+/** 第一次写立刻落盘（「量到了」这件事最重要，别卡在节流窗口里），连续变化则合并成一次 */
+let heightSavedAt = 0
+let heightSaveTimer: ReturnType<typeof setTimeout> | null = null
+const HEIGHT_SAVE_GAP = 400
+
+function persistHeights(): void {
+  if (!heightLayout) return
+  const store = packHeightStore(heightLayout, heightMemo)
+  const wait = heightSavedAt + HEIGHT_SAVE_GAP - Date.now()
+  if (wait <= 0) {
+    heightSavedAt = Date.now()
+    saveHeightStore(browserStorage(), store)
+    return
+  }
+  if (heightSaveTimer !== null) clearTimeout(heightSaveTimer)
+  heightSaveTimer = setTimeout(() => {
+    heightSaveTimer = null
+    heightSavedAt = Date.now()
+    saveHeightStore(browserStorage(), packHeightStore(heightLayout, heightMemo))
+  }, wait)
+}
+
+/**
+ * 排版条件指纹。**只有这一处算它** —— 预热（`primeHeights`）与实测（`watchHeight`）
+ * 各写一份的话，两边差一个字段就等于「预热进来的高度永远对不上、下一发实测立刻清空」。
+ * 是一次强制重排（读 clientWidth + getComputedStyle），只在 measure 阶段或用户动作里调。
+ */
+function layoutKey(view: EditorView): string {
+  const style = getComputedStyle(view.contentDOM)
+  return `${view.contentDOM.clientWidth}:${style.fontFamily}:${style.fontSize}:${style.lineHeight}:${view.scrollDOM.clientHeight}`
+}
+
+/** 换了排版条件：内存里那份按旧像素算的高度一个都不能留，改从落盘那份里捞这套条件下的 */
+function adoptLayout(layout: string): void {
+  if (heightLayout === layout) return
+  heightMemo.clear()
+  heightLayout = layout
+  diskStore ??= loadHeightStore(browserStorage())
+  // 上次落盘那份正好是这套排版条件 → 接着用；不是 → 旧像素高度一个都不认
+  for (const [k, v] of Object.entries(heightsForLayout(diskStore, layout))) heightMemo.set(k, v)
+}
+
+/**
+ * 把落盘那份**提前**捞进内存 —— 在文档进编辑器之前调（`main.ts` 的 `openTab`）。
+ *
+ * 不提前捞的话，落盘那一半会晚一步：CM 的顺序是**先查 `estimatedHeight` 进高度表、
+ * 再 `toDOM`**，而读盘原先挂在 `watchHeight` 的 write 里（要等第一个 widget 画出来、
+ * ResizeObserver 首发）。于是每次冷启动，第一个块级 widget 的估高必然拿不到磁盘那份，
+ * 照样跳一下 —— 明明它的高度就在盘上。
+ *
+ * 调用点必须在「chrome 与偏好都已生效、文档还没进来」那一刻：早了（比如 view 刚建出来、
+ * `prefs.apply()` 还没跑）算出来的指纹是过期的，等于拿另一套排版下的像素高度去排这一份。
+ */
+export function primeHeights(view: EditorView): void {
+  // 还没上屏（宽度为 0）时算出来的指纹没有意义，留给 watchHeight 的实测那条路
+  if (!view.contentDOM.clientWidth) return
+  adoptLayout(layoutKey(view))
+}
+
+function watchHeight(
+  view: EditorView,
+  dom: HTMLElement,
+  key: string | null,
+  observed: HTMLElement = dom
+): void {
+  const observer = new ResizeObserver(() => {
+    if (!dom.isConnected) return
+    view.requestMeasure({
+      key: dom,
+      read: () => {
+        if (!dom.isConnected) return null
+        // 量的是 **dom**（widget 自己那个盒子），不是 observed。observed 只是「谁的尺寸
+        // 变了要通知我」（图片是内层 <img>，它解码完才知道多高），而 CM 要的是整个
+        // widget 占多高 —— 两者在小图上差一个行盒的高度
+        return { height: Math.ceil(dom.getBoundingClientRect().height), layout: layoutKey(view) }
+      },
+      write: (size) => {
+        if (!size || !dom.isConnected || key === null) return
+        adoptLayout(size.layout)
+        if (size.height <= 0) return
+        if (heightMemo.get(key) === size.height) return
+        heightMemo.delete(key)
+        heightMemo.set(key, size.height)
+        if (heightMemo.size > HEIGHT_MEMO_MAX) heightMemo.delete(heightMemo.keys().next().value!)
+        persistHeights()
+      }
+    })
+  })
+  observer.observe(observed)
+  heightObservers.set(dom, observer)
+}
+
+function unwatchHeight(dom: HTMLElement): void {
+  heightObservers.get(dom)?.disconnect()
+  heightObservers.delete(dom)
+}
+
 /**
  * ```mermaid 代码块 → 图。异步渲染三件套：
  * 先占位、拿到 SVG 再填充；eq() 按源码+主题比较（改一个字符只重绘那一张）；
@@ -139,12 +416,34 @@ export class MermaidWidget extends WidgetType {
     return other.src === this.src && other.theme === this.theme
   }
   override destroy(dom: HTMLElement): void {
+    unwatchHeight(dom)
     cancelRender.get(dom)?.()
     cancelRender.delete(dom)
   }
-  toDOM(): HTMLElement {
+  override get estimatedHeight(): number {
+    return heightMemo.get(cacheKey(this.src, this.theme)) ?? 240
+  }
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement('div')
     el.className = 'cm-lp-mermaid'
+    const content = document.createElement('div')
+    content.className = 'cm-lp-mermaid-content'
+    sourceControl(view, el, content)
+    const zoom = zoomControl(() => {
+      const svg = content.querySelector('svg')
+      if (svg) openPreview(svg.cloneNode(true) as SVGElement, t('cd.mermaid'))
+    })
+    zoom.hidden = true
+    el.append(content, zoom)
+    const key = cacheKey(this.src, this.theme)
+    watchHeight(view, el, key)
+    const ready = cachedSvg(key)
+    if (ready !== null) {
+      // 缓存命中就是同步填好的，高度当场正确，不必惊动 measure
+      content.innerHTML = ready
+      zoom.hidden = false
+      return el
+    }
     let cancelled = false
     cancelRender.set(el, () => {
       cancelled = true
@@ -160,15 +459,24 @@ export class MermaidWidget extends WidgetType {
         // render 对语法错误不抛异常，而是把错误信息嵌进 SVG 返回 ——
         // 要走「保留源码 + 错误提示」就必须用 parse() 显式预校验
         await m.parse(this.src)
-        const { svg } = await m.render(`cursive-mmd-${renderSeq++}`, this.src)
+        const id = `cursive-mmd-${renderSeq++}`
+        const svg = await renderMermaid(m, id, this.src)
+        // 先存再看取消：快速滚动时这一张多半是「画完人已经走了」，
+        // 存下来下一趟正好用得上
+        cacheSvg(key, id, svg)
         if (cancelled) return
-        el.innerHTML = svg
+        content.innerHTML = svg
+        zoom.hidden = false
+        // 图是异步长出来的，高度从一行占位变成几百像素 —— 不重新量，
+        // 下面所有行的坐标在 CM 眼里都还是旧的
+        view.requestMeasure()
       })
       .catch((err: unknown) => {
         if (cancelled) return
         // 渲染失败：保留源码 + 错误信息，不白屏
         el.classList.add('is-error')
-        el.textContent = `${this.src}\n\n${err instanceof Error ? err.message : String(err)}`
+        content.textContent = `${this.src}\n\n${err instanceof Error ? err.message : String(err)}`
+        view.requestMeasure()
       })
     return el
   }
@@ -233,9 +541,10 @@ export class FootnoteDefWidget extends WidgetType {
   eq(other: FootnoteDefWidget): boolean {
     return other.label === this.label && other.text === this.text
   }
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement('div')
     el.className = 'cm-lp-footnote-def'
+    sourceControl(view, el)
     const label = document.createElement('span')
     label.className = 'cm-lp-footnote-def-label'
     label.textContent = `^${this.label}`
@@ -263,6 +572,9 @@ export class EmojiWidget extends WidgetType {
 
 /** [TOC] → 可点击目录。点击条目跳到对应标题 */
 export class TocWidget extends WidgetType {
+  override destroy(dom: HTMLElement): void {
+    unwatchHeight(dom)
+  }
   constructor(readonly entries: TocEntry[]) {
     super()
   }
@@ -272,9 +584,14 @@ export class TocWidget extends WidgetType {
   override ignoreEvent(): boolean {
     return false
   }
+  override get estimatedHeight(): number {
+    // 未渲染时按条数估算；实测缓存区分完整目录内容。
+    return heightMemo.get(`toc:${JSON.stringify(this.entries)}`) ?? 44 + this.entries.length * 28
+  }
   toDOM(view: EditorView): HTMLElement {
     const nav = document.createElement('nav')
     nav.className = 'cm-lp-toc'
+    watchHeight(view, nav, `toc:${JSON.stringify(this.entries)}`)
     const head = document.createElement('div')
     head.className = 'cm-lp-toc-title'
     head.textContent = t('w.toc')
@@ -288,10 +605,7 @@ export class TocWidget extends WidgetType {
       li.style.paddingLeft = `${(entry.level - 1) * 14 + 6}px`
       li.addEventListener('mousedown', (e) => {
         e.preventDefault()
-        view.dispatch({
-          selection: { anchor: entry.pos },
-          effects: EditorView.scrollIntoView(entry.pos, { y: 'start', yMargin: 12 })
-        })
+        jumpTo(view, entry.pos)
       })
       list.appendChild(li)
     }
@@ -310,7 +624,7 @@ export class BulletWidget extends WidgetType {
   toDOM(): HTMLElement {
     const el = document.createElement('span')
     el.className = 'cm-lp-bullet'
-    // 按层级换符号，和 Typora 一致
+    // 按层级换符号，和主流编辑器一致
     el.textContent = ['•', '◦', '▪'][this.depth % 3] ?? '•'
     return el
   }
@@ -369,30 +683,59 @@ export class RuleWidget extends WidgetType {
  * 复刻 Prefs 面板的叠层思路：backdrop 点击 / Escape 关闭。
  */
 let viewer: HTMLElement | null = null
+let viewerFocus: HTMLElement | null = null
 
 export function closeImageView(): void {
   viewer?.remove()
   viewer = null
+  if (viewerFocus?.isConnected) viewerFocus.focus({ preventScroll: true })
+  viewerFocus = null
 }
 
 function openImageView(src: string, alt: string): void {
+  const img = document.createElement('img')
+  img.src = src
+  img.alt = alt
+  openPreview(img, alt)
+}
+
+function openPreview(content: HTMLElement | SVGElement, caption: string): void {
   closeImageView()
+  viewerFocus = document.activeElement as HTMLElement | null
   const viewerEl = document.createElement('div')
   viewerEl.id = 'image-viewer'
+  viewerEl.setAttribute('role', 'dialog')
+  viewerEl.setAttribute('aria-modal', 'true')
+  viewerEl.setAttribute('aria-label', caption || t('w.zoom'))
   const backdrop = document.createElement('div')
   backdrop.className = 'img-viewer-backdrop'
   backdrop.addEventListener('click', closeImageView)
   const panel = document.createElement('div')
   panel.className = 'img-viewer-panel'
-  const img = document.createElement('img')
-  img.src = src
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'img-viewer-close'
+  close.setAttribute('aria-label', t('w.closePreview'))
+  close.innerHTML = icon('close')
+  close.addEventListener('click', closeImageView)
   const cap = document.createElement('div')
   cap.className = 'img-viewer-caption'
-  cap.textContent = alt || ''
-  panel.append(img, cap)
-  viewerEl.append(backdrop, panel)
+  cap.textContent = caption
+  panel.append(content, cap)
+  viewerEl.append(backdrop, panel, close)
+  viewerEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      closeImageView()
+    } else if (e.key === 'Tab') {
+      e.preventDefault()
+      close.focus()
+    }
+  })
   document.body.appendChild(viewerEl)
   viewer = viewerEl
+  close.focus({ preventScroll: true })
 }
 
 // 灯箱开着时 Escape 关闭（常驻监听，开着才有效果）。
@@ -428,8 +771,14 @@ export function copyText(text: string): void {
   }
 }
 
-/** `![alt](src)` → 真图片：点击放大预览；失败显示解析后的完整路径；支持 `=宽x高` 尺寸语法 */
+/** `![alt](src)` → 真图片：点击编辑，独立按钮放大；支持 `=宽x高` 尺寸语法。 */
 export class ImageWidget extends WidgetType {
+  override destroy(dom: HTMLElement): void {
+    unwatchHeight(dom)
+  }
+  private get heightKey(): string {
+    return `img:${JSON.stringify([this.src, this.width, this.height])}`
+  }
   constructor(
     readonly src: string,
     readonly alt: string,
@@ -444,21 +793,42 @@ export class ImageWidget extends WidgetType {
     )
   }
   override ignoreEvent(): boolean {
-    return false
+    return true
   }
-  toDOM(): HTMLElement {
+  override get estimatedHeight(): number {
+    const known = heightMemo.get(this.heightKey)
+    if (known !== undefined) return known
+    // 文档里写的高度只是**请求**：CSS 还有 `max-height: 60vh`（live-preview.css）压着。
+    // 不截的话，`=4000x3000` 这种首帧按 3000px 排版、量完塌回 400px，整篇跟着跳一次
+    return Math.min(this.height ?? 240, cssMaxHeight())
+  }
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'cm-lp-image'
+    const content = document.createElement('span')
+    sourceControl(view, wrap, content)
     const img = document.createElement('img')
-    img.src = this.src
-    img.alt = this.alt
-    if (this.width) img.style.width = `${this.width}px`
-    if (this.height) img.style.height = `${this.height}px`
-    img.addEventListener('click', (e) => {
-      e.preventDefault()
-      openImageView(this.src, this.alt)
+    const zoom = zoomControl(() => openImageView(this.src, this.alt))
+    zoom.hidden = true
+    // 图片的高度要等解码完才知道（没写死 width/height 的话）。CM 量高是在插进 DOM
+    // 的那一帧，那会儿 <img> 还是 0 高 —— 不补这一次 requestMeasure，整篇的行坐标
+    // 就一直按「图片没有高度」算：点一下光标落在别处，滚动位置也会自己漂
+    img.addEventListener('load', () => {
+      if (!wrap.isConnected) return
+      zoom.hidden = false
+      view.requestMeasure()
     })
+    img.alt = this.alt
+    if (this.width) {
+      img.width = this.width
+      img.style.width = `${this.width}px`
+    }
+    if (this.height) {
+      img.height = this.height
+      img.style.height = `${this.height}px`
+    }
     img.addEventListener('error', () => {
+      if (!wrap.isConnected) return
       // 失败时显示解析后的完整路径（不是只给 alt —— alt 排查不了是路径错还是文件缺）
       wrap.classList.add('is-broken')
       let path = this.src
@@ -467,9 +837,17 @@ export class ImageWidget extends WidgetType {
       } catch {
         /* 保底原样 */
       }
-      wrap.textContent = `${path}\n(${this.alt || t('w.imgBroken')})`
+      // 先摘掉观察者再换内容：`is-broken` 的盒子是**另一个东西**（虚线框 + 两行小字），
+      // 让它写进这张图的 key 的话，下次文件补回来了，估高还是裂图那个矮盒子
+      unwatchHeight(wrap)
+      content.textContent = `${path}\n(${this.alt || t('w.imgBroken')})`
+      zoom.hidden = true
+      view.requestMeasure()
     })
-    wrap.appendChild(img)
+    content.appendChild(img)
+    wrap.append(content, zoom)
+    watchHeight(view, wrap, this.heightKey, img)
+    img.src = this.src
     return wrap
   }
 }

@@ -6,6 +6,8 @@ export type MenuAction =
   | 'file:save'
   | 'file:save-as'
   | 'file:save-and-close'
+  // ⌘W 关当前标签；关窗口是 ⇧⌘W（走壳侧 performClose:，不经这条通道）
+  | 'file:close-tab'
   | 'file:open-folder'
   // ---- P4-1 导出 HTML ----
   | 'file:export-html'
@@ -210,7 +212,10 @@ export interface CursiveApi {
   openExternal(url: string): Promise<void>
   pickFolder(): Promise<string | null>
   readDir(path: string): Promise<DirEntry[]>
-  lastFolder(): Promise<string | null>
+  /** 这个窗口的工作区根（契约 v19）：带文件开出来的窗口 = 那个文件所在的目录，
+   *  带文件夹开出来的 = 那个文件夹，空手开的 = 上次 `pickFolder` 选过的那个。
+   *  **不是**全局的「上次打开的文件夹」—— 那会让「双击一个 .md」带出一棵无关的树 */
+  workspaceRoot(): Promise<string | null>
   /** ---- P3-1 文件树读写（契约 v7）----
    * 新建的名字由**壳**弹原生输入框问（渲染层不碰原生 UI），取消或重名冲突返回 null；
    * 删除一律进废纸篓（`NSFileManager.trashItem`，可在 Finder 里找回），壳侧先弹确认。

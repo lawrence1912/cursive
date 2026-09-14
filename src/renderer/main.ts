@@ -20,9 +20,10 @@ import {
   slugs,
   type Section
 } from './editor/headings'
-import { livePreview, themeEffect } from './editor/live-preview'
-import { currentTheme } from './editor/live-preview/widgets'
+import { forgetRowHeight, livePreview, themeEffect } from './editor/live-preview'
+import { currentTheme, primeHeights } from './editor/live-preview/widgets'
 import { bottomOverlay, createState, livePreviewConf, writingConf, writingNow } from './editor/setup'
+import { jumpTo } from './editor/navigation'
 import { writingModes } from './editor/writing-modes'
 import { applyFormat, formatStateAt } from './editor/fmt'
 import { focusKeepScroll } from './editor/focus'
@@ -32,7 +33,7 @@ import { openReplace, searchStat } from './editor/search-panel'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline } from './ui/outline'
-import { FormatBar, FORMAT_BAR_SPACE } from './ui/format-bar'
+import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
 import { Prefs } from './ui/prefs'
 import { cursorLabel, measure, selectedText, StatsPanel, type Stat } from './ui/stats'
@@ -129,7 +130,11 @@ const initialDoc = window.__cursiveInitialDoc ?? null
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
 // 主题 + 排版偏好。字号/行距一变，CodeMirror 缓存的字符尺寸就过期了，必须重量
-const prefs = new Prefs(() => view.requestMeasure())
+const prefs = new Prefs(() => {
+  // 字号/行距/栏宽一变，表格学到的行高就不作数了（见 live-preview/table.ts）
+  forgetRowHeight()
+  view.requestMeasure()
+})
 prefs.apply()
 
 const sidebar = new Sidebar({
@@ -162,12 +167,21 @@ document.getElementById('main')!.insertBefore(sidebar.el, center)
 
 // P2-8：底部悬浮格式栏。挂在 #center 里（不是 body）—— 侧边栏/大纲一开一关，
 // 它要跟着编辑区一起居中，而不是相对整个窗口
-const formatBar = new FormatBar((action) => {
-  applyFormat(view, action)
-  view.focus()
-})
+const formatBar = new FormatBar(
+  (action) => {
+    applyFormat(view, action)
+    view.focus()
+  },
+  // 条子右端那颗折角 / 收起后那颗手柄：只改「摊开还是收起」，不动菜单里那个开关
+  () => {
+    localStorage.setItem('cursive.formatBarFold', formatBar.collapsed ? '1' : '0')
+    syncFormatBar()
+    view.focus()
+  }
+)
 center.appendChild(formatBar.el)
 formatBar.setVisible(localStorage.getItem('cursive.formatBar') !== '0')
+formatBar.setCollapsed(localStorage.getItem('cursive.formatBarFold') === '1')
 syncFormatBar()
 
 function toggleFormatBar(): void {
@@ -177,9 +191,20 @@ function toggleFormatBar(): void {
   syncViewFlags()
 }
 
-/** 显示状态一变，编辑器的滚动下边距要跟着改，否则光标会躲到条子后面 */
+/**
+ * 显示状态一变，编辑器的滚动下边距要跟着改，否则光标会躲到条子后面。
+ * 三态：关掉 = 0、收起 = 一颗手柄那么高、摊开 = 整条那么高。
+ *
+ * **收起时也照算高亮**：省这一下只省得到二十次 classList.toggle（条子 display:none，
+ * 没有布局也没有绘制），换来的却是「屏幕上的状态」与「DOM 里的状态」分家 ——
+ * E2E 读的就是 `.is-on` 这个类，跳过一次，用户上回把条子收起来就能让整条用例变红
+ */
 function syncFormatBar(): void {
-  bottomOverlay.height = formatBar.visible ? FORMAT_BAR_SPACE : 0
+  bottomOverlay.height = !formatBar.visible
+    ? 0
+    : formatBar.collapsed
+      ? FORMAT_BAR_COLLAPSED_SPACE
+      : FORMAT_BAR_SPACE
   if (formatBar.visible) formatBar.setState(formatStateAt(view.state))
 }
 
@@ -193,10 +218,7 @@ let headings: Section[] = []
  */
 const outline = new Outline({
   jump: (pos) => {
-    view.dispatch({
-      selection: { anchor: pos },
-      effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })
-    })
+    jumpTo(view, pos)
     view.focus()
   },
   move: (fromPos, beforePos) => {
@@ -633,16 +655,13 @@ function syncMode(): void {
 
 // ---------- 文档生命周期 ----------
 
-/** 打开到新标签页；同一文件已开着则原地替换内容并激活 */
+/** 打开到新标签页；同一文件已开着则激活原标签，避免覆盖未保存内容 */
 function openTab(content: string, path: string | null, fp: FileFingerprint): Tab {
+  // 文档进编辑器**之前**把落盘的 widget 高度捞进内存：CM 先查 `estimatedHeight` 进高度表、
+  // 再 `toDOM`，晚一步的话这份文档的第一个图/公式/图表照样跳一下（见 widgets.ts 那边的注释）
+  primeHeights(view)
   const existing = path ? tabs.find((t) => t.path === path) : undefined
   if (existing) {
-    existing.state = createState(content, listener, {
-      dir: path ? dirname(path) : null,
-      sourceMode: existing.sourceMode
-    })
-    existing.savedDoc = existing.state.doc
-    existing.fp = fp
     activate(existing.id)
     return existing
   }
@@ -766,6 +785,7 @@ async function flushTabAutosave(t: Tab): Promise<void> {
     if (res) {
       t.savedDoc = t.state.doc
       markSaved()
+      syncStatus(true)
     }
   } else {
     t.scratchId ??= `tab-${Date.now()}-${t.id}`
@@ -823,6 +843,9 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'file:save-as':
       await saveAs()
+      break
+    case 'file:close-tab':
+      await closeTab(activeId)
       break
     case 'file:save-and-close': {
       // 关窗语义：所有脏标签都落盘；任何一个被取消就中止关闭
@@ -949,7 +972,11 @@ async function handleExternalChange(path: string): Promise<void> {
   }
   const curText = t.id === activeId ? view.state.doc.toString() : t.state.doc.toString()
   // 与磁盘一致 → 是我们自己的自动保存触发的监听事件，忽略
-  if (encode(curText, t.fp) === encode(disk.content, disk.fingerprint)) return
+  if (encode(curText, t.fp) === encode(disk.content, disk.fingerprint)) {
+    t.stale = false
+    syncStatus(true)
+    return
+  }
 
   if (t.id === activeId) {
     if (!isTabDirty(t)) {
@@ -959,6 +986,7 @@ async function handleExternalChange(path: string): Promise<void> {
       t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
       t.savedDoc = t.state.doc
       t.fp = disk.fingerprint
+      t.stale = false
       fingerprint = disk.fingerprint
       view.setState(t.state)
       view.dispatch({ selection: sel })
@@ -977,6 +1005,7 @@ async function handleExternalChange(path: string): Promise<void> {
       t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
       t.savedDoc = t.state.doc
       t.fp = disk.fingerprint
+      t.stale = false
       fingerprint = disk.fingerprint
       view.setState(t.state)
       view.dispatch({ selection: sel })
@@ -999,6 +1028,7 @@ async function handleExternalChange(path: string): Promise<void> {
     })
     t.savedDoc = t.state.doc
     t.fp = disk.fingerprint
+    t.stale = false
     syncStatus(true)
   } else {
     t.stale = true

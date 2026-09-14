@@ -145,11 +145,18 @@ export class Sidebar {
     this.render()
   }
 
-  /** 恢复上次打开的文件夹 */
+  /** 挂上这个窗口的工作区（契约 v19）—— 带文件开出来的窗口就是那个文件所在的目录 */
   async restore(): Promise<void> {
-    const dir = await window.api.lastFolder()
-    if (dir) await this.open(dir)
-    else this.render()
+    const dir = await window.api.workspaceRoot()
+    // 启动时这一趟 IPC **不被等**（见 main.ts 的顺序），文档可能已经抢先把树根挂好了
+    // （`setActive` 的兜底）。同一个目录就别再读一遍 —— `open()` 会把展开状态和选中项清掉
+    if (!dir || dir === this.root) {
+      if (!this.root) this.render()
+      return
+    }
+    await this.open(dir)
+    // 上面这趟里文档可能就进来了，补一次定位（open 清过 expanded / selected）
+    if (this.activePath) await this.setActive(this.activePath)
   }
 
   /** 标记当前正在编辑的文件，并展开沿途的目录 */
