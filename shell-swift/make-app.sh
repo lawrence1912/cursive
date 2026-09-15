@@ -28,7 +28,7 @@ ditto out/renderer "$APP/Contents/Resources/renderer"
 # 图标
 [ -f build/icon.icns ] && cp build/icon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-# Info.plist：.md 关联 rank=Alternate（出现在「打开方式」里，不抢默认，与 Electron 版一致）
+# Info.plist：.md 关联 rank=Default（装上即接管 md 默认打开方式）+ 导入 markdown UTI 补全 mdown/mkd 扩展名
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,7 +53,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 		<dict>
 			<key>CFBundleTypeName</key>			<string>Markdown 文档</string>
 			<key>CFBundleTypeRole</key>			<string>Editor</string>
-			<key>LSHandlerRank</key>			<string>Alternate</string>
+			<key>LSHandlerRank</key>			<string>Default</string>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>net.daringfireball.markdown</string>
@@ -65,6 +65,31 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 				<string>mdown</string>
 				<string>mkd</string>
 			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>			<string>net.daringfireball.markdown</string>
+			<key>UTTypeDescription</key>		<string>Markdown 文档</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>md</string>
+					<string>markdown</string>
+					<string>mdown</string>
+					<string>mkd</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>text/markdown</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>
@@ -79,7 +104,12 @@ if [ "${CURSIVE_DMG:-0}" = "1" ]; then
     DMG="dist/Cursive-$VERSION.dmg"
     echo "==> 打 DMG $DMG"
     rm -f "$DMG"
-    hdiutil create -volname Cursive -srcfolder "$APP" -ov -format UDZO "$DMG" | tail -1
+    # 暂存目录里摆 app + /Applications 软链，挂载后直接拖过去
+    STAGE=$(mktemp -d)
+    ditto "$APP" "$STAGE/Cursive.app"
+    ln -s /Applications "$STAGE/Applications"
+    hdiutil create -volname Cursive -srcfolder "$STAGE" -ov -format UDZO "$DMG" | tail -1
+    rm -rf "$STAGE"
 fi
 
 SIZE=$(du -sh "$APP" | cut -f1 | tr -d ' ')
