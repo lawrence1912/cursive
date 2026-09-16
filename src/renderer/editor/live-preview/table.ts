@@ -10,7 +10,9 @@ import {
 import { EditorView, WidgetType, type KeyBinding } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { t, type Key } from '../../i18n'
+import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
+import { openTarget, resolveLink } from '../link'
 import { isHiddenInline } from '../inline-text'
 import { parsedTree } from '../syntax'
 import { Reveal, revealScope } from './reveal'
@@ -1387,12 +1389,16 @@ function wire(wrap: HTMLElement, view: EditorView): void {
   wrap.addEventListener('mousedown', (e) => {
     const cell = cellOf(e.target)
     if (cell) {
-      // 格里的链接：和正文一样 ⌘/Ctrl + 点击用系统浏览器打开（渲染态的 <a> 没有 href，
-      // 真 href 在 contenteditable 里一点就把整个 WebView 导航走了）
+      // 格里的链接：和正文一样 ⌘/Ctrl + 点击跟过去（渲染态的 <a> 没有 href，
+      // 真 href 在 contenteditable 里一点就把整个 WebView 导航走了）。
+      // 去哪儿一律问 `editor/link.ts` —— 同一条链接写在格子里还是正文里，行为必须一样
       const link = (e.target as HTMLElement).closest?.('[data-href]') as HTMLElement | null
       if (link && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        void window.api.openExternal(link.dataset['href']!)
+        // 挡住冒泡：contentDOM 上还挂着正文那条 ⌘+点击，让它再判一次是白费力气
+        e.stopPropagation()
+        const target = resolveLink(link.dataset['href']!, view.state.facet(docDir))
+        if (target) openTarget(view, target)
       }
       return
     }

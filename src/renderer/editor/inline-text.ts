@@ -18,6 +18,9 @@ export const INLINE_MARKS = new Set([
   'SubscriptMark',
   'LinkMark',
   'LinkTitle',
+  // 引用式链接 `[文字][id]` 里的 `[id]`。定义那一行 `[id]: 地址` 整行不会走到这儿
+  // （标题和表格格子里放不下一条定义），所以不必再按父节点分情况
+  'LinkLabel',
   'MathMark',
   // 尺寸图片的 ` =600x400` 那一段（markdown-lang.ts 的 SizedImage）
   'SizeMark',

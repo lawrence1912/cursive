@@ -113,6 +113,11 @@ export class Sidebar {
     })
   }
 
+  /** 当前工作区根（没打开文件夹就是 null）。0.2.0 快速打开要拿它去要文件索引 */
+  get treeRoot(): string | null {
+    return this.root
+  }
+
   get visible(): boolean {
     return !this.el.classList.contains('is-hidden')
   }

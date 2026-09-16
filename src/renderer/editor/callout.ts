@@ -46,6 +46,22 @@ def('danger', '缺陷', 'bug', 'bug')
 def('example', '示例', 'list', 'example')
 def('quote', '引用', 'quote', 'quote', 'cite')
 
+/**
+ * 规范类型一览（别名折叠掉，每种只留一条），供 0.2.0 的 `[!` 自动补全用。
+ * 表就在上面，但别名是一对多的 —— 候选名单要的是「能写进文档的那 13 个词」，
+ * 不是 `TYPES` 的全部键。
+ */
+export function calloutTypes(): CalloutSpec[] {
+  const seen = new Set<string>()
+  const out: CalloutSpec[] = []
+  for (const spec of Object.values(TYPES)) {
+    if (seen.has(spec.type)) continue
+    seen.add(spec.type)
+    out.push(spec)
+  }
+  return out
+}
+
 export interface CalloutMatch extends CalloutSpec {
   /** `[!danger]-` 整段的长度，装饰层按它算替换范围 */
   length: number

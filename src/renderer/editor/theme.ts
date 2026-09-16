@@ -111,7 +111,88 @@ const editorTheme = EditorView.theme({
   },
   // 命中底色也归主题 token 管：写死的那版黄色落在暗色纸上会糊成一团
   '.cm-searchMatch': { backgroundColor: 'var(--match)' },
-  '.cm-searchMatch-selected': { backgroundColor: 'var(--match-on)' }
+  '.cm-searchMatch-selected': { backgroundColor: 'var(--match-on)' },
+
+  // ---- 0.2.0 自动补全面板 ----
+  // CM 自带的 baseTheme 是给代码编辑器配的（等宽字、亮蓝实心选中条），落在这张纸上很突兀。
+  // 这里**照抄 base.css 的 `.ctx-menu`**（右键菜单 / 语言选择器同一身皮）：
+  // 同样的毛玻璃、同样的圆角与投影、同样的 `--accent-wash` 悬停底色。
+  // 浮层就该长一个样 —— 各写一套的话迟早在某次调色里走样
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    padding: '5px',
+    border: '1px solid var(--border)',
+    borderRadius: '10px',
+    background: 'color-mix(in srgb, var(--surface) 94%, transparent)',
+    backdropFilter: 'saturate(1.6) blur(14px)',
+    WebkitBackdropFilter: 'saturate(1.6) blur(14px)',
+    boxShadow: '0 10px 30px rgb(0 0 0 / 18%), 0 1px 3px rgb(0 0 0 / 8%)',
+    color: 'var(--fg)',
+    // chrome 的字体跟界面走，不跟正文走（正文可能是衬线、可能被调到 24px）
+    fontFamily: 'var(--sans)',
+    fontSize: 'var(--chrome-size)'
+  },
+  // 高度按**整行**给（28 × 10 行）。CM 默认的 10em 在这张网格上是 7.4 行 ——
+  // 半行露在下沿看着像渲染坏了，而十行正好够扫完斜杠命令的第一屏
+  '.cm-tooltip-autocomplete > ul': { maxHeight: '280px', fontFamily: 'var(--sans)' },
+  // 行的度量**照抄格式栏插入下拉那一份 `.fb-kind`**（28 高 / 0 8 内边距 / 7 圆角 /
+  // 6 间距 / 16 图标列）：两处列的是同一批块，长相不该有第二种。
+  // `alignItems` 不能写回 `lineHeight` —— 行里现在有 SVG 图标，文字基线对不住它
+  '.cm-tooltip-autocomplete > ul > li': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    height: '28px',
+    padding: '0 8px',
+    borderRadius: '7px'
+  },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+    background: 'var(--accent-wash)',
+    color: 'var(--fg)'
+  },
+  // 图标列：`.fb-item-ic` 的同款（16 宽、平时压淡、当前那一行提到正文色）
+  '.cm-slash-ic': {
+    display: 'flex',
+    alignItems: 'center',
+    flex: 'none',
+    width: '16px',
+    color: 'var(--muted)'
+  },
+  '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-slash-ic': { color: 'var(--fg)' },
+  // 名字占满中间，长了就省略号。**必须给 `minWidth: 0`**：flex 子项的默认
+  // `min-width: auto` 会顶着内容撑开，`text-overflow` 于是一辈子不生效
+  // （标签栏那条 `.tab-title` 踩过同一个坑），而 CM 画在 li 上的那份省略号
+  // 对 flex 布局不起作用
+  '.cm-completionLabel': {
+    flex: '1',
+    minWidth: '0',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
+  },
+  // 右边那一列是辅助信息（斜杠关键词 / emoji 字符 / 语言写法 / 脚注正文）。
+  // 度量**照抄命令面板的 `.pl-hint`**：12px、`--mark-idle`、最多占 45% ——
+  // 「名字在左、提示在右」这件事那边已经定过一次调子了。
+  // 45% 这一条是给脚注源兜底的：它的 detail 是定义正文（最长 40 字），
+  // 不封顶的话面板会被一条脚注拉到 700px
+  '.cm-completionDetail': {
+    flex: 'none',
+    maxWidth: '45%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    marginLeft: 'auto',
+    paddingLeft: '12px',
+    fontStyle: 'normal',
+    fontSize: 'var(--chrome-label)',
+    // 尺寸抄 `.pl-hint`，颜色**故意不抄**（那边是 `--mark-idle`，装饰档 2.6:1）：
+    // 命令面板右边那一列是「你早就会按的快捷键」，而这里是**你要照着打的那个词**，
+    // 第一次用的人正是靠它学会 `/callout` 怎么拼。`--muted` 是 5.1:1，够读
+    color: 'var(--muted)'
+  },
+  // 命中的字：加粗 + accent，与命令面板的 `.pl-label b` 同一套
+  '.cm-completionMatchedText': {
+    textDecoration: 'none',
+    fontWeight: '700',
+    color: 'var(--accent)'
+  }
 })
 
 export const cursiveTheme: Extension = [editorTheme, syntaxHighlighting(markdownHighlight)]

@@ -14,6 +14,20 @@ function trimLeft(p: string, max = 30): string {
 }
 
 /**
+ * 路径相对树根的那一段（**不截断**）。0.2.0 快速打开拿它当模糊匹配的键 ——
+ * 匹配要用完整的相对路径，`relativeDir` 那份是给眼睛看的、可能带着省略号。
+ *
+ * `/private` 那条坑与下面同源：树根与命中路径可能一边带一边不带（`/tmp` 是软链），
+ * 直接 `startsWith` 会算不出相对段落，于是整条绝对路径原样示人。
+ */
+export function relativePath(path: string, root: string | null): string {
+  if (!root) return path
+  const a = unprivate(path)
+  const b = unprivate(root)
+  return a.startsWith(`${b}/`) ? a.slice(b.length + 1) : path
+}
+
+/**
  * 命中文件所在目录**相对树根**的那一段，给同名文件消歧用；就在树根下就返回空串。
  *
  * 两处坑：

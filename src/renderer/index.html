@@ -20,6 +20,9 @@
     <footer id="status-bar">
       <!-- status-file 的内容由 main.ts 启动时填（跟随界面语言），这里留空防错语闪帧 -->
       <span id="status-file"></span>
+      <!-- 一次性反馈（链接打不开 / 没有这个锚点…）：main.ts 的 note() 写，4 秒后自己清空。
+           aria-live 让读屏也念得到 —— 它是「刚才那一下没成」的唯一告知 -->
+      <span id="status-note" role="status" aria-live="polite"></span>
       <span class="spacer"></span>
       <span id="status-pos"></span>
       <span id="status-count" role="button" tabindex="0" data-i18n-title="status.detailTitle"></span>

@@ -2,9 +2,9 @@ import './themes/base.css'
 import './themes/live-preview.css'
 // katex 的 CSS 不在这里 —— 它跟着 JS 一起躺在懒加载的 editor/live-preview/katex.ts 里（P4-6②）
 
-import { findNext, findPrevious, openSearchPanel } from '@codemirror/search'
+import { findNext, findPrevious, openSearchPanel, selectNextOccurrence } from '@codemirror/search'
 import { EditorView } from '@codemirror/view'
-import type { EditorState, Text, TransactionSpec } from '@codemirror/state'
+import { EditorState, type Text, type TransactionSpec } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
 import type { DocPayload, MenuAction, SearchHit } from '../shared/types'
 import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
@@ -22,7 +22,18 @@ import {
 } from './editor/headings'
 import { forgetRowHeight, livePreview, themeEffect } from './editor/live-preview'
 import { currentTheme, primeHeights } from './editor/live-preview/widgets'
-import { bottomOverlay, createState, livePreviewConf, writingConf, writingNow } from './editor/setup'
+import {
+  bottomOverlay,
+  createState,
+  livePreviewConf,
+  spellConf,
+  spellcheckExt,
+  spellNow,
+  writingConf,
+  writingNow
+} from './editor/setup'
+import { cursiveMarkdown } from './editor/markdown-lang'
+import { anchorPos, destLiteral, linkHost } from './editor/link'
 import { jumpTo } from './editor/navigation'
 import { writingModes } from './editor/writing-modes'
 import { applyFormat, formatStateAt } from './editor/fmt'
@@ -30,11 +41,15 @@ import { focusKeepScroll } from './editor/focus'
 import { insertText } from './editor/paste'
 import { exportHtmlDocument } from './export'
 import { openReplace, searchStat } from './editor/search-panel'
+import { relativeDir, relativePath } from './ui/file-search'
 import { Sidebar } from './ui/sidebar'
 import { TabBar } from './ui/tabbar'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
+import { commandItems } from './ui/commands'
+import { openMenu, type MenuItem } from './ui/menu'
+import { Palette, type PaletteItem } from './ui/palette'
 import { Prefs } from './ui/prefs'
 import { cursorLabel, measure, selectedText, StatsPanel, type Stat } from './ui/stats'
 
@@ -66,6 +81,7 @@ const elPos = document.getElementById('status-pos')!
 const elMode = document.getElementById('status-mode')!
 const elSaved = document.getElementById('status-saved')!
 const elMatch = document.getElementById('status-match')!
+const elNote = document.getElementById('status-note')!
 
 let sourceMode = false
 
@@ -134,6 +150,7 @@ const prefs = new Prefs(() => {
   // 字号/行距/栏宽一变，表格学到的行高就不作数了（见 live-preview/table.ts）
   forgetRowHeight()
   view.requestMeasure()
+  syncSpell()
 })
 prefs.apply()
 
@@ -409,7 +426,8 @@ const tabbar = new TabBar(
   (id) => {
     if (id !== activeId) activate(id)
   },
-  (id) => void closeTab(id)
+  (id) => void closeTab(id),
+  (id, e) => openTabMenu(id, e)
 )
 center.prepend(tabbar.el)
 
@@ -481,6 +499,7 @@ function activate(id: number): void {
   })
   syncMode()
   syncWriting()
+  syncSpell()
   outline.setDoc(tab.path ?? `${t('app.untitled')}-${tab.id}`)
   syncStatus(true)
   scheduleCount()
@@ -492,21 +511,27 @@ function activate(id: number): void {
   markFirstPaint()
 }
 
-/** discard：文件已经不在了（进了废纸篓），别再问「是否保存」—— 一保存就把它复活了 */
-async function closeTab(id: number, discard = false): Promise<void> {
+/**
+ * discard：文件已经不在了（进了废纸篓），别再问「是否保存」—— 一保存就把它复活了。
+ *
+ * **返回值是给批量关闭用的**：false = 这一次没关成（用户在「是否保存」里点了取消，
+ * 或者保存本身失败/被取消）。右键菜单那几条批量命令靠它决定要不要停下来 ——
+ * 一个都没救回来就把剩下的全关掉，是最容易让人丢东西的做法。
+ */
+async function closeTab(id: number, discard = false): Promise<boolean> {
   const t = tabs.find((x) => x.id === id)
-  if (!t) return
+  if (!t) return false
   if (t.id === activeId) t.state = view.state
 
   if (!discard && isTabDirty(t)) {
     const choice = await window.api.confirmDiscard(tabTitle(t))
-    if (choice === 'cancel') return
+    if (choice === 'cancel') return false
     if (choice === 'save') {
       if (t.id === activeId) {
-        if (!(await save())) return
+        if (!(await save())) return false
       } else {
         const res = await window.api.save(t.path, t.state.doc.toString(), t.fp)
-        if (!res) return
+        if (!res) return false
       }
     }
   }
@@ -515,10 +540,79 @@ async function closeTab(id: number, discard = false): Promise<void> {
   tabs = tabs.filter((x) => x.id !== id)
   if (tabs.length === 0) {
     newUntitledTab()
-    return
+    return true
   }
   if (id === activeId) activate(tabs[Math.min(idx, tabs.length - 1)]!.id)
   else syncStatus(true)
+  return true
+}
+
+/** 右键菜单里那四条批量关闭，相对**右键点中的那个标签**而言 */
+type CloseScope = 'left' | 'others' | 'right' | 'all'
+
+/**
+ * 批量关标签。
+ *
+ * 三条决定：
+ * ① **按标签栏里看到的顺序从左往右关** —— 脏标签的「是否保存」于是也按这个顺序一个个弹，
+ *    和眼睛看到的对得上；先关非活动的那种优化会让弹窗顺序显得随机；
+ * ② **任何一次取消就整批停下**（`closeTab` 的返回值），剩下的原样留着。
+ *    继续关下去等于「用户说了不要关这个，那就把别的都关了吧」，没有道理；
+ * ③ **留下来的那个先激活**（`all` 除外，它没有幸存者）。这样被关的全是非活动标签，
+ *    `closeTab` 里那条 `activate(邻居)` 一次都不会走 —— 否则关五个标签就要
+ *    `setState` + `focus` 五遍，画面一路闪过去，最后还未必停在该停的地方。
+ */
+async function closeTabs(targetId: number, scope: CloseScope): Promise<void> {
+  const idx = tabs.findIndex((x) => x.id === targetId)
+  if (idx < 0) return
+  const victims = tabs
+    .filter((x, i) => {
+      if (scope === 'all') return true
+      if (scope === 'left') return i < idx
+      if (scope === 'right') return i > idx
+      return x.id !== targetId
+    })
+    .map((x) => x.id)
+  if (!victims.length) return
+  if (scope !== 'all' && targetId !== activeId) activate(targetId)
+  for (const id of victims) {
+    // 关的过程中它可能已经没了（外部删文件会顺手关掉对应标签）——
+    // 那不是「用户取消」，别把整批停在这儿
+    if (!tabs.some((x) => x.id === id)) continue
+    if (!(await closeTab(id))) break
+  }
+}
+
+/** 标签右键菜单。与文件树、大纲共用 `ui/menu.ts` 那一份浮层 */
+function openTabMenu(id: number, e: MouseEvent): void {
+  const idx = tabs.findIndex((x) => x.id === id)
+  if (idx < 0) return
+  const items: MenuItem[] = [
+    { label: t('tab.menuClose'), run: () => void closeTab(id) },
+    {
+      label: t('tab.closeLeft'),
+      separated: true,
+      disabled: idx === 0,
+      run: () => void closeTabs(id, 'left')
+    },
+    {
+      label: t('tab.closeOthers'),
+      disabled: tabs.length <= 1,
+      run: () => void closeTabs(id, 'others')
+    },
+    {
+      label: t('tab.closeRight'),
+      disabled: idx === tabs.length - 1,
+      run: () => void closeTabs(id, 'right')
+    },
+    { label: t('tab.closeAll'), run: () => void closeTabs(id, 'all') }
+  ]
+  tabbar.markContext(id)
+  openMenu(e.clientX, e.clientY, items, {
+    onClose: () => tabbar.markContext(null),
+    // 标签多到挤不下时标签栏会横向滚动，滚一下菜单就该收起（同文件树/大纲）
+    scrollHost: tabbar.el
+  })
 }
 
 // ---------- 状态栏与脏标记 ----------
@@ -551,6 +645,23 @@ function syncStatus(force = false): void {
     activeId
   )
   window.api.openTabs(tabs.map((x) => x.path).filter((p): p is string => p !== null))
+}
+
+/**
+ * 状态栏左边那句**一次性反馈**：链接打不开、没有这个锚点这类「点了之后没能如愿」。
+ * 4 秒后自己消失，不需要任何人去关它。
+ *
+ * 为什么不弹原生对话框：点错一条链接是小事，拦下整个界面要人按一下「好」是大事。
+ * 为什么也不能什么都不说：「点了没反应」是最糟的失败方式 —— 用户分不清是
+ * 链接写错了、文件没了，还是这个编辑器压根不支持跳转。
+ */
+let noteTimer: number | undefined
+function note(message: string): void {
+  elNote.textContent = message
+  clearTimeout(noteTimer)
+  noteTimer = window.setTimeout(() => {
+    elNote.textContent = ''
+  }, 4000)
 }
 
 // ---------- P3-8 字数 / 光标位置 / 详细统计 ----------
@@ -644,6 +755,18 @@ function activeHeadingPos(): number | null {
   return headingBefore(headings, block.from)
 }
 
+/**
+ * 0.2.0 拼写检查：把偏好推到活动 view 上。
+ *
+ * 与写作模式同构 —— `spellNow` 是新建 state 的种子，这一发管的是**已经存在的**那份
+ * （偏好面板里改、或别的窗口广播过来）。`activate()` 里也要叫一次：
+ * 冻结的标签是按它当时的 `spellNow` 建的，切回来时可能已经过期了
+ */
+function syncSpell(): void {
+  spellNow.on = prefs.values.spellcheck
+  view.dispatch({ effects: spellConf.reconfigure(spellcheckExt(spellNow.on)) })
+}
+
 function syncMode(): void {
   view.dispatch({
     effects: livePreviewConf.reconfigure(sourceMode ? [] : livePreview())
@@ -719,6 +842,42 @@ async function openPath(path: string): Promise<void> {
   openTab(doc.content, doc.path, doc.fingerprint)
 }
 
+/**
+ * 跟着一条链接落到本地文档（`editor/link.ts` 判出来的 `doc` 去处）。
+ * 与文件树点一个文件、快速打开选一条是同一条路：**在这个窗口**开一个标签，
+ * 已经开着就激活它（`openTab` 自己会找）。不开新窗口 —— 一个窗口 = 一个工作区，
+ * 而顺着链接读下去是同一个工作区里的事。
+ *
+ * 「已经是当前这份」必须先挡住：`activate()` 只在**切换**时把 view 的 state 存回标签，
+ * 对当前标签再调一次就是拿上一次存下的旧 state 覆盖掉正在编辑的这份（`openPath`
+ * 开头那句 return 挡的也是这件事）。
+ */
+async function openDocLink(path: string, slug: string | null): Promise<void> {
+  if (path !== docPath) {
+    let doc: DocPayload
+    try {
+      doc = await window.api.read(path)
+    } catch {
+      // 链接写错、文件被挪走、大小写对不上都落在这儿
+      note(t('link.missing', { name: basename(path) }))
+      return
+    }
+    openTab(doc.content, doc.path, doc.fingerprint)
+  }
+  if (!slug) return
+  // 锚点要在**目标文档**里找，所以必须等标签切过去之后再算
+  const pos = anchorPos(view.state, slug)
+  if (pos === null) {
+    note(t('link.noAnchor', { slug }))
+    return
+  }
+  jumpTo(view, pos)
+}
+
+// 编辑器扩展只知道「这条链接通向一份本地文档」，开标签与报错都得回到窗口这一层来做
+linkHost.openDoc = (path, slug) => void openDocLink(path, slug)
+linkHost.note = note
+
 async function save(): Promise<boolean> {
   const res = await window.api.save(docPath, view.state.doc.toString(), fingerprint)
   if (!res) return false
@@ -734,7 +893,22 @@ async function save(): Promise<boolean> {
   }
   markSaved()
   syncStatus(true)
+  void keepSnapshot(res.path, view.state.doc.toString())
   return true
+}
+
+/**
+ * 0.2.0 版本历史：每次**写进真实路径**之后留一份快照（契约 v22）。
+ *
+ * 去重、留存上限、目录管理全在壳侧 —— 这里只发一次请求，失败了也不打扰用户：
+ * 历史是安全网，不是保存的一部分，它出问题不该让「刚才那次保存成功了吗」变得可疑。
+ */
+async function keepSnapshot(path: string, content: string): Promise<void> {
+  try {
+    await window.api.snapshotSave(path, content)
+  } catch {
+    /* 历史写不下就算了，保存本身已经成功 */
+  }
 }
 
 let savedAt: Date | null = null
@@ -765,6 +939,7 @@ async function saveAs(): Promise<boolean> {
   }
   markSaved()
   syncStatus(true)
+  void keepSnapshot(res.path, view.state.doc.toString())
   return true
 }
 
@@ -781,11 +956,15 @@ async function flushTabAutosave(t: Tab): Promise<void> {
   if (t.id === activeId) t.state = view.state
   if (!isTabDirty(t)) return
   if (t.path) {
-    const res = await window.api.save(t.path, t.state.doc.toString(), t.fp)
+    const content = t.state.doc.toString()
+    const res = await window.api.save(t.path, content, t.fp)
     if (res) {
       t.savedDoc = t.state.doc
       markSaved()
       syncStatus(true)
+      // 自动保存也留快照。壳侧会去重，所以「停手两秒」触发的那一串同样内容
+      // 只会落下一份（契约 v22）
+      void keepSnapshot(t.path, content)
     }
   } else {
     t.scratchId ??= `tab-${Date.now()}-${t.id}`
@@ -826,6 +1005,89 @@ function exportStem(): string {
 
 async function exportHtml(): Promise<{ path: string } | null> {
   return window.api.exportHtml(await exportHtmlSource(), `${exportStem()}.html`)
+}
+
+/**
+ * 0.2.0 复制为富文本（契约 v20）。
+ *
+ * **有选区就只复制选区**：把选中的那段 Markdown 现造一个 EditorState 渲染 ——
+ * 导出那条路本来就只认 state，于是「整份」和「一段」共用同一个渲染器，
+ * 没有第二套局部渲染逻辑（P4-1 那条「根本不写第二个解析器」的原则在这里同样成立）。
+ *
+ * 剪贴板上放两种风味：`.html` 给邮件 / 飞书 / Notion，纯文本给终端 / 代码框。
+ */
+async function copyAsHtml(): Promise<void> {
+  const sel = view.state.selection.main
+  const tab = activeTab()
+  const dir = tab?.path ? dirname(tab.path) : null
+  const md = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
+  const state = sel.empty
+    ? view.state
+    : EditorState.create({ doc: md, extensions: [cursiveMarkdown()] })
+  const doc = await exportHtmlDocument(state, { dir, title: exportStem() })
+  await window.api.copyHtml(doc.html, md)
+}
+
+/** 0.2.0 命令面板 / 快速打开（同一个组件，见 ui/palette.ts） */
+const palette = new Palette()
+
+/**
+ * 0.2.0 版本历史。**动态 import**（同 P4-6② 的 katex / turndown）：
+ * 面板加上自写的行级 diff 有十几 KB，而它是「偶尔打开一次」的东西 ——
+ * 首屏没有理由背着它。第一次开多花一次本地 chunk 加载，之后一直在手。
+ *
+ * 恢复走**一次普通编辑** —— 整份替换进 EditorView，于是 ⌘Z 能撤回、装饰器照常重算，
+ * 而「保存零损耗」那条红线一点没碰：文档变成什么样是用户主动要求的，
+ * 不是编辑器自作主张改写的
+ */
+let historyPanel: import('./ui/history').History | null = null
+
+async function openHistory(): Promise<void> {
+  const { History } = await import('./ui/history')
+  historyPanel ??= new History((content) => {
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: content },
+      userEvent: 'input.restore'
+    })
+    view.focus()
+  })
+  await historyPanel.open(activeTab()?.path ?? null, view.state.doc.toString())
+}
+
+/**
+ * 快速打开（⌘T）。
+ *
+ * 索引**每次现要**而不是缓存：一次 `listFiles` 就是壳侧一趟目录遍历（几十毫秒），
+ * 而缓存要跟着新建 / 改名 / 拖动 / 删除 / 外部变更一起失效 —— 那是五个订阅点
+ * 和一条「什么时候会脏」的不变量，换来的只是省掉那几十毫秒。不值。
+ */
+async function openQuickOpen(): Promise<void> {
+  const root = sidebar.treeRoot
+  if (!root) {
+    // 没有工作区就没有索引。与其弹一个空面板，不如把话说清楚
+    palette.open([], t('pl.filePlaceholder'), 'pl.noFolder')
+    return
+  }
+  const paths = await window.api.listFiles(root)
+  const items: PaletteItem[] = paths.map((path) => {
+    // 相对段落走 `ui/file-search.ts` 那两个现成的函数，**不要自己 `slice` 一遍** ——
+    // 它们各挡着一个坑：`/tmp` 在 macOS 上是 `/private/tmp` 的软链（树根与路径可能
+    // 一边带一边不带，直接 startsWith 会把整条绝对路径当成相对段落），
+    // 以及目录太长时从**左边**截（尾巴才有信息量）
+    const rel = relativePath(path, root)
+    const cut = rel.lastIndexOf('/')
+    return {
+      label: cut < 0 ? rel : rel.slice(cut + 1),
+      hint: relativeDir(path, root) || undefined,
+      // 匹配拿**没截断**的整条相对路径（`ui/fu` 也该找得到 `ui/fuzzy.ts`），
+      // 但打分偏向文件名那一段（fuzzyPath），高亮再按 labelAt 挪回文件名上
+      key: rel,
+      path: true,
+      labelAt: cut + 1,
+      run: () => void openPath(path)
+    }
+  })
+  palette.open(items, t('pl.filePlaceholder'), 'pl.noFile')
 }
 
 async function handleMenu(action: MenuAction): Promise<void> {
@@ -881,6 +1143,30 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'edit:find-prev':
       findPrevious(view)
+      break
+    case 'file:quick-open':
+      await openQuickOpen()
+      break
+    case 'file:history':
+      await openHistory()
+      break
+    case 'view:command-palette':
+      // 面板执行的就是**这个函数自己** —— 命令面板与原生菜单从此不可能说两套话
+      palette.open(
+        commandItems((a) => void handleMenu(a)),
+        t('pl.cmdPlaceholder'),
+        'pl.noMatch'
+      )
+      break
+    case 'edit:select-next':
+      // 0.2.0 多光标。`allowMultipleSelections` 与 `rectangularSelection` 早就挂在
+      // setup.ts 里了，缺的只是一个按得到的入口 —— ⌘D 被菜单系统吞掉（判断 1），
+      // 所以走菜单这条路，而不是去赌键能不能落回 CodeMirror
+      selectNextOccurrence(view)
+      view.focus()
+      break
+    case 'edit:copy-html':
+      await copyAsHtml()
       break
     case 'edit:paste-plain': {
       // P2-4：⇧⌥⌘V 粘贴为纯文本
@@ -940,7 +1226,9 @@ window.api.onMenu((action) => void handleMenu(action))
 // P2-5：Finder 拖图片进窗口 → 壳落盘后推相对路径 → 光标处插链接
 window.api.onImageDropped((relPath) => {
   const alt = relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
-  insertText(view, `![${alt}](${relPath})`)
+  // 文件名带空格时括进 <…>：Cursive 自己认得裸空格（方言放宽），但写出去的文档
+  // 还要在别处打开 —— app 生成的东西必须是标准形状（destLiteral）
+  insertText(view, `![${alt}](${destLiteral(relPath)})`)
 })
 
 // 主进程推来的文档（最近文件 / Finder 双击 / 命令行）
@@ -1036,10 +1324,22 @@ async function handleExternalChange(path: string): Promise<void> {
   }
 }
 
+/**
+ * 0.2.0 PDF 书签：导出的目录层级。
+ *
+ * 取的是 `collectHeadings` —— 大纲面板、`[TOC]`、锚点补全、导出 HTML 的 id
+ * 用的都是它。壳侧据此给 PDF 装 outline（`PDFDocument.outlineRoot`），
+ * 于是「预览」侧栏里的目录和编辑器大纲里看到的是同一棵树。
+ */
+function outlineSource(): { level: number; text: string }[] {
+  return collectHeadings(view.state).map((h) => ({ level: h.level, text: h.text }))
+}
+
 // 暴露给冒烟脚本和开发者控制台，方便在没法手点界面时驱动编辑器。
-// 两个导出入口在这儿各有理由：`exportHtml` 是 E2E 要等它的结果（派一个菜单动作
-// 看不见异步的收尾）；`exportHtmlSource` 是**壳导出 PDF 时要拿这份 HTML 去打印**
-// —— 真分页 PDF 就是打印 P4-1 的导出产物（P4-2），壳不再自己渲染一遍编辑器
+// 三个入口各有理由：`exportHtml` 是 E2E 要等它的结果（派一个菜单动作看不见异步的收尾）；
+// `exportHtmlSource` 是**壳导出 PDF 时要拿这份 HTML 去打印** —— 真分页 PDF 就是打印
+// P4-1 的导出产物（P4-2），壳不再自己渲染一遍编辑器；`outlineSource` 是同一次导出里
+// 给 PDF 装书签用的那份目录（0.2.0）
 ;(
   window as unknown as {
     __cursive: {
@@ -1047,9 +1347,10 @@ async function handleExternalChange(path: string): Promise<void> {
       sidebar: Sidebar
       exportHtml: () => Promise<{ path: string } | null>
       exportHtmlSource: () => Promise<string>
+      outlineSource: () => { level: number; text: string }[]
     }
   }
-).__cursive = { view, sidebar, exportHtml, exportHtmlSource }
+).__cursive = { view, sidebar, exportHtml, exportHtmlSource, outlineSource }
 
 // P3-4：用户皮肤要等一趟 IPC，起步时发一次就好（加皮肤本来就是「放文件再重开」的动作）
 void prefs.loadUserThemes()

@@ -1,6 +1,8 @@
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type TurndownService from 'turndown'
+import { configureTurndown } from './paste-rules'
+import { destLiteral } from './link'
 import { docDir } from './live-preview'
 
 /**
@@ -10,8 +12,9 @@ import { docDir } from './live-preview'
  * - 选中文字后粘贴一个 URL → 包成 `[文字](url)`
  * - ⇧⌥⌘V → 始终纯文本
  *
- * 转换结果的强调符统一成 `*` / `**`（与 fmt.ts 的格式化命令一致），
- * 删除线补上 `~~`（turndown 默认不认 <del>/<s>）。
+ * 转换结果的强调符统一成 `*` / `**`（与 fmt.ts 的格式化命令一致）；
+ * turndown 默认丢掉的那一批（表格 / 任务项 / 删除线 / `==高亮==` / 上下标）
+ * 由 `paste-rules.ts` 的 `configureTurndown` 补齐。
  */
 
 let turndownPromise: Promise<TurndownService> | null = null
@@ -29,10 +32,7 @@ function loadTurndown(): Promise<TurndownService> {
       emDelimiter: '*',
       strongDelimiter: '**'
     })
-    td.addRule('strikethrough', {
-      filter: (node) => ['DEL', 'S', 'STRIKE'].includes(node.nodeName),
-      replacement: (content) => `~~${content}~~`
-    })
+    configureTurndown(td)
     return td
   })
   return turndownPromise
@@ -92,7 +92,8 @@ async function pasteClipboardImage(view: EditorView): Promise<void> {
   const res = await window.api.pasteImage(dir)
   if (!res) return
   const alt = res.relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
-  insertText(view, `![${alt}](${res.relPath})`)
+  // 带空格的文件名括进 <…>（见 link.ts 的 destLiteral）：写出去的链接要在别处也成立
+  insertText(view, `![${alt}](${destLiteral(res.relPath)})`)
 }
 
 export function smartPaste(): Extension {

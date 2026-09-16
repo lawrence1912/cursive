@@ -699,6 +699,16 @@ body {
 }
 
 #status-bar .spacer { flex: 1; }
+/* 一次性反馈（见 main.ts 的 note()）。跟在文件名后面，用 --warn 与周围那些常驻读数分开；
+   没话说时整条 display:none —— 状态栏是 flex + gap，留一个空 span 就是白占 16px */
+#status-note {
+  color: var(--warn);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#status-note:empty { display: none; }
 #status-saved { font-variant-numeric: tabular-nums; }
 #status-file { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status-mode { font-variant-numeric: tabular-nums; }
@@ -1266,6 +1276,19 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
   color: var(--fg);
   font-weight: 500;
 }
+/* 右键命令作用在哪个标签，那个就亮着（菜单关掉再取消）—— 与文件树 `.sb-row.is-context`
+   同一个约定。只描一圈边、不填底色：填了的话它会和「当前标签」那条底线抢，
+   而这两件事说的不是一回事（一个是「你在编哪份」，一个是「命令要作用在哪份」） */
+.tab-item.is-context {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--fg);
+}
+.tab-item.is-active.is-context {
+  box-shadow:
+    inset 0 -1px 0 var(--panel),
+    inset 0 0 0 1px var(--accent);
+}
+
 .tab-title {
   flex: 1 1 auto;
   min-width: 0;            /* 没有它 ellipsis 在 flex 子项里不生效 */
@@ -1674,4 +1697,322 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
 #prefs input[type='range']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ---------- 0.2.0 命令面板 / 快速打开（ui/palette.ts）----------
+   浮在窗口上三分之一处的一张卡：比居中弹窗更符合「打几个字就走」的节奏，
+   眼睛也不用从正文往下追。皮沿用 .ctx-menu 那一身（毛玻璃 + 同款圆角投影），
+   只是大一号 —— 浮层就该长一个样。 */
+#palette {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+}
+.pl-backdrop {
+  position: absolute;
+  inset: 0;
+  /* 压暗一点点就够：面板已经有投影，再暗会让人以为正文不能看了 */
+  background: rgb(0 0 0 / 14%);
+}
+.pl-box {
+  position: absolute;
+  top: 14vh;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(620px, calc(100vw - 48px));
+  max-height: 60vh;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  backdrop-filter: saturate(1.6) blur(18px);
+  -webkit-backdrop-filter: saturate(1.6) blur(18px);
+  box-shadow:
+    0 24px 60px rgb(0 0 0 / 26%),
+    0 2px 6px rgb(0 0 0 / 10%);
+  overflow: hidden;
+}
+.pl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--divider);
+}
+.pl-icon {
+  flex: none;
+  display: flex;
+  color: var(--muted);
+}
+.pl-icon svg { width: 15px; height: 15px; }
+.pl-input {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--sans);
+  /* 比 chrome 字号大一档：这一行是面板的主角，而且要接受中文输入法的候选框 */
+  font-size: 15px;
+  outline: none;
+}
+.pl-input::placeholder { color: var(--mark-idle); }
+.pl-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: 5px;
+}
+.pl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
+  color: var(--fg);
+  cursor: default;
+}
+.pl-row.is-on { background: var(--accent-wash); }
+.pl-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 命中的字加粗而不是换色：换色在毛玻璃上对比度不稳，加粗在四套主题下都读得出来 */
+.pl-label b { font-weight: 700; color: var(--accent); }
+.pl-hint {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  /* **不能用 `direction: rtl` 来做左截断**（`ui/file-search.ts` 那条注释已经写明了原因，
+     我抄技巧时漏看了）：⌘ 与 / 都是中性字符，双向重排会把它们甩到另一头 ——
+     `⌘N` 显示成 `N⌘`、`/private/tmp` 显示成 `private/tmp/`。
+     左截断归 JS 做（`relativeDir` 会补一个前导 `…`），这里只负责放不下时收尾 */
+  text-overflow: ellipsis;
+  color: var(--mark-idle);
+  font-size: var(--chrome-label);
+}
+.pl-empty {
+  padding: 18px 8px;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+  text-align: center;
+}
+
+/* ---------- 0.2.0 版本历史（ui/history.ts）----------
+   整窗浮层：左边一列版本、右边差异。比命令面板大一号、更方，
+   因为差异要并排读 —— 侧栏那点宽度撑不住这件事。 */
+#history {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+}
+.hi-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 22%);
+}
+.hi-box {
+  position: absolute;
+  top: 8vh;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  width: min(880px, calc(100vw - 48px));
+  height: min(640px, 80vh);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow:
+    0 24px 60px rgb(0 0 0 / 26%),
+    0 2px 6px rgb(0 0 0 / 10%);
+  overflow: hidden;
+  font-family: var(--sans);
+}
+.hi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.hi-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.hi-close {
+  display: flex;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+.hi-close:hover { background: var(--accent-wash); }
+.hi-close svg { width: 15px; height: 15px; }
+.hi-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.hi-list {
+  flex: none;
+  /* 够放下「9月15日 15:07:29 最近 10.6 KB」这一整行 —— 时间带到秒是必须的
+     （同一分钟里常有好几份快照），换行的话每一条就占两行高 */
+  width: 248px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  border-right: 1px solid var(--divider);
+}
+.hi-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: var(--chrome-size);
+  color: var(--fg);
+  cursor: default;
+}
+.hi-row:hover { background: var(--accent-wash); }
+.hi-row.is-on {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.hi-tag {
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: 10px;
+}
+.hi-size {
+  flex: none;
+  color: var(--mark-idle);
+  font-size: var(--chrome-label);
+}
+.hi-none,
+.hi-empty {
+  padding: 18px 12px;
+  color: var(--muted);
+  font-size: var(--chrome-label);
+  text-align: center;
+}
+.hi-right {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.hi-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 这一条不能省：`display:flex` 盖掉 UA 的 `[hidden]` 规则，藏不住的空态文字
+   会原地盖在差异上（同 .cs-row / .sb-empty 那两条坑，这个项目栽过三次了） */
+.hi-empty[hidden] { display: none; }
+.hi-diff {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.hi-stat {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+}
+.hi-skip {
+  padding: 3px 12px;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  color: var(--mark-idle);
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+}
+.hi-line {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 增删用**底色**标，而不是只靠 +/− 符号：扫一眼就要看出哪儿动了。
+   色值走 diff 的语义 token（与代码块里的增删同源，四套主题都有） */
+.hi-line.is-add { background: color-mix(in srgb, var(--hl-ins) 14%, transparent); }
+.hi-line.is-del { background: color-mix(in srgb, var(--hl-del) 14%, transparent); }
+.hi-no {
+  flex: none;
+  width: 34px;
+  padding-left: 6px;
+  color: var(--mark-idle);
+  text-align: right;
+  user-select: none;
+}
+.hi-sign {
+  flex: none;
+  width: 10px;
+  user-select: none;
+}
+.hi-line.is-add .hi-sign { color: var(--hl-ins); }
+.hi-line.is-del .hi-sign { color: var(--hl-del); }
+.hi-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+}
+.hi-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--divider);
+}
+.hi-hint {
+  color: var(--muted);
+  font-size: var(--chrome-label);
+}
+.hi-restore {
+  padding: 5px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
+  cursor: default;
+}
+.hi-restore:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--mark-idle);
 }

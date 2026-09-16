@@ -9,6 +9,7 @@
 //   ./shell-swift/cursive-shell [file.md]
 
 import AppKit
+import CryptoKit
 import PDFKit
 import WebKit
 import UniformTypeIdentifiers
@@ -83,6 +84,12 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.edit.findInFiles":["在文件夹中查找…", "Find in Folder…"],
     "menu.edit.findNext":   ["查找下一个", "Find Next"],
     "menu.edit.findPrev":   ["查找上一个", "Find Previous"],
+    // ---- 0.2.0 ----
+    "menu.edit.selectNext": ["选择下一个匹配", "Select Next Occurrence"],
+    "menu.edit.copyHtml":   ["复制为富文本", "Copy as Rich Text"],
+    "menu.file.quickOpen":  ["快速打开…", "Quick Open…"],
+    "menu.file.history":    ["版本历史…", "Version History…"],
+    "menu.view.palette":    ["命令面板…", "Command Palette…"],
     // ---- 格式 ----
     "menu.format":          ["格式", "Format"],
     "fmt.bold":             ["粗体", "Bold"],
@@ -262,6 +269,11 @@ let BRIDGE_JS = """
     workspaceRoot: () => call('workspaceRoot'),
     readClipboardText: () => call('readClipboardText'),
     writeClipboardText: (text) => call('writeClipboardText', [text]),
+    copyHtml: (html, plain) => call('copyHtml', [html, plain]),
+    listFiles: (root) => call('listFiles', [root]),
+    snapshotSave: (path, content) => call('snapshotSave', [path, content]),
+    snapshotList: (path) => call('snapshotList', [path]),
+    snapshotRead: (path, id) => call('snapshotRead', [path, id]),
     pasteImage: (dir) => call('pasteImage', [dir]),
     setAppearance: (mode) => call('setAppearance', [mode]),
     setViewFlags: (flags) => call('setViewFlags', [flags]),
@@ -381,7 +393,11 @@ final class FileSchemeHandler: NSObject, WKURLSchemeHandler {
         // ⚠️ WebKit 会对自定义 scheme 的 URL 再做一次百分号编码（% → %25），
         // 而渲染层拼 safe-file URL 时已经 encodeURI 过了 —— 所以这里要
         // 逐级解码：先解一次，文件不存在再解一次（两种情况都对字面 % 文件名成立）
-        let raw = url.path(percentEncoded: true)
+        // 要的是**还带着百分号编码**的那一份（下面靠它逐级解码），所以不能用 `url.path`
+        // —— 那个是解码后的。`URL.path(percentEncoded:)` 语义正好，但它要 macOS 13，
+        // 而这个项目承诺的是 12+（Info.plist 的 LSMinimumSystemVersion 与 README 都这么写）。
+        // `URLComponents.percentEncodedPath` 给的是同一个串，10.10 就有
+        let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
         var path = raw.removingPercentEncoding ?? raw
         var file: URL?
         for _ in 0..<2 {
@@ -451,7 +467,28 @@ final class MainWebView: WKWebView {
     /// P2-5：Finder 拖入文件（图片落盘 / .md 开新标签）。由 AppDelegate 处理。
     var dropHandler: (([URL]) -> Bool)?
 
+    /**
+     * 自检期间**吞掉一切真实按键**。
+     *
+     * 不是洁癖，是 `release.sh` 会随机变红的真因（2026-09-15 抓到两次实证）：
+     * 自检的 app 会 `NSApp.activate(ignoringOtherApps: true)` 抢到最前面，
+     * 于是**跑 E2E 的那几十秒里，人在键盘上敲的每一下都落进编辑器**——
+     * 光标在新开文档的 0 位，敲下的字就成了文档的第一个字符，
+     * 接着被自动保存写进夹具。症状是 `kitchen-sink.md` 变成 `u---`、
+     * `long.md` 变成 `ge# 长文档…`，然后某条毫不相干的断言挂掉
+     * （前者让 front matter 不成立、大纲探针全崩，后者让标题数变成 0、PDF 书签为 0）。
+     * 最难查的地方在于它**不可复现**，而且失败点离真因十万八千里。
+     *
+     * 探针自己发的是合成事件（`dispatchEvent`），根本不走这条路，所以吞掉零影响。
+     * `performKeyEquivalent` 返回 true = 「我处理了」，⌘S / ⌘W 这类也一并挡住。
+     */
+    override func keyDown(with event: NSEvent) {
+        if smokeAuto { return }
+        super.keyDown(with: event)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if smokeAuto { return true }
         if event.modifierFlags.contains(.command) { return false }
         return super.performKeyEquivalent(with: event)
     }
@@ -642,6 +679,10 @@ struct PDFStats {
     var pages = 0
     var width: CGFloat = 0
     var height: CGFloat = 0
+    /// 0.2.0：写进文件的书签条数（含各层）
+    var bookmarks = 0
+    /// 写完之后重新读回来、PDFKit 认出几条顶层书签 —— 两个数一起才说明「写得出且读得回」
+    var readBack = 0
 }
 
 /**
@@ -661,18 +702,298 @@ struct PDFStats {
  *    WKWebView 判自己 `visibilityState: 'hidden'`，rAF 一次都不回调，整条流程直接吊死
  *    （P3-8 的打字机滚动踩过同一个坑，见 CONTEXT）。
  */
+/// 一条目录项（0.2.0 PDF 书签）。层级与文字都来自渲染层的 `collectHeadings` ——
+/// 与大纲面板、`[TOC]`、锚点补全同一份取数，壳这边不认识 Markdown
+struct OutlineItem {
+    let level: Int
+    let text: String
+}
+
+/**
+ * 给一份已经印好的 PDF 补一棵书签树（0.2.0）。
+ *
+ * ## 为什么要自己写字节
+ *
+ * 直觉做法是 `doc.outlineRoot = root; doc.write(to:)`。**它不成立** —— 实测：
+ * 设完 `numberOfChildren` 是 1，`write(to:)` 返回 true，重新读回来 `outlineRoot` 是 nil。
+ * `dataRepresentation()` 与 `dataRepresentation(options:)` 一样。
+ * PDFKit 能**读**大纲，但没有任何一条写出路径会把它序列化出去。
+ *
+ * 另一条路是 `CGPDFContextSetOutline` + 逐页 `drawPDFPage` 重绘 —— 那会把链接注记
+ * 全部丢掉（P4-2 的页码之所以走 freeText 注记而不是重绘，就是这个原因）。
+ * 文档里的链接比书签重要，不能拿它换。
+ *
+ * 于是剩下这一条：**增量更新**（PDF 32000 §7.5.6）。只往文件尾部追加 ——
+ * 原有的每一个字节都不动，所以链接、注记、页码、字体子集一样不少。
+ *
+ * ## 只支持经典 xref 表
+ *
+ * WebKit / CoreGraphics 印出来的是 PDF 1.3：明文 `xref` 表 + 明文 `trailer`，
+ * 没有交叉引用流、没有对象流。解析这种结构只需要几条正则。
+ * 万一哪天换了格式（trailer 找不着、已经有 /Outlines、页对象数不对），
+ * 一律**原样返回 0、一个字节都不写** —— 书签是锦上添花，不值得冒毁掉 PDF 的风险。
+ */
+enum PDFOutlineWriter {
+    struct Item {
+        let level: Int
+        let title: String
+        /// 0 起的页序号
+        let page: Int
+        /// 页面坐标系里的纵向落点（PDF 原点在左下）
+        let top: CGFloat
+    }
+
+    /// 返回真的写进去几条；0 = 文件没动过
+    static func append(to url: URL, items: [Item]) -> Int {
+        guard !items.isEmpty,
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .isoLatin1) else { return 0 }
+        let ns = text as NSString
+
+        // ---- 1. trailer：/Root、/Size，以及上一个 xref 的位置 ----
+        guard let trailerAt = lastLocation(of: "trailer", ns) else { return 0 }
+        let trailerTail = ns.substring(from: trailerAt)
+        guard let trailerDict = firstDict(in: trailerTail),
+              let rootNum = int(in: trailerDict, #"/Root\s+(\d+)\s+\d+\s+R"#),
+              let size = int(in: trailerDict, #"/Size\s+(\d+)"#),
+              let prev = lastInt(in: text, #"startxref\s+(\d+)"#) else { return 0 }
+
+        // ---- 2. 对象偏移表 ----
+        // CoreGraphics 把每个 `N 0 obj` 都写在行首，扫一遍就够，不必解析 xref 表本身
+        var offsets: [Int: Int] = [:]
+        for m in matches(in: text, #"(?m)^(\d+)\s+0\s+obj\b"#) {
+            if let n = Int(ns.substring(with: m.range(at: 1))) { offsets[n] = m.range.location }
+        }
+
+        // ---- 3. 目录对象与页对象编号 ----
+        guard let catalog = objectBody(rootNum, ns, offsets), !catalog.contains("/Outlines"),
+              let catDict = firstDict(in: catalog),
+              let pagesNum = int(in: catDict, #"/Pages\s+(\d+)\s+\d+\s+R"#) else { return 0 }
+        var pageRefs: [Int] = []
+        collectPages(pagesNum, ns, offsets, into: &pageRefs, depth: 0)
+        guard !pageRefs.isEmpty else { return 0 }
+
+        // ---- 4. 建树 ----
+        let nodes = buildTree(items.filter { $0.page >= 0 && $0.page < pageRefs.count })
+        guard !nodes.isEmpty else { return 0 }
+
+        // ---- 5. 追加对象 ----
+        var body = Data()
+        var newOffsets: [Int: Int] = [:]
+        var base = data.count
+        // 原文件末尾没有换行的话先补一个，免得 `%%EOF109 0 obj` 粘在一起
+        var prefix = Data()
+        if data.last != 0x0A { prefix = Data([0x0A]); base += 1 }
+
+        func emit(_ num: Int, _ dict: String) {
+            newOffsets[num] = base + body.count
+            body.append(("\(num) 0 obj\n" + dict + "\nendobj\n").data(using: .isoLatin1) ?? Data())
+        }
+
+        let outlineRootNum = size
+        for (i, node) in nodes.enumerated() {
+            let num = size + 1 + i
+            var parts = ["/Title \(pdfString(node.item.title))"]
+            parts.append("/Parent \(node.parent < 0 ? outlineRootNum : size + 1 + node.parent) 0 R")
+            // 目标：页对象 + /XYZ（左、上、缩放）。null 表示「这一维不变」
+            parts.append("/Dest [ \(pageRefs[node.item.page]) 0 R /XYZ null \(fmt(node.item.top)) null ]")
+            if let first = node.children.first { parts.append("/First \(size + 1 + first) 0 R") }
+            if let last = node.children.last { parts.append("/Last \(size + 1 + last) 0 R") }
+            // Count 为正 = 默认展开。全展开是对的：这本来就是一份「文档目录」
+            if !node.descendants.isEmpty { parts.append("/Count \(node.descendants.count)") }
+            if let prevSib = node.prev { parts.append("/Prev \(size + 1 + prevSib) 0 R") }
+            if let nextSib = node.next { parts.append("/Next \(size + 1 + nextSib) 0 R") }
+            emit(num, "<< " + parts.joined(separator: " ") + " >>")
+        }
+        let tops = nodes.indices.filter { nodes[$0].parent < 0 }
+        emit(outlineRootNum, "<< /Type /Outlines /First \(size + 1 + tops.first!) 0 R"
+             + " /Last \(size + 1 + tops.last!) 0 R /Count \(nodes.count) >>")
+        // 目录对象重写一份：`<<` 之后插一条 /Outlines，其余原样
+        emit(rootNum, "<< /Outlines \(outlineRootNum) 0 R " + String(catDict.dropFirst(2)))
+
+        // ---- 6. 新 xref + trailer ----
+        let xrefAt = base + body.count
+        var xref = "xref\n0 1\n0000000000 65535 f \n"
+        for (first, count) in runs(of: newOffsets.keys.sorted()) {
+            xref += "\(first) \(count)\n"
+            for num in first..<(first + count) {
+                xref += String(format: "%010d %05d n \n", newOffsets[num] ?? 0, 0)
+            }
+        }
+        let newSize = size + 1 + nodes.count
+        var trailer = replace(trailerDict, #"/Size\s+\d+"#, with: "/Size \(newSize)")
+        trailer = trailer.range(of: "/Prev") != nil
+            ? replace(trailer, #"/Prev\s+\d+"#, with: "/Prev \(prev)")
+            : "<< /Prev \(prev) " + String(trailer.dropFirst(2))
+        xref += "trailer\n" + trailer + "\nstartxref\n\(xrefAt)\n%%EOF\n"
+
+        var out = data
+        out.append(prefix)
+        out.append(body)
+        out.append(xref.data(using: .isoLatin1) ?? Data())
+        guard (try? out.write(to: url)) != nil else { return 0 }
+        return nodes.count
+    }
+
+    // ---------- 建树 ----------
+
+    private struct Node {
+        let item: Item
+        var parent: Int = -1
+        var children: [Int] = []
+        var descendants: [Int] = []
+        var prev: Int?
+        var next: Int?
+    }
+
+    /// 按 level 串成树。层级跳跃（H1 之后直接 H3）按「挂在最近的更浅一级下面」处理，
+    /// 和大纲面板的做法一致 —— Markdown 里跳级是常态，不该因此丢掉条目
+    private static func buildTree(_ items: [Item]) -> [Node] {
+        var nodes = items.map { Node(item: $0) }
+        var stack: [Int] = []   // 当前各层级最近的节点下标
+        for i in nodes.indices {
+            let level = min(max(nodes[i].item.level, 1), 6)
+            while let top = stack.last, nodes[top].item.level >= level { stack.removeLast() }
+            if let parent = stack.last {
+                nodes[i].parent = parent
+                if let sibling = nodes[parent].children.last {
+                    nodes[i].prev = sibling
+                    nodes[sibling].next = i
+                }
+                nodes[parent].children.append(i)
+            } else if let sibling = nodes.indices.filter({ nodes[$0].parent < 0 && $0 < i }).last {
+                nodes[i].prev = sibling
+                nodes[sibling].next = i
+            }
+            stack.append(i)
+        }
+        // 后代表（/Count 要的是「全展开时能看见几条」，不是直接子节点数）
+        for i in nodes.indices.reversed() {
+            var all: [Int] = []
+            for c in nodes[i].children { all.append(c); all.append(contentsOf: nodes[c].descendants) }
+            nodes[i].descendants = all
+        }
+        return nodes
+    }
+
+    // ---------- 字节层小工具 ----------
+
+    /// PDF 字符串。一律走 UTF-16BE + BOM 的十六进制写法 ——
+    /// 中文标题用 PDFDocEncoding 根本表示不了，而十六进制形式对任何阅读器都成立
+    private static func pdfString(_ s: String) -> String {
+        var hex = "FEFF"
+        for unit in Array(s.utf16) { hex += String(format: "%04X", unit) }
+        return "<" + hex + ">"
+    }
+
+    private static func fmt(_ v: CGFloat) -> String {
+        String(format: "%.2f", v)
+    }
+
+    /// 连续的对象号切成若干段（xref 的子段要求号码连续）
+    private static func runs(of sorted: [Int]) -> [(Int, Int)] {
+        var out: [(Int, Int)] = []
+        for num in sorted {
+            if let last = out.last, last.0 + last.1 == num { out[out.count - 1].1 += 1 }
+            else { out.append((num, 1)) }
+        }
+        return out
+    }
+
+    private static func collectPages(_ num: Int, _ ns: NSString, _ offsets: [Int: Int],
+                                     into out: inout [Int], depth: Int) {
+        guard depth < 16, let body = objectBody(num, ns, offsets) else { return }
+        guard body.contains("/Kids") else {
+            if body.contains("/Page") { out.append(num) }
+            return
+        }
+        guard let kids = capture(in: body, #"/Kids\s*\[([^\]]*)\]"#) else { return }
+        for m in matches(in: kids, #"(\d+)\s+\d+\s+R"#) {
+            let kidsNS = kids as NSString
+            if let kid = Int(kidsNS.substring(with: m.range(at: 1))) {
+                collectPages(kid, ns, offsets, into: &out, depth: depth + 1)
+            }
+        }
+    }
+
+    /// `N 0 obj … endobj` 之间那一段
+    private static func objectBody(_ num: Int, _ ns: NSString, _ offsets: [Int: Int]) -> String? {
+        guard let start = offsets[num] else { return nil }
+        let rest = NSRange(location: start, length: ns.length - start)
+        let end = ns.range(of: "endobj", options: [], range: rest)
+        guard end.location != NSNotFound else { return nil }
+        return ns.substring(with: NSRange(location: start, length: end.location - start))
+    }
+
+    /// 第一个 `<< … >>`（按嵌套层数配对，不是找第一个 `>>`）
+    private static func firstDict(in s: String) -> String? {
+        let ns = s as NSString
+        let open = ns.range(of: "<<")
+        guard open.location != NSNotFound else { return nil }
+        var depth = 0
+        var i = open.location
+        while i + 1 < ns.length {
+            let two = ns.substring(with: NSRange(location: i, length: 2))
+            if two == "<<" { depth += 1; i += 2; continue }
+            if two == ">>" {
+                depth -= 1
+                i += 2
+                if depth == 0 { return ns.substring(with: NSRange(location: open.location, length: i - open.location)) }
+                continue
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    private static func matches(in s: String, _ pattern: String) -> [NSTextCheckingResult] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return re.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length))
+    }
+
+    private static func capture(in s: String, _ pattern: String) -> String? {
+        guard let m = matches(in: s, pattern).first, m.numberOfRanges > 1 else { return nil }
+        return (s as NSString).substring(with: m.range(at: 1))
+    }
+
+    private static func int(in s: String, _ pattern: String) -> Int? {
+        capture(in: s, pattern).flatMap { Int($0) }
+    }
+
+    private static func lastInt(in s: String, _ pattern: String) -> Int? {
+        guard let m = matches(in: s, pattern).last, m.numberOfRanges > 1 else { return nil }
+        return Int((s as NSString).substring(with: m.range(at: 1)))
+    }
+
+    private static func lastLocation(of needle: String, _ ns: NSString) -> Int? {
+        let r = ns.range(of: needle, options: .backwards)
+        return r.location == NSNotFound ? nil : r.location
+    }
+
+    private static func replace(_ s: String, _ pattern: String, with repl: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return s }
+        return re.stringByReplacingMatches(
+            in: s, range: NSRange(location: 0, length: (s as NSString).length),
+            withTemplate: NSRegularExpression.escapedTemplate(for: repl))
+    }
+}
+
 final class PDFPrinter: NSObject, WKNavigationDelegate {
     private let html: String
     private let out: URL
     private let opts: PDFOptions
+    private let outline: [OutlineItem]
     private var wv: WKWebView?
     private var window: NSWindow?
     private var completion: ((Result<PDFStats, Error>) -> Void)?
+    /// 真的写进文件的书签条数（E2E 靠它证明这条路没有空跑）
+    private var bookmarksWritten = 0
 
-    init(html: String, out: URL, opts: PDFOptions) {
+    init(html: String, out: URL, opts: PDFOptions, outline: [OutlineItem]) {
         self.html = html
         self.out = out
         self.opts = opts
+        self.outline = outline
     }
 
     func run(completion: @escaping (Result<PDFStats, Error>) -> Void) {
@@ -763,16 +1084,33 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
             guard success, FileManager.default.fileExists(atPath: self.out.path) else {
                 return self.fail(L("err.pdf.noFile"))
             }
-            self.stampPageNumbers()
+            self.postProcess()
             self.finish(.success(self.stats()))
         }
+    }
+
+    /// 印完之后的两件事：盖页码、装书签。
+    ///
+    /// **合成一次开-改-写**：`PDFDocument(url:)` 解析 + `write(to:)` 重写是整份文档的活，
+    /// 分两遍做等于把一份几十页的 PDF 读写两次，还要多担一次「第二次写覆盖第一次」的风险。
+    private func postProcess() {
+        // 页码：PDFKit 的注记走得通，照旧开-改-写
+        if opts.pageNumbers, let doc = PDFDocument(url: out), doc.pageCount > 0 {
+            stampPageNumbers(doc)
+            doc.write(to: out)
+        }
+        // 书签：PDFKit **写不出去**（见 PDFOutlineWriter 顶上的实测记录），于是分两步 ——
+        // 先用它「读」出每个标题落在哪一页的什么高度，再自己往文件尾追加一次增量更新。
+        // 顺序不能反：页码那一步会重写整个文件，把追加的部分整段冲掉
+        guard !outline.isEmpty, let doc = PDFDocument(url: out), doc.pageCount > 0 else { return }
+        let located = resolveOutline(doc)
+        if !located.isEmpty { bookmarksWritten = PDFOutlineWriter.append(to: out, items: located) }
     }
 
     /// 每页盖一个「3 / 12」。走 PDFKit 的 freeText 注记而**不是重绘整页** ——
     /// 重绘（CGContext + drawPDFPage）会把链接注记一起丢掉，而这只是个页码。
     /// 数字与斜杠都是 ASCII，不牵扯中文字体。
-    private func stampPageNumbers() {
-        guard opts.pageNumbers, let doc = PDFDocument(url: out), doc.pageCount > 0 else { return }
+    private func stampPageNumbers(_ doc: PDFDocument) {
         let total = doc.pageCount
         for i in 0..<total {
             guard let page = doc.page(at: i) else { continue }
@@ -791,13 +1129,103 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
             a.shouldPrint = true
             page.addAnnotation(a)
         }
-        doc.write(to: out)
+    }
+
+    /**
+     * 0.2.0 PDF 书签：把每个标题定位到「第几页、多高」。
+     *
+     * **怎么知道一个标题落在第几页**：WebKit 的打印不产出命名目标，PDF 里也没有 id，
+     * 所以只能按标题文字去页面文本里搜。两条约束让它足够准：
+     *
+     * 1. **单调推进**：标题在文档里是有序的，所以每一条只在上一条落点**之后**找。
+     *    不这么做的话，正文里出现过的同名词会把书签拽回前面去；
+     * 2. **跳过落在链接注记上的命中**。`[TOC]` 生成的目录项是链接、正文里的交叉引用
+     *    也是链接，而**真正的标题不是** —— 这一条正好把「书签全指向目录页」那个
+     *    最常见的错法挡掉。代价是 `## [标题](url)` 这种标题本身是链接的拿不到书签，
+     *    很少见，且只是少一条目录项，不会指错地方。
+     *
+     * 找不到就跳过：书签是尽力而为的东西，缺一条远好过指到错的页。
+     */
+    private func resolveOutline(_ doc: PDFDocument) -> [PDFOutlineWriter.Item] {
+        var out: [PDFOutlineWriter.Item] = []
+        var cursor = 0
+        for item in outline {
+            let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.count >= 2 else { continue }
+            guard let hit = locate(doc, text: text, from: cursor) else { continue }
+            cursor = hit.index
+            out.append(PDFOutlineWriter.Item(level: item.level, title: text,
+                                             page: hit.index, top: hit.top))
+        }
+        return out
+    }
+
+    /**
+     * 从第 `from` 页往后找这段文字，返回落点。跳过命中在链接注记上的那些（见 buildOutline）。
+     *
+     * **不能用 `PDFDocument.findString`** —— 这一条是实测摔出来的：WebKit 印出来的
+     * PDF，中文抽出来是**康熙部首形**（`⽂` U+2F42，不是 `文` U+6587；`用`→`⽤`、
+     * `几`→`⼏` 同理），字形一模一样、码位不同。于是 `findString("长文档")` 一条都找不到，
+     * 而 `findString("真分页")`（三个字都没有部首形）却好好的 —— 症状是「有的标题有书签、
+     * 有的没有」，看上去像随机。
+     *
+     * 办法：两边都过一遍 NFKC 再比。**必须逐字 fold**，不能整串 `precomposedString…`：
+     * 整串会把 `ﬁ`→`fi` 这类一变多的映射也做掉，UTF-16 下标当场错位，
+     * 而后面要靠这个下标回查 `selection(for:)` 拿版面坐标。
+     */
+    private func locate(_ doc: PDFDocument, text: String,
+                        from: Int) -> (index: Int, top: CGFloat)? {
+        let needle = PDFPrinter.foldCompat(text) as String
+        guard !needle.isEmpty else { return nil }
+        for index in from..<doc.pageCount {
+            guard let page = doc.page(at: index), let raw = page.string else { continue }
+            let hay = PDFPrinter.foldCompat(raw)
+            var searchFrom = 0
+            while searchFrom < hay.length {
+                let found = hay.range(of: needle,
+                                      range: NSRange(location: searchFrom,
+                                                     length: hay.length - searchFrom))
+                if found.location == NSNotFound { break }
+                if let sel = page.selection(for: found) {
+                    let bounds = sel.bounds(for: page)
+                    if !isInsideLink(page, bounds) { return (index, bounds.maxY) }
+                }
+                searchFrom = found.location + max(1, found.length)
+            }
+        }
+        return nil
+    }
+
+    /// 逐字兼容分解（NFKC）。保证输出与输入的 UTF-16 长度逐字相等 ——
+    /// 折出来长度变了的那个字就原样留着，宁可它匹配不上，也不能让整串的下标错位
+    static func foldCompat(_ s: String) -> NSString {
+        let ns = s as NSString
+        let out = NSMutableString(capacity: ns.length)
+        var i = 0
+        while i < ns.length {
+            let r = ns.rangeOfComposedCharacterSequence(at: i)
+            let piece = ns.substring(with: r)
+            let folded = piece.precomposedStringWithCompatibilityMapping
+            out.append((folded as NSString).length == r.length ? folded : piece)
+            i = r.location + r.length
+        }
+        return out
+    }
+
+    private func isInsideLink(_ page: PDFPage, _ bounds: CGRect) -> Bool {
+        page.annotations.contains { ann in
+            ann.type == "Link" && ann.bounds.intersects(bounds)
+        }
     }
 
     private func stats() -> PDFStats {
         guard let doc = PDFDocument(url: out), let first = doc.page(at: 0) else { return PDFStats() }
         let box = first.bounds(for: .mediaBox)
-        return PDFStats(pages: doc.pageCount, width: box.width, height: box.height)
+        // 报的是**写进去的条数**而不是只有 `numberOfChildren`：后者只算顶层，
+        // 一份「一个 H1 带十个 H2」的文档会报 1，看不出深层写成没有。两个数一起看
+        return PDFStats(pages: doc.pageCount, width: box.width, height: box.height,
+                        bookmarks: bookmarksWritten,
+                        readBack: doc.outlineRoot?.numberOfChildren ?? 0)
     }
 }
 
@@ -807,6 +1235,37 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
 // 走 Operation 是为了可取消 —— 边打字边搜时，上一次搜索要能在半路停下，
 // 否则一个大目录的结果会追着新查询往回喷。
 // 结果**按文件成批**回推（一个文件的命中一起发）：既是天然的批次，也正好是 UI 的分组单位。
+/// 「哪些目录不进、哪些后缀算文档」—— 跨文件搜索（P3-2）与快速打开的文件索引（0.2.0）
+/// 用的是同一套判断。各写一份的话，两处迟早在某次加后缀时分道扬镳：
+/// 搜得到的文件在快速打开里找不着，是最难自查的那种不一致。
+enum DocScan {
+    /// 目录名黑名单：这些目录里的 .md 是依赖或产物，不是用户的文档
+    static let skipDirs: Set<String> = ["node_modules", "dist", "out", "build", "vendor", "Pods", ".git"]
+    static let exts: Set<String> = ["md", "markdown", "mdown", "mkd", "txt"]
+
+    /// 树根下的全部文档路径，按路径排序。**上限 4000** —— 这一份是一次性整包过桥的
+    /// （判断 3 说的是「图片字节」那种量级，几千条路径约几百 KB，与搜索回推的批次同级），
+    /// 但再往上就该改成流式了，所以这里钉一个明确的顶而不是让它无限涨。
+    static func list(root: String, limit: Int = 4000) -> [String] {
+        let fm = FileManager.default
+        var out: [String] = []
+        let walker = fm.enumerator(at: URL(fileURLWithPath: root),
+                                   includingPropertiesForKeys: [.isDirectoryKey],
+                                   options: [.skipsHiddenFiles, .skipsPackageDescendants])
+        while let url = walker?.nextObject() as? URL {
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            if isDir {
+                if skipDirs.contains(url.lastPathComponent) { walker?.skipDescendants() }
+                continue
+            }
+            guard exts.contains(url.pathExtension.lowercased()) else { continue }
+            out.append(url.path)
+            if out.count >= limit { break }
+        }
+        return out.sorted()
+    }
+}
+
 final class SearchOperation: Operation, @unchecked Sendable {
     private let token: Int
     private let root: String
@@ -817,9 +1276,9 @@ final class SearchOperation: Operation, @unchecked Sendable {
     private let maxHits = 800
     private let maxFiles = 6000
     private let maxBytes = 2 << 20
-    /// 目录名黑名单：这些目录里的 .md 是依赖或产物，不是用户的文档
-    private let skipDirs: Set<String> = ["node_modules", "dist", "out", "build", "vendor", "Pods", ".git"]
-    private let exts: Set<String> = ["md", "markdown", "mdown", "mkd", "txt"]
+    /// 目录黑名单与后缀白名单归 `DocScan`（快速打开的索引共用同一套判断）
+    private let skipDirs = DocScan.skipDirs
+    private let exts = DocScan.exts
 
     init(token: Int, root: String, query: String, opts: [String: Any],
          emit: @escaping (String, Any) -> Void) {
@@ -926,6 +1385,20 @@ func mark(_ what: String) {
 /// 两条规矩合起来才够：① 只认**启动前**就在盘上的（那才叫「上次留下的」）；
 /// ② 交出去一份就划掉 —— 恢复是**一次性**的，第二个窗口不该再拿到同一份。
 var recoverableScratch: Set<String> = []
+/// 自检模式（E2E）。三件事都看它：**一律不弹模态**（`runModal` 会把无人值守的自检
+/// 直接卡死，名字取 `CURSIVE_SMOKE_NAME`、删除确认当成「确定」、「是否保存」取
+/// `CURSIVE_SMOKE_DISCARD`）、**不碰剪贴板**、以及 `MainWebView` 里**吞掉真实按键**。
+/// 全局而不是某个类的私有属性 —— `MainWebView` 也要用，而它不是 `WindowController`
+let smokeAuto = ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil
+
+/// E2E 用（0.2.0 复制为富文本）：自检下不写剪贴板，只记下 [html 长度, 纯文本长度]
+var smokeCopyHtml: [Int] = []
+
+/// E2E 用（0.2.0 链接跳转）：自检下**不把浏览器唤起来**，只记下交出去的地址。
+/// 跑一轮 E2E 弹出五个浏览器标签很不礼貌（同上面那条不碰剪贴板），而要验的本来也是
+/// 「渲染层把哪条地址交给了系统」—— 尤其是本地文件那半（`file://` 编码对不对）
+var smokeExternal: [String] = []
+
 /// E2E 用：`scratchList` 被问过几次 / 一共交出去过几份。「一次性」这条不变量光看一个窗口看不出来
 var scratchQueries = 0
 var scratchHandouts = 0
@@ -1029,6 +1502,53 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         q.qualityOfService = .userInitiated
         return q
     }()
+
+    /// 一份文件的全部快照，**按时间戳升序**（最后一条是最新的）
+    func snapshotFiles(_ dir: URL) -> [URL] {
+        let all = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return all
+            .filter { $0.pathExtension == "md" && Double($0.deletingPathExtension().lastPathComponent) != nil }
+            .sorted { a, b in
+                (Double(a.deletingPathExtension().lastPathComponent) ?? 0)
+                    < (Double(b.deletingPathExtension().lastPathComponent) ?? 0)
+            }
+    }
+
+    /// 留存上限。从**最旧的**开始删，删到「既不超量、也没有过期的」为止，
+    /// 但无论如何留下至少 `floor` 条。
+    ///
+    /// 两个条件是「或」不是「且」：超量要删（今天连改二十遍，最旧的那些没人回头看），
+    /// 过期也要删（一份三个月没动的文档，历史没必要一直占着地方）。
+    /// 而 `floor` 是兜底 —— 一份很久没动的文档，它最后那几版恰恰是最该留住的。
+    func pruneSnapshots(_ dir: URL, keep: Int = 50, days: Double = 30, floor: Int = 10) {
+        let files = snapshotFiles(dir)          // 旧 → 新
+        let cutoff = Date().timeIntervalSince1970 - days * 86400
+        var dropped = 0
+        while files.count - dropped > floor {
+            let url = files[dropped]
+            let stamp = (Double(url.deletingPathExtension().lastPathComponent) ?? 0) / 1000
+            let tooMany = files.count - dropped > keep
+            let tooOld = stamp < cutoff
+            guard tooMany || tooOld else { break }
+            try? FileManager.default.removeItem(at: url)
+            dropped += 1
+        }
+    }
+
+    /// 0.2.0 版本历史目录：`…/cursive/history/<路径摘要>/`（与 scratch 同一个应用支持目录）
+    func historyDir(for path: String) -> URL {
+        let base = scratchDir.deletingLastPathComponent()
+            .appendingPathComponent("history", isDirectory: true)
+        return base.appendingPathComponent(pathKey(path), isDirectory: true)
+    }
+
+    /// 绝对路径 → 文件名安全的短摘要。
+    /// **不能直接拿路径当目录名**：里面有 `/`，还可能长到超过文件名上限。
+    /// 取 SHA-256 前 16 个十六进制字符（64 位），个人文档量级下碰撞概率可以忽略
+    func pathKey(_ path: String) -> String {
+        let digest = SHA256.hash(data: Data(path.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
 
     /// P3-4 用户自定义主题目录（与 scratch 同一个应用支持目录）
     var themesDir: URL {
@@ -1180,7 +1700,28 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 壳不再自己渲染一遍 markdown，导出 HTML 与导出 PDF 从此同一条路
         fetchExportHtml { [weak self] html in
             guard let self, let html else { return }
-            self.runPDFFlow(html: html)
+            // 0.2.0：同一次导出顺带要一份目录，PDF 装上书签。
+            // 单独一趟往返（而不是把它塞进导出 HTML 再从标签里抠出来）—— 那份 HTML
+            // 是给别人看的产物，不该为壳的方便往里掺元数据
+            self.fetchOutline { outline in
+                self.runPDFFlow(html: html, outline: outline)
+            }
+        }
+    }
+
+    /// 向渲染层要一份目录（0.2.0 PDF 书签）。要不到就当没有 —— 书签是尽力而为的
+    private func fetchOutline(_ then: @escaping ([OutlineItem]) -> Void) {
+        let js = "return window.__cursive && window.__cursive.outlineSource"
+            + " ? window.__cursive.outlineSource() : []"
+        webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
+            guard case .success(let value) = result, let rows = value as? [[String: Any]] else {
+                return then([])
+            }
+            then(rows.compactMap { row in
+                guard let level = row["level"] as? Int, let text = row["text"] as? String,
+                      !text.isEmpty else { return nil }
+                return OutlineItem(level: level, text: text)
+            })
         }
     }
 
@@ -1196,7 +1737,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         }
     }
 
-    private func runPDFFlow(html: String) {
+    private func runPDFFlow(html: String, outline: [OutlineItem]) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]
         let base = docPath.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension } ?? L("doc.untitled")
@@ -1207,7 +1748,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         let opts = accessory.options
         opts.remember()
 
-        printPDF(html: html, out: out, opts: opts) { [weak self] result in
+        printPDF(html: html, out: out, opts: opts, outline: outline) { [weak self] result in
             switch result {
             case .success(let stats):
                 let alert = NSAlert()
@@ -1226,9 +1767,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
     /// 打印那一步。**图片一律嵌成 data: URI** —— 离屏打印视图没有 baseURL，
     /// 相对路径在它那儿什么也找不到（导出 HTML 那条路才有「不嵌」的选项）
-    private func printPDF(html: String, out: URL, opts: PDFOptions,
+    private func printPDF(html: String, out: URL, opts: PDFOptions, outline: [OutlineItem],
                           then: @escaping (Result<PDFStats, Error>) -> Void) {
-        let printer = PDFPrinter(html: inlineImages(html, embed: true), out: out, opts: opts)
+        let printer = PDFPrinter(html: inlineImages(html, embed: true), out: out, opts: opts,
+                                 outline: outline)
         pdfPrinter = printer
         printer.run { [weak self] result in
             self?.pdfPrinter = nil
@@ -1436,6 +1978,16 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             respond(id, NSNull())
 
         case "confirmDiscard":
+            // 自检下**绝不弹**（同新建/重命名那几处）：`runModal` 会把无人值守的 E2E
+            // 直接卡死在这儿，而且卡的样子是「跑了十分钟没输出」，很难一眼看出是谁。
+            // `CURSIVE_SMOKE_DISCARD=save|discard|cancel` 指定替身答案，默认 discard
+            // —— 探针里任何一次误关脏标签都该当场过去，而不是把整轮挂起。
+            // 有了它，「批量关闭时取消要中止整批」这条才测得到（那是最容易丢东西的一条）
+            if smokeAuto {
+                let pick = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_DISCARD"] ?? "discard"
+                respond(id, ["save", "discard", "cancel"].contains(pick) ? pick : "discard")
+                break
+            }
             let alert = NSAlert()
             alert.messageText = L("dlg.saveChanges")
             alert.informativeText = LF("dlg.saveChanges.body",
@@ -1453,6 +2005,42 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             pb.clearContents()
             pb.setString(args.first as? String ?? "", forType: .string)
             respond(id, NSNull())
+
+        // ---- 0.2.0 复制为富文本（契约 v20）----
+        // 正文仍由渲染层渲染（和 P4-1 导出、P4-2 打印同一份 HTML，共用同一棵语法树），
+        // 壳只做一件事：把它按 `.html` 放上剪贴板。**两种风味一起放** ——
+        // 粘进邮件 / 飞书 / Notion 拿到的是带格式的版面，粘进终端 / 代码框拿到的是
+        // Markdown 源码。只放 html 的话，纯文本目标会收到一堆标签
+        case "copyHtml":
+            let html = args.first as? String ?? ""
+            let plain = (args.count > 1 ? args[1] as? String : nil) ?? ""
+            // **自检下不碰剪贴板**：E2E 是开发者在自己机器上跑的，抢走他手里的剪贴板
+            // 很不礼貌（同「自检下所有模态一律不弹」那条）。要验的是渲染层交出了
+            // 一对非空的 html/plain、而且过得了桥；真正写剪贴板是下面三行没有分支的代码
+            if smokeAuto {
+                smokeCopyHtml = [html.count, plain.count]
+            } else {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.declareTypes([.html, .string], owner: nil)
+                pb.setString(html, forType: .html)
+                pb.setString(plain, forType: .string)
+            }
+            respond(id, NSNull())
+
+        // ---- 0.2.0 文件索引（契约 v21）----
+        // 快速打开（⌘T）要一份树根下的文档清单。判断 3 的精神照旧：**遍历在壳侧做**
+        // —— 渲染层递归 readDir 是几百次桥调用，而这里一趟就够。
+        //
+        // 走后台队列而**不占 `searchQueue`**：那条队列是串行的，索引一挂上去就会把
+        // 用户正在打字的跨文件搜索顶掉（`searchFiles` 每次都 cancelAllOperations）
+        case "listFiles":
+            let root = args.first as? String ?? ""
+            guard !root.isEmpty, isDirectory(root) else { respond(id, [String]()); break }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let paths = DocScan.list(root: root)
+                DispatchQueue.main.async { self?.respond(id, paths) }
+            }
 
         case "setViewFlags":
             appDelegate?.syncViewFlags(args.first as? [String: Any] ?? [:])
@@ -1486,8 +2074,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             respond(id, NSNull())
 
         case "openExternal":
-            if let s = args[0] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
-            respond(id, NSNull())
+            // 回「系统真的接手了吗」：地址不合法、本地文件已经不在了都会是 false，
+            // 渲染层拿它在状态栏说一句「打不开」—— 否则一次失败的点击与成功的长得一模一样
+            var opened = false
+            if let s = args[0] as? String, let url = URL(string: s) {
+                // 自检下只记账、不真的唤起浏览器（见 smokeExternal）。
+                // **本地文件仍按「在不在」回话**：不这样的话「打不开」那条路
+                // （状态栏说一句）在 E2E 里永远走不到 —— 替身太宽容，等于没测
+                if smokeAuto {
+                    smokeExternal.append(s)
+                    opened = url.isFileURL ? FileManager.default.fileExists(atPath: url.path) : true
+                } else {
+                    opened = NSWorkspace.shared.open(url)
+                }
+            }
+            respond(id, opened)
 
         case "pickFolder":
             let panel = NSOpenPanel()
@@ -1720,6 +2321,55 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             respond(id, ["relPath": "assets/\(file)"])
 
+        // ---- 0.2.0 版本历史（契约 v22）----
+        // 每次保存到真实路径之后留一份快照。三条约束全在壳侧，渲染层只管发一次请求：
+        // 去重（同一份内容不重复写）、留存上限（最近 50 条 / 30 天）、只认带路径的文档
+        case "snapshotSave":
+            guard let path = args.first as? String, !path.isEmpty,
+                  let content = args.count > 1 ? args[1] as? String : nil else {
+                respond(id, false); break
+            }
+            let dir = historyDir(for: path)
+            let fm = FileManager.default
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            // **去重**：自动保存每隔两秒就可能触发一次，内容没变的话历史里全是同一份。
+            // 只比最新那一条就够 —— 快照按时间单调追加，中间不会插队
+            let existing = snapshotFiles(dir)
+            if let newest = existing.last,
+               let old = try? String(contentsOf: newest, encoding: .utf8), old == content {
+                respond(id, false); break
+            }
+            // 落盘目录里只放正文：原路径与时间戳分别由 `path.txt` 和文件名记着，
+            // 不再为每份快照多写一个元数据文件（那会让目录里的文件数翻倍）
+            try? content.write(to: dir.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000)).md"),
+                               atomically: true, encoding: .utf8)
+            try? path.write(to: dir.appendingPathComponent("path.txt"), atomically: true, encoding: .utf8)
+            pruneSnapshots(dir)
+            respond(id, true)
+
+        case "snapshotList":
+            guard let path = args.first as? String, !path.isEmpty else { respond(id, []); break }
+            let files = snapshotFiles(historyDir(for: path))
+            let iso = ISO8601DateFormatter()
+            // 新的在前 —— 列表里最想先看到的是「刚才那一版」
+            respond(id, files.reversed().map { url -> [String: Any] in
+                let stamp = Double(url.deletingPathExtension().lastPathComponent) ?? 0
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                return [
+                    "id": url.deletingPathExtension().lastPathComponent,
+                    "savedAt": iso.string(from: Date(timeIntervalSince1970: stamp / 1000)),
+                    "bytes": size
+                ]
+            })
+
+        case "snapshotRead":
+            guard let path = args.first as? String,
+                  let sid = args.count > 1 ? args[1] as? String : nil,
+                  // 快照 id 直接拼进路径，必须挡住穿越：只允许纯数字（时间戳）
+                  sid.allSatisfy({ $0.isNumber }), !sid.isEmpty else { respond(id, NSNull()); break }
+            let file = historyDir(for: path).appendingPathComponent("\(sid).md")
+            respond(id, (try? String(contentsOf: file, encoding: .utf8)) ?? NSNull())
+
         case "scratchSave":
             guard let sid = args[0] as? String, let content = args[1] as? String,
                   let fpDict = args[2] as? [String: Any] else { respond(id, NSNull()); break }
@@ -1825,12 +2475,6 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             if !fm.fileExists(atPath: next) { return next }
             n += 1
         }
-    }
-
-    /// E2E 用：CURSIVE_SMOKE 下一律不弹模态 —— runModal 会把无人值守的自检直接卡死。
-    /// 名字取 CURSIVE_SMOKE_NAME，删除确认当成「确定」
-    private var smokeAuto: Bool {
-        ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil
     }
 
     /// 原生输入框问一个名字；取消、空白、带路径分隔符都返回 nil
@@ -2055,12 +2699,31 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           }
         }
         const doc = await window.api.read(path)
-        const reloaded = window.__cursive.view.state.doc.toString().includes('external-append-marker')
-        // P0-2 验收：编辑器追加标记 → 2s 防抖自动保存应落盘
+        // P0-3 外部变更：**等它，而不是在某个固定时刻采一次样**。
+        // 那一行 marker 是壳在 +1.5s 写进文件的，探针在 +3s 起跑 —— 中间这 1.5 秒够不够，
+        // 取决于机器此刻忙不忙、mermaid 那 2 MB 的 chunk 在不在系统缓存里。
+        // 固定采样点因此是一场赌局：单跑十次全过，整条流水线连着跑就偶尔 FAIL 一次，
+        // 而 FAIL 的是「重载没发生」这种看起来很严重、其实只是晚了 200ms 的事。
+        // 轮询到 3 秒，`reloadWaited` 一并报回去 —— 真退化成「压根不重载」时它会顶到上限
+        let reloaded = window.__cursive.view.state.doc.toString().includes('external-append-marker')
+        let reloadWaited = 0
+        while (!reloaded && reloadWaited < 3000) {
+          await new Promise(r => setTimeout(r, 100)); reloadWaited += 100
+          reloaded = window.__cursive.view.state.doc.toString().includes('external-append-marker')
+        }
+        // P0-2 验收：编辑器追加标记 → 2s 防抖自动保存应落盘。
+        // **等它，别在固定时刻采一次样**（同上面那条外部变更）：原先是等 2600ms 读一次，
+        // 对 2000ms 的防抖只剩 600ms 余量 —— 单跑十次全过，整条流水线连着跑就偶尔 FAIL。
+        // 先睡过防抖窗口，再每 200ms 问一次，`autosaveWaited` 一并报回去
         const v = window.__cursive.view
         v.dispatch({ changes: { from: v.state.doc.length, insert: '\\nautosave-check-marker' } })
-        await new Promise(r => setTimeout(r, 2600))
-        const after = await window.api.read(path)
+        await new Promise(r => setTimeout(r, 2100))
+        let after = await window.api.read(path)
+        let autosaveWaited = 0
+        while (!after.content.includes('autosave-check-marker') && autosaveWaited < 5000) {
+          await new Promise(r => setTimeout(r, 200)); autosaveWaited += 200
+          after = await window.api.read(path)
+        }
         const img = document.querySelector('.cm-lp-image img')
         // 侧边栏开关回归验证：发两次菜单事件，查 computed display
         window.__shellEmit('menu', 'view:toggle-sidebar')
@@ -2829,6 +3492,158 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         } catch (e) {
           htmlProbe = { error: String(e) }
         }
+        // ---- 0.2.0：补全 / 命令面板 / 快速打开 / 复制为富文本 ----
+        // 摆在导出之后、跨文件搜索之前：前三样都不改文档（补全那一发插完当场删回去），
+        // 而 findProbe 会切标签，放它后面就不是在测这一份文档了
+        let v020 = null
+        try {
+          const emit = (a) => window.__shellEmit('menu', a)
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+          const v = window.__cursive.view
+
+          // ① 自动补全：真的敲一段 `:sm` 让面板自己弹（走 activateOnTyping 那条路，
+          //    而不是直接调 startCompletion —— 后者测不到「挂没挂上」）
+          const end = v.state.doc.length
+          v.dispatch({
+            changes: { from: end, insert: '\\n:sm' },
+            selection: { anchor: end + 4 },
+            userEvent: 'input.type'
+          })
+          await sleep(150)
+          const tip = document.querySelector('.cm-tooltip-autocomplete')
+          const rows = tip ? tip.querySelectorAll('li').length : 0
+          const first = tip ? (tip.querySelector('li') || {}).textContent || '' : ''
+          // 原样删回去。文档此后与 `sampled` 逐字节相同，后面哪一次自动保存都无所谓
+          v.dispatch({ changes: { from: end, to: v.state.doc.length } })
+          const restored = v.state.doc.toString() === sampled
+
+          // ② 命令面板：列的应当是 MenuAction 全表，筛一个词只剩少数几条
+          emit('view:command-palette')
+          await sleep(80)
+          const pal = document.getElementById('palette')
+          const input = pal.querySelector('.pl-input')
+          const cmdAll = pal.querySelectorAll('.pl-row').length
+          input.value = '高亮'
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          await sleep(60)
+          const cmdHit = (pal.querySelector('.pl-row .pl-label') || {}).textContent || ''
+          // Esc 关面板：**派在 document 上**。元素级的合成 KeyboardEvent 在这个
+          // WKWebView 里送不到监听器（实测：同一元素上 `new Event('keydown')` 能触发、
+          // `new KeyboardEvent(...)` 不能），而面板的 Esc 本来就挂在 window 捕获上
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          await sleep(40)
+          const cmdClosed = pal.hidden
+
+          // ③ 快速打开：索引由壳侧遍历（契约 v21），等它一趟
+          emit('file:quick-open')
+          await sleep(600)
+          const files = pal.querySelectorAll('.pl-row').length
+          const fileFirst = (pal.querySelector('.pl-row .pl-label') || {}).textContent || ''
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          await sleep(40)
+          const fileClosed = pal.hidden
+
+          // ④ 复制为富文本（契约 v20）。自检下壳不碰剪贴板，只记两个长度
+          emit('edit:copy-html')
+          await sleep(500)
+
+          // ⑤ 版本历史（契约 v22）。前面「收干净」那一步保存过一次，所以至少有一份快照。
+          // 点开第一条看差异 —— 差异行数为 0 说明要么没读回内容、要么 diff 算错了
+          emit('file:history')
+          await sleep(600)
+          const hi = document.getElementById('history')
+          const hiRows = hi.querySelectorAll('.hi-row').length
+          let hiLines = 0
+          let hiStat = ''
+          if (hiRows > 0) {
+            // 点**最旧**那一条。第一条（最新）多半与当前文档逐字节相同 ——
+            // 面板那时显示的是「与当前文档完全相同」，一行差异都不该有，
+            // 拿它来断言 diff 算没算对等于什么都没测
+            const all = hi.querySelectorAll('.hi-row')
+            all[all.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            await sleep(400)
+            hiLines = hi.querySelectorAll('.hi-line').length
+            hiStat = (hi.querySelector('.hi-stat') || {}).textContent || ''
+          }
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          await sleep(40)
+          const hiClosed = hi.hidden
+
+          v020 = { rows, first, restored, cmdAll, cmdHit, cmdClosed, files, fileFirst, fileClosed,
+                   hiRows, hiLines, hiStat, hiClosed }
+        } catch (e) {
+          v020 = { err: String(e) }
+        }
+        // ---- 0.2.0 标签右键菜单（关闭 左边 / 其他 / 右边 / 所有）----
+        // 只在 dialect.md 这条用例上跑：它要开关一堆标签，别和别的探针抢活动标签。
+        // 这条用例的「是否保存」替身答案是 cancel（release.sh 里设的），
+        // 所以最后那一段能验到「取消要中止整批」—— 那是唯一一条错了会真丢东西的分支
+        let tabProbe = null
+        if (path.indexOf('dialect.md') >= 0) {
+          try {
+            const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+            const tabEls = () => [...document.querySelectorAll('#tabbar .tab-item')]
+            const openSide = async (name) => {
+              const row = document.querySelector('.sb-row[data-path$="/' + name + '"]')
+              if (row) row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+              await nap(200)
+            }
+            const rightClick = async (i) => {
+              const el = tabEls()[i]
+              const b = el.getBoundingClientRect()
+              el.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true, clientX: b.left + 10, clientY: b.top + 8
+              }))
+              await nap(70)
+            }
+            const menu = () => [...document.querySelectorAll('.ctx-menu .ctx-item')]
+            const pick = async (idx) => {
+              const b = menu()[idx]
+              if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+              await nap(320)
+            }
+
+            // ① 三个标签加原来那个，右键第一个：菜单五条，只有「关闭左边」该是灰的。
+            //    起手可能不止一个标签（崩溃恢复的草稿会先开一个），所以数**增量**
+            const before = tabEls().length
+            await openSide('callout.md'); await openSide('crlf.md'); await openSide('math.md')
+            const added = tabEls().length - before
+            await rightClick(0)
+            const labels = menu().map((b) => b.textContent)
+            const offAtFirst = menu().map((b) => b.disabled)
+            const marked = tabEls()[0].classList.contains('is-context')
+            // ② 关闭右边 → 只剩被右键的那个；菜单收起后高亮也该跟着消失
+            await pick(3)
+            const afterRight = tabEls().length
+            const stillContext = tabEls()[0].classList.contains('is-context')
+
+            // ③ 再开两个，右键最后一个：这回该灰的是「关闭右边」。关闭左边 → 同样只剩它
+            await openSide('callout.md'); await openSide('crlf.md')
+            await rightClick(2)
+            const offAtLast = menu().map((b) => b.disabled)
+            await pick(1)
+            const afterLeft = tabEls().length
+
+            // ④ 脏标签 + 取消：整批必须停下，那一个要留着。
+            //    **放在最后一步**：`activate()` 会给切走的标签发一次自动保存，
+            //    于是「改脏 → 再改回去」在竞态里反而会变成第二次变脏 —— 收拾不干净。
+            //    改脏的是 tabs.md（release.sh 专为这条用例造的一次性夹具），
+            //    留着不管也不伤任何别的用例
+            await openSide('tabs.md')
+            const v2 = window.__cursive.view
+            v2.dispatch({ changes: { from: v2.state.doc.length, insert: 'x' } })
+            await nap(60)
+            const beforeCancel = tabEls().length
+            await rightClick(0)
+            await pick(2)                    // 关闭其他
+            const afterCancel = tabEls().length
+
+            tabProbe = { added, labels, offAtFirst, offAtLast, marked, stillContext,
+                         afterRight, afterLeft, beforeCancel, afterCancel }
+          } catch (e) {
+            tabProbe = { err: String(e) }
+          }
+        }
         // P3-2 跨文件搜索。**必须排在上面那段「收干净」之后** —— 点一处命中会切到别的
         // 标签，而收尾那两步操作的是「当前活动标签」，顺序反了就会把内容写进错的文档里
         let findProbe = null
@@ -2874,6 +3689,109 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             findProbe = { err: String(e) }
           }
         }
+        // 0.2.0 链接跳转：⌘+点击的四条去处各走一遍。
+        // **必须和 findProbe 一样排在「收干净」之后** —— 点一条本地文档链接会切到别的标签，
+        // 而前面那些操作的是「当前活动标签」。外部地址在自检下只记账（smokeExternal），
+        // 不会真的把浏览器唤起来
+        let linkProbe = null
+        if (path.indexOf('links.md') >= 0) {
+          try {
+            const modClick = (el) => {
+              const b = el.getBoundingClientRect()
+              // 点在链接文字的**左端**：光标恰好停在这一行时地址会回显成源码，
+              // 中点就落到 `](…)` 那半边去了（仍是同一个 Link 节点，但离得远不如左端稳）
+              el.dispatchEvent(new MouseEvent('mousedown', {
+                bubbles: true, cancelable: true, metaKey: true,
+                clientX: b.left + Math.min(6, b.width / 2), clientY: b.top + b.height / 2
+              }))
+            }
+            const linkBy = (text) => [...document.querySelectorAll('.cm-lp-link')]
+              .find((e) => e.textContent.indexOf(text) >= 0)
+            const lineNow = () => {
+              const vv = window.__cursive.view
+              return vv.state.doc.lineAt(vv.state.selection.main.head).text
+            }
+            const backToLinks = async () => {
+              const tab = [...document.querySelectorAll('.tab-item')].find((e) => e.title === 'links')
+              if (tab) tab.click()
+              await new Promise((r) => setTimeout(r, 300))
+            }
+            // 悬停提示：预览里地址是藏着的，title 是「这条链接通向哪儿」的唯一线索
+            const title = linkBy('跳到小节').getAttribute('title')
+            // ① 本文锚点 → 光标落到那一节的标题上
+            modClick(linkBy('跳到小节'))
+            await new Promise((r) => setTimeout(r, 300))
+            const anchorLine = lineNow()
+            // ② 本地文档 + 锚点 → 开一个**标签**（不是新窗口），并落在目标文档的那一节上
+            const tabsBefore = document.querySelectorAll('.tab-item').length
+            modClick(linkBy('别的文档'))
+            await new Promise((r) => setTimeout(r, 900))
+            const openedPath = document.getElementById('status-file').title
+            const openedLine = lineNow()
+            const tabsAfter = document.querySelectorAll('.tab-item').length
+            await backToLinks()
+            // ②b **文件名带空格**（中文笔记最常见的样子）：尖括号写法与百分号写法
+            // 必须落到同一份文件上。这一段守的是整条链 —— 渲染层拼路径、过桥、
+            // 壳侧 readDoc 按原样读盘，中间任何一步把空格弄丢都会变成「找不到文件」
+            modClick(linkBy('尖括号写法'))
+            await new Promise((r) => setTimeout(r, 900))
+            const angPath = document.getElementById('status-file').title
+            const angLine = lineNow()
+            const angNote = document.getElementById('status-note').textContent
+            await backToLinks()
+            modClick(linkBy('百分号写法'))
+            await new Promise((r) => setTimeout(r, 900))
+            const pctPath = document.getElementById('status-file').title
+            const pctNote = document.getElementById('status-note').textContent
+            await backToLinks()
+            // **裸空格写法**（方言放宽之后才算数的那一条）：CommonMark 说不行，
+            // 而带空格的文件名是中文笔记的常态 —— 它必须和上面两种写法落到同一处
+            modClick(linkBy('裸空格写法'))
+            await new Promise((r) => setTimeout(r, 900))
+            const barePath = document.getElementById('status-file').title
+            const bareLine = lineNow()
+            const bareNote = document.getElementById('status-note').textContent
+            await backToLinks()
+            // ③ 外部地址、④ 本地的其它文件（带空格的文件名走尖括号写法）：都交给系统
+            modClick(linkBy('外部地址'))
+            await new Promise((r) => setTimeout(r, 200))
+            modClick(linkBy('一张图'))
+            await new Promise((r) => setTimeout(r, 200))
+            // ⑤ 文件不在了、⑥ 没有这个锚点：状态栏必须说一句话 —— 点了没反应是最糟的失败方式
+            modClick(linkBy('缺失文件'))
+            await new Promise((r) => setTimeout(r, 500))
+            const missingNote = document.getElementById('status-note').textContent
+            modClick(linkBy('缺失锚点'))
+            await new Promise((r) => setTimeout(r, 300))
+            const anchorNote = document.getElementById('status-note').textContent
+            // ⑦ 本地的其它文件不在了：交给系统之后系统说「没接手」，状态栏跟着说一句
+            modClick(linkBy('缺失图片'))
+            await new Promise((r) => setTimeout(r, 400))
+            const fileNote = document.getElementById('status-note').textContent
+            // ⑧ 地址里有空格：CommonMark 压根不认这种写法（连 Link 节点都没有），
+            // 而带空格的文件名正是中文笔记最常见的样子 —— 必须说清楚为什么点不动。
+            // 它不是链接，DOM 里没有 .cm-lp-link 可点，只能按**文档位置**换算坐标
+            const vv = window.__cursive.view
+            const at = vv.state.doc.toString().indexOf('看不出是文件')
+            const box = at >= 0 ? vv.coordsAtPos(at + 2) : null
+            if (box) {
+              const x = box.left + 1
+              const y = (box.top + box.bottom) / 2
+              ;(document.elementFromPoint(x, y) || vv.contentDOM).dispatchEvent(
+                new MouseEvent('mousedown', { bubbles: true, cancelable: true, metaKey: true, clientX: x, clientY: y })
+              )
+            }
+            await new Promise((r) => setTimeout(r, 300))
+            const spacedNote = document.getElementById('status-note').textContent
+            linkProbe = { title, anchorLine, openedPath, openedLine,
+                          angPath, angLine, angNote, pctPath, pctNote,
+                          barePath, bareLine, bareNote,
+                          tabsBefore, tabsAfter, missingNote, anchorNote, fileNote, spacedNote,
+                          backOnLinks: (document.getElementById('status-file').title || '').endsWith('links.md') }
+          } catch (e) {
+            linkProbe = { err: String(e) }
+          }
+        }
         // P3-7 多窗口：放在**最末尾** —— 新窗口会抢走 key，前面那些量位置/焦点的断言
         // 必须都跑完了。窗口数由壳侧在写 JSON 时补上（网页看不到原生的窗口表）
         // 契约 v14：带文件夹开新窗口（「打开文件夹 = 新窗口」走的就是这条）
@@ -2885,11 +3803,14 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),
-          reloaded,
+          autosaveWaited,
+          reloaded, reloadWaited,
           jsOK: true,
           img: img
             ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
             : null,
+          v020,
+          tabProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
           tbToggle: { hidden: tbHidden, restored: tbBack, onWhileHidden: tbOn },
@@ -2899,6 +3820,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           handles,
           treeProbe,
           findProbe,
+          linkProbe,
           htmlProbe,
           formatProbe,
           barProbe,
@@ -2941,6 +3863,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             out["windowRoots"] = appDelegate?.windows.map { $0.treeRoot ?? "" } ?? []
             // 崩溃恢复的「一次性」不变量（见 `recoverableScratch`）：
             // 问过几次 / 交出去几份 / 候选集里还剩几份
+            // 0.2.0：复制为富文本走到了没有、两种风味都非空没有（自检下不写剪贴板）
+            out["copyHtml"] = smokeCopyHtml
+            // 0.2.0 链接跳转：⌘+点击把哪些地址交给了系统（自检下没真的打开）
+            out["external"] = smokeExternal
             out["scratchQueries"] = scratchQueries
             out["scratchHandouts"] = scratchHandouts
             out["scratchPending"] = recoverableScratch.count
@@ -2971,19 +3897,25 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                     let env = ProcessInfo.processInfo.environment
                     if let p = env["CURSIVE_SMOKE_PDF_PAPER"], let v = PaperSize(rawValue: p) { opts.paper = v }
                     if let m = env["CURSIVE_SMOKE_PDF_MARGIN"], let v = PageMargin(rawValue: m) { opts.margin = v }
-                    self.printPDF(html: html, out: URL(fileURLWithPath: pdfOut), opts: opts) {
-                        result in
-                        var pdfResult: [String: Any] = ["out": pdfOut]
-                        switch result {
-                        case .success(let stats):
-                            pdfResult["bytes"] = (try? Data(contentsOf: URL(fileURLWithPath: pdfOut)))?.count ?? 0
-                            pdfResult["pages"] = stats.pages
-                            pdfResult["width"] = Int(stats.width.rounded())
-                            pdfResult["height"] = Int(stats.height.rounded())
-                        case .failure(let e):
-                            pdfResult["error"] = e.localizedDescription
+                    // 0.2.0：书签走和真导出同一条路（fetchOutline → printPDF），
+                    // 自检才守得住它 —— 只在真导出里接一遍，等于没接
+                    self.fetchOutline { outline in
+                        self.printPDF(html: html, out: URL(fileURLWithPath: pdfOut), opts: opts,
+                                      outline: outline) { result in
+                            var pdfResult: [String: Any] = ["out": pdfOut, "headings": outline.count]
+                            switch result {
+                            case .success(let stats):
+                                pdfResult["bytes"] = (try? Data(contentsOf: URL(fileURLWithPath: pdfOut)))?.count ?? 0
+                                pdfResult["pages"] = stats.pages
+                                pdfResult["width"] = Int(stats.width.rounded())
+                                pdfResult["height"] = Int(stats.height.rounded())
+                                pdfResult["bookmarks"] = stats.bookmarks
+                                pdfResult["bookmarksReadBack"] = stats.readBack
+                            case .failure(let e):
+                                pdfResult["error"] = e.localizedDescription
+                            }
+                            finish(pdfResult)
                         }
-                        finish(pdfResult)
                     }
                 }
             } else {
@@ -2997,21 +3929,26 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 目检 chrome 必须走这条 —— PDF 那条路的 printCSS 第一行就把这些面板全 display:none 了。
     private func captureShot(then next: @escaping () -> Void) {
         guard let out = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT"] else { return next() }
+        // 两个开关**可以叠加**（0.2.0 改）：主题先切、再派菜单动作，于是
+        // 「深色下的命令面板」「护眼下的版本历史」这类走查一条命令就能拍。
+        // 原先各自 return，谁在前谁独占 —— 想拍深色面板只能改代码
+        //
         // CURSIVE_SMOKE_THEME=dark|light|sepia|system：截图前先切主题（视觉走查三套配色用；
         // 它会写进 localStorage，走查完记得用 system 复位）
-        if let theme = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_THEME"],
-           ["dark", "light", "sepia", "system"].contains(theme) {
-            webView.evaluateJavaScript("window.__shellEmit('menu', 'view:theme-\(theme)')")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.shotJS(to: out, then: next) }
-            return
-        }
         // CURSIVE_SMOKE_MENU=<action>：截图前派一个任意菜单动作（目检设置面板这类用）
-        if let action = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_MENU"] {
-            webView.evaluateJavaScript("window.__shellEmit('menu', \(jsonLiteral(action)))")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.shotJS(to: out, then: next) }
-            return
+        let env = ProcessInfo.processInfo.environment
+        let theme = env["CURSIVE_SMOKE_THEME"].flatMap {
+            ["dark", "light", "sepia", "system"].contains($0) ? $0 : nil
         }
-        shotJS(to: out, then: next)
+        let action = env["CURSIVE_SMOKE_MENU"]
+        if theme == nil, action == nil { return shotJS(to: out, then: next) }
+        if let theme { webView.evaluateJavaScript("window.__shellEmit('menu', 'view:theme-\(theme)')") }
+        // 主题切换要重建整份装饰，等它落定再派第二个动作（面板要在新配色上画出来）
+        let gap = theme == nil ? 0.0 : 0.4
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
+            if let action { self.webView.evaluateJavaScript("window.__shellEmit('menu', \(jsonLiteral(action)))") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.shotJS(to: out, then: next) }
+        }
     }
 
     /// CURSIVE_SMOKE_SHOT_JS=<一段 JS>：快门按下之前跑一次，用来给截图「摆姿势」——
@@ -3021,9 +3958,14 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         guard let js = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_JS"] else {
             return snapshot(to: out, then: next)
         }
+        // `CURSIVE_SMOKE_SHOT_WAIT=<毫秒>`：快门前多等一会儿。
+        // **异步的摆姿势脚本需要它**：`evaluateJavaScript` 在脚本**开始**执行时就回调了
+        // （一个 async IIFE 当场就返回 Promise），默认那 350ms 等不到它做完 ——
+        // 想拍「开几个标签再右键」这种画面，不给够时间拍到的是菜单弹出之前的一帧
+        let wait = Double(ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_WAIT"] ?? "") ?? 350
         webView.evaluateJavaScript(js) { _, err in
             if let err { FileHandle.standardError.write("[shotJS] \(err)\n".data(using: .utf8)!) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.snapshot(to: out, then: next) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait / 1000) { self.snapshot(to: out, then: next) }
         }
     }
 
@@ -3175,6 +4117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(NSMenuItem(title: L("menu.file.newWindow"), action: #selector(newWindowItem(_:)), keyEquivalent: "N"))
         file.addItem(item(L("menu.file.open"), "file:open", key: "o"))
         file.addItem(item(L("menu.file.openFolder"), "file:open-folder", key: "o", modifiers: [.command, .shift]))
+        // 0.2.0 快速打开：⌘T 而不是同类编辑器常见的 ⌘P —— ⌘P 在 macOS 上是「打印」，
+        // 这份菜单里已经归了导出 PDF（那才是用户按 ⌘P 时想要的东西）
+        file.addItem(item(L("menu.file.quickOpen"), "file:quick-open", key: "t"))
 
         let recentItem = NSMenuItem(title: L("menu.file.recent"), action: nil, keyEquivalent: "")
         recentItem.submenu = recentMenu()
@@ -3184,6 +4129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(item(L("menu.file.saveAs"), "file:save-as", key: "s", modifiers: [.command, .shift]))
         file.addItem(.separator())
         // P4-1：导出走渲染层（正文与实时预览同一棵语法树），所以是 menuAction 而不是 #selector
+        // 0.2.0 版本历史：和导出摆在一起 —— 都是「对这份文件做点什么」，不是编辑动作。
+        // 不给快捷键：⌥⌘H 在 macOS 上是「隐藏其他」，别的空位也都不顺手，
+        // 它本来就是偶尔用一次的东西（命令面板里一样找得到）
+        file.addItem(item(L("menu.file.history"), "file:history", key: ""))
+        file.addItem(.separator())
         file.addItem(item(L("menu.file.exportHtml"), "file:export-html", key: "e", modifiers: [.command, .shift]))
         file.addItem(NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)), keyEquivalent: "p"))
         file.addItem(.separator())
@@ -3205,6 +4155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(.separator())
         // P2-4：粘贴为纯文本（⇧⌥⌘V）—— ⌘ 组合一律走菜单（判断 1）
         edit.addItem(item(L("menu.edit.pastePlain"), "edit:paste-plain", key: "v", modifiers: [.command, .option, .shift]))
+        // 0.2.0：拷贝的对面 —— 把当前文档按富文本放上剪贴板（契约 v20）
+        edit.addItem(item(L("menu.edit.copyHtml"), "edit:copy-html", key: "c", modifiers: [.command, .option, .shift]))
         edit.addItem(.separator())
         edit.addItem(item(L("menu.edit.find"), "edit:find", key: "f"))
         // 面板里的替换那一行平时收着，这条菜单（和面板左边那颗三角）是把它摊开的两条路。
@@ -3216,6 +4168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(item(L("menu.edit.findInFiles"), "edit:find-in-files", key: "f", modifiers: [.command, .shift]))
         edit.addItem(item(L("menu.edit.findNext"), "edit:find-next", key: "g"))
         edit.addItem(item(L("menu.edit.findPrev"), "edit:find-prev", key: "g", modifiers: [.command, .shift]))
+        // 0.2.0 多光标：`allowMultipleSelections` 与 `rectangularSelection` 早就挂着，
+        // 缺的一直是一个**按得到**的键 —— `performKeyEquivalent` 把所有带 ⌘ 的事件
+        // 交还给菜单（判断 1），而菜单里没有这一条，于是 searchKeymap 的 ⌘D 一直是死的。
+        // 补一条菜单项就活了，且不必去赌「⌘ 键能不能落回 CodeMirror」那个没实测过的问题
+        edit.addItem(item(L("menu.edit.selectNext"), "edit:select-next", key: "d"))
         editItem.submenu = edit
 
         // P2-1：格式菜单 —— ⌘ 组合全部走原生菜单（判断 1），
@@ -3281,6 +4238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 这几项的勾由渲染层推过来（setViewFlags），标题就不再写「显示/隐藏」——
         // 勾本身已经说明了当前是开还是关
         for key in ["sidebar", "outline", "formatBar"] { view.addItem(viewFlagItems[key]!) }
+        view.addItem(.separator())
+        // 0.2.0 命令面板：⇧⌘P 是这类面板的通行键位，且这份菜单里还空着。
+        // 它列的就是**这份菜单自己**（渲染层按 MenuAction 表生成），
+        // 所以「菜单里有、面板里没有」这种漂移不会发生
+        view.addItem(item(L("menu.view.palette"), "view:command-palette", key: "p", modifiers: [.command, .shift]))
         view.addItem(.separator())
         for key in ["source", "focus", "typewriter"] { view.addItem(viewFlagItems[key]!) }
         view.addItem(.separator())

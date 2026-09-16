@@ -17,6 +17,9 @@ import {
 } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
+import { carryDecorations } from '../carry'
+import { docDir } from '../doc-dir'
+import { followLink } from '../link'
 import { knownTree, parsedTree, rememberTree } from '../syntax'
 import { extractFence } from './code'
 import { buildDecorations, calloutAt } from './decorate'
@@ -43,7 +46,7 @@ import {
   TocWidget
 } from './widgets'
 
-export { docDir } from './decorate'
+export { docDir } from '../doc-dir'
 export { revealScope, type RevealScope } from './reveal'
 export { forgetRowHeight, setTableEdit } from './table'
 export { currentTheme } from './widgets'
@@ -64,8 +67,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     update(u: ViewUpdate): void {
       // 输入法合成期间重算装饰器会吞字 —— 中文连打必踩的坑。
       // 合成结束后靠 wasComposing 补一次，避免残留过期的装饰。
-      if (u.view.composing) {
+      // composing 要等首个文本变更才为 true；从 compositionstart 就保护原生组字选区。
+      if (u.view.compositionStarted) {
         this.wasComposing = true
+        this.carry(u)
         return
       }
       // 进/出表格编辑态只带一个 effect（不改文档也不改选区），不认它就不会重铺行样式
@@ -73,33 +78,46 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const pointerChanged = u.startState.field(pointerSelection, false) !== u.state.field(pointerSelection, false)
       // 鼠标拖选期间保留预览布局。选区仍正常更新，但 inline widget 不能跟着每个
       // selectionSet 在源码/预览间翻面，否则异步图片或公式会把拖选落点推开。
-      if (u.state.field(pointerSelection, false)) return
+      if (u.state.field(pointerSelection, false)) {
+        this.carry(u)
+        return
+      }
       if (this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged || tableEdit || pointerChanged) {
         this.wasComposing = false
         this.decorations = buildDecorations(u.view)
       }
     }
+
+    /**
+     * 这一轮不重算（合成中 / 拖选中）—— 但手里这份的**位置必须跟着文档走**。
+     * 上面两条 `return` 都得过这里，理由见 `editor/carry.ts`：CM 直接拿 ViewPlugin
+     * 的装饰去画当前文档，不映射就是拿旧坐标画新文档。
+     */
+    private carry(u: ViewUpdate): void {
+      if (u.docChanged) this.decorations = carryDecorations(this.decorations, u.changes, u.state.doc)
+    }
   },
   { decorations: (p) => p.decorations }
 )
 
-/** ⌘/Ctrl + 点击链接文字，用系统浏览器打开 */
+/**
+ * ⌘/Ctrl + 点击 = 跟着链接走。去哪儿由 `editor/link.ts` 判（外部地址给系统、
+ * 本地文档开标签、`#锚点` 就地跳），这里只负责把「点在哪个位置上」交出去。
+ *
+ * **认的是语法树而不是 `.cm-lp-link` 类**：引用定义 `[id]: 地址` 那一行有意不上色，
+ * 但它照样该跟得过去；反过来，类名是装饰层的实现细节，点击不该绑在它身上。
+ *
+ * 不是链接就必须**返回 false**：⌘+点击在 CodeMirror 里本来是「加一个光标」
+ * （0.2.0 的多光标），把它一律吃掉等于拿走一个既有功能。
+ */
 const openLinkOnClick = EditorView.domEventHandlers({
   mousedown(event, view) {
     if (!(event.metaKey || event.ctrlKey)) return false
-    if (!(event.target as HTMLElement | null)?.closest?.('.cm-lp-link')) return false
     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
     if (pos == null) return false
-
-    for (let n = syntaxTree(view.state).resolveInner(pos, 1); n; n = n.parent!) {
-      if (n.name !== 'Link') continue
-      const url = n.getChild('URL')
-      if (!url) break
-      event.preventDefault()
-      void window.api.openExternal(view.state.doc.sliceString(url.from, url.to))
-      return true
-    }
-    return false
+    if (!followLink(view, pos, view.state.facet(docDir))) return false
+    event.preventDefault()
+    return true
   }
 })
 

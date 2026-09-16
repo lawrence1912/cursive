@@ -130,6 +130,32 @@ describe('cursive 的 markdown 方言', () => {
     expect(nodes('> [文字](https://a.b) 在引用里\n')).toContain('Link')
   })
 
+  it('目的地带空格：看得出是文件就认（SpacedLink）', () => {
+    // CommonMark 说不行，但带空格的文件名是中文笔记的常态（见 markdown-lang.ts 的注释）
+    const link = nodes('[vps](VPS 从 0 到 1 部署 3x-ui.md)\n')
+    expect(link).toContain('Link')
+    expect(link).toContain('URL')
+    // 图片同样放宽，尺寸语法照旧认
+    const img = nodes('![图](我的 图.png =600x400)\n')
+    expect(img).toContain('Image')
+    expect(img).toContain('SizeMark')
+    // 锚点在后缀后面，不影响判断
+    expect(nodes('[a](./我的 笔记.md#小节)\n')).toContain('URL')
+    // 标题也还认
+    expect(nodes('[a](我的 笔记.md "说明")\n')).toContain('LinkTitle')
+  })
+
+  it('目的地带空格：看不出是文件就**不**认 —— 误认比不认更糟', () => {
+    // 正文里平白多出一条蓝线，比「点不动」更让人困惑
+    const noExt = nodes('[备注](见 下文)\n')
+    expect(noExt).toContain('Link') // `[备注]` 这个 shortcut 形状是内置的
+    expect(noExt).not.toContain('URL') // 但括号那半没有被认领
+    expect(nodes('[版本](见 v1.2)\n')).not.toContain('URL') // 后缀首字母必须是字母
+    expect(nodes('[官网](http://a b.com)\n')).not.toContain('URL') // 带协议的不放宽
+    // 没空格的一律归内置解析器，这条只管带空格的
+    expect(nodes('[普通](a.md)\n')).toContain('URL')
+  })
+
   it('CommonMark 基本结构正常', () => {
     const n = nodes('# 标题\n\n> 引用\n\n- 项\n\n```ts\nconst a = 1\n```\n\n---\n')
     for (const name of ['ATXHeading1', 'Blockquote', 'BulletList', 'FencedCode', 'HorizontalRule'])

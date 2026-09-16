@@ -97,6 +97,16 @@ const INSERT_META: Record<
 
 const INSERT = INSERT_ACTIONS.map((action) => ({ action, ...INSERT_META[action] }))
 
+/**
+ * 「这条格式命令配哪颗图标」的一览。**由上面那几张表现算**，不另列一份 ——
+ * 斜杠命令菜单（`editor/slash.ts`）列的是同一批块，两处必须长同一个样，
+ * 而它需要的只是这一层映射，不该把整条工具栏也拖过去。
+ * 对账断言在 `test/slash.test.ts`：哪边改了图标、另一边没跟上，当场变红。
+ */
+export const FORMAT_ICONS: Partial<Record<MenuAction, IconName>> = Object.fromEntries(
+  [...EMPHASIS, ...INLINE, ...BLOCK, ...INSERT].map((b) => [b.action, b.name])
+)
+
 /** 条目当前语言下的显示名（标题 N 带编号占位符） */
 function kindLabel(k: { labelKey: Key; args?: Record<string, number> }): string {
   return k.args ? t(k.labelKey, k.args) : t(k.labelKey)

@@ -1,3 +1,4 @@
+import { carryDecorations } from './carry'
 import { pointerSelection } from './pointer-selection'
 import { hasNavigationTarget } from './navigation'
 import type { EditorState, Extension, Range } from '@codemirror/state'
@@ -88,9 +89,11 @@ const focusPlugin = ViewPlugin.fromClass(
     }
 
     update(u: ViewUpdate): void {
-      // 输入法铁律：合成期间不重算装饰，合成完补一次
-      if (u.view.composing) {
+      // 输入法铁律：合成期间不重算装饰，合成完补一次 —— 但**位置要跟着文档走**
+      // （`editor/carry.ts`：不映射的行样式会落到别的行上，行高一变视口就往下跳）
+      if (u.view.compositionStarted) {
         this.wasComposing = true
+        if (u.docChanged) this.decorations = carryDecorations(this.decorations, u.changes, u.state.doc)
         return
       }
       if (this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged) {
@@ -130,7 +133,11 @@ const typewriterPlugin = ViewPlugin.fromClass(
     }
 
     update(u: ViewUpdate): void {
-      if (u.view.composing) return // 合成中滚动会把候选词框甩飞
+      if (u.view.compositionStarted) {
+        if (this.timer) clearTimeout(this.timer)
+        this.timer = 0
+        return // 组字开始就取消归位，避免上一次输入排队的滚动挪动光标和候选词框
+      }
       if (u.state.field(pointerSelection, false) || u.transactions.some((tr) => tr.isUserEvent('select.pointer'))) {
         if (this.timer) clearTimeout(this.timer)
         this.timer = 0
@@ -147,7 +154,8 @@ const typewriterPlugin = ViewPlugin.fromClass(
       if (this.timer) return
       this.timer = window.setTimeout(() => {
         this.timer = 0
-        if (hasNavigationTarget(view) || view.state.field(pointerSelection, false)) return
+        // compositionstart 本身不一定产生 ViewUpdate，执行时还需检查一次。
+        if (view.compositionStarted || hasNavigationTarget(view) || view.state.field(pointerSelection, false)) return
         view.dispatch({
           effects: EditorView.scrollIntoView(view.state.selection.main.head, {
             y: 'start',

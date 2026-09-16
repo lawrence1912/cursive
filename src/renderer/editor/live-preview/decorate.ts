@@ -1,7 +1,8 @@
-import { Facet, type EditorState, type Range, type Text } from '@codemirror/state'
+import { type EditorState, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 import { calloutFolded, matchCallout, type CalloutMatch } from '../callout'
+import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
 import { parsedTree } from '../syntax'
 import { CodeHeadWidget, fenceParts } from './code'
@@ -18,16 +19,21 @@ import {
   RuleWidget
 } from './widgets'
 
-/** 当前文档所在目录，用来把 `![](assets/a.png)` 这种相对路径解析成可加载的 URL */
-export const docDir = Facet.define<string | null, string | null>({
-  combine: (values) => values[0] ?? null
-})
-
 const HIDE = Decoration.replace({})
 
 /** 零长度的 replace 是无效装饰，会把 CodeMirror 的行渲染搞崩，统一在这里挡掉 */
 function pushHide(ctx: Ctx, from: number, to: number): void {
   if (to > from) ctx.out.push(HIDE.range(from, to))
+}
+
+/**
+ * 同一行之内才藏。CommonMark 允许链接的标签 / 标题换行写（`[文字][\n id]`），
+ * 而跨行的 replace 装饰会把两行在屏幕上并成一行 —— 文档一个字没变，看着却像丢了内容。
+ * 这种写法极少见，撞上就宁可把源码露出来。
+ */
+function hideSameLine(ctx: Ctx, from: number, to: number): void {
+  if (ctx.doc.lineAt(from).to < to) return
+  pushHide(ctx, from, to)
 }
 const lineCache = new Map<string, Decoration>()
 function lineDeco(cls: string): Decoration {
@@ -36,6 +42,14 @@ function lineDeco(cls: string): Decoration {
   return d
 }
 const markCache = new Map<string, Decoration>()
+/**
+ * 带 title 的链接标记。类名那份走下面的 markCache，这一份每次现造 ——
+ * title 因链接而异，缓存等于给每条不同的地址各留一份。CM 比装饰是**按值**比
+ * （MarkDecoration.eq 比类名和属性），现造不会引起额外的 DOM 重绘。
+ */
+function linkDeco(title: string): Decoration {
+  return Decoration.mark({ class: 'cm-lp-link', attributes: { title } })
+}
 function markDeco(cls: string): Decoration {
   let d = markCache.get(cls)
   if (!d) markCache.set(cls, (d = Decoration.mark({ class: cls })))
@@ -171,12 +185,40 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       }
       return
 
-    case 'URL':
-      // 只藏 [文字](链接) 里的链接，裸链接（Autolink）要留着
-      if (!revealed && node.node.parent?.name === 'Link') {
-        pushHide(ctx, node.from, node.to)
+    case 'URL': {
+      const owner = node.node.parent?.name
+      // `[文字](地址)` 里的地址藏起来（它是标记，不是正文）
+      if (owner === 'Link') {
+        if (!revealed) pushHide(ctx, node.from, node.to)
+        return
+      }
+      // 裸链接（GFM autolink）本身就是正文，留着 —— 但它**是**链接，
+      // 该和正文里的链接同一个样子、同一条 ⌘+点击。`<地址>` 归 Autolink 那条整段上色。
+      // 引用定义 `[id]: 地址` 里的那个不上色：定义行是元数据不是正文
+      // （⌘+点击照样跟得过去 —— 点击认的是语法树，不是这个类名）
+      if (owner !== 'Autolink' && owner !== 'LinkReference') {
+        out.push(markDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
       }
       return
+    }
+
+    case 'LinkLabel':
+      // 引用式链接 `[文字][id]` 里的 `[id]`：和行内写法的地址一样是标记，不是正文
+      // （不藏的话屏幕上是「文字[id]」，而导出的 HTML 里只有「文字」—— 两条路各说一套）。
+      // 定义那一行 `[id]: 地址` 的标签**不藏**：那儿的 `[id]` 就是这一行的全部意义
+      if (!revealed && node.node.parent?.name === 'Link') hideSameLine(ctx, node.from, node.to)
+      return
+
+    case 'LinkTitle': {
+      // `[文字](地址 "说明")` 里的说明：导出时它是 `<a title>`（悬停才出来），
+      // 预览里却当正文画在链接后面。`INLINE_MARKS` 早就把它算作标记（大纲、表格格内
+      // 都藏着），只有装饰层漏了这一条 —— 补上，顺带连它前面那个空格一起藏掉，
+      // 不然链接后面会多出一个空位
+      if (revealed || node.node.parent?.name !== 'Link') return
+      const gap = node.from > 0 && doc.sliceString(node.from - 1, node.from) === ' ' ? 1 : 0
+      hideSameLine(ctx, node.from - gap, node.to)
+      return
+    }
 
     case 'Escape':
       // `\,` → 藏掉反斜杠，只显示被转义的字符
@@ -306,8 +348,24 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       out.push(markDeco('cm-lp-inline-code').range(node.from, node.to))
       return
 
-    case 'Link':
-      out.push(markDeco('cm-lp-link').range(node.from, node.to))
+    case 'Link': {
+      // 预览里地址是藏着的，于是「这条链接通向哪儿」无从得知 —— 悬停给一个 title
+      // （表格格内的链接一直是这么做的，见 table.ts 的 renderTokens）。
+      // **只认行内写法**：引用式 `[文字][id]` 的地址要查定义表 = 扫一遍全文，
+      // 而这份装饰每次选区变动都要重建（判断 2），那笔开销不能摊在这儿
+      const dest = node.node.getChild('URL')
+      out.push(
+        (dest ? linkDeco(doc.sliceString(dest.from, dest.to)) : markDeco('cm-lp-link')).range(
+          node.from,
+          node.to
+        )
+      )
+      return
+    }
+
+    case 'Autolink':
+      // `<https://…>`：尖括号已由 LinkMark 藏掉，整段按链接上色。地址就是正文，不必再给 title
+      out.push(markDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
       return
   }
 }
@@ -424,6 +482,10 @@ function bulletDepth(item: SyntaxNode): number {
  * 这里却读不出 src 的话，装饰层 `return` 掉、导出退回 `escapeHtml(raw)`，
  * 屏幕上和导出物里都是一行裸源码。
  *
+ * 裸写那一半**允许空格**（`![图](我的 图.png)`）：`markdown-lang.ts` 的 `SpacedLink`
+ * 已经把这种形状咬成 Image 节点了，这里读不出 src 的话，屏幕上会是「alt + 一串源码」——
+ * 两边必须同时放宽。非贪婪 + 尾部的 `\s*\)$` 保证目的地不会把尺寸段和标题一起吃进去。
+ *
  * 尖括号那半必须**单独一组**：写成 `<?([^)\s]+)>?` 的话，`[^)\s]+` 贪婪地把收尾的 `>`
  * 一起吃进 src（`<ab.png>` → `ab.png>`），拼出来的 `safe-file://` 找不到文件，图必裂。
  */
@@ -434,7 +496,7 @@ export function parseImage(text: string): {
   height?: number
 } | null {
   const m =
-    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)\s]+))(?:\s+=[ \t]*(\d+)[xX](?:\s*(\d+))?)?(?:\s+["'(][^)]*)?\s*\)$/.exec(
+    /^!\[([^\]]*)\]\(\s*(?:<([^<>\n]*)>|([^)\n]+?))(?:\s+=[ \t]*(\d+)[xX](?:\s*(\d+))?)?(?:\s+["'(][^)]*)?\s*\)$/.exec(
       text
     )
   if (!m) return null

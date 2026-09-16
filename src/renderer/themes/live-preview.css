@@ -138,6 +138,12 @@ body.cursive-em-italic .cm-md-em {
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
+/* 代码块底色会遮住 drawSelection 的底层选区，在代码文字上恢复原生高亮。
+   !important 用于覆盖 CodeMirror 隐藏原生选区的规则。 */
+.cm-editor .cm-line.cm-lp-code::selection,
+.cm-editor .cm-line.cm-lp-code ::selection {
+  background-color: var(--sel) !important;
+}
 .cm-lp-code-open,
 .cm-lp-code-close {
   /* 回显态（光标落在围栏行上）的那两条 ```：留着才能改语言，但压到最轻 ——
@@ -420,6 +426,11 @@ body.cursive-em-italic .cm-md-em {
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .cm-lp-link:hover { border-bottom-color: var(--accent); }
+/* 裸链接（GFM autolink 与 `<地址>`）：地址那串字自己还带着一层语法上色（theme.ts 的
+   `t.url` 给的灰），而那层 span 嵌在链接标记**里面** —— 链接色继承不过去，屏幕上就是
+   「灰字 + 蓝下划线」。预览里裸链接是正文、点得动，该和别的链接一个样。
+   只压裸链接这一种：`[文字](地址)` 的文字里可能有高亮、行内码，那些颜色是它们自己的事 */
+.cm-lp-autolink span { color: inherit; }
 
 /* ---------- 代码块顶部语言条（P1-4 复制 + 语言显示） ----------
    它**就是开围栏那一行**（``` 被整行换成了这条），所以是真占位的一横条，

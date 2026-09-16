@@ -5,6 +5,7 @@ import { matchCallout } from '../editor/callout'
 import { EMOJI } from '../editor/emoji'
 import { collectHeadings, slugs } from '../editor/headings'
 import { INLINE_MARKS } from '../editor/inline-text'
+import { autolinkUrl, collectRefs, linkDest, refKey, safeUrl } from '../editor/link'
 import { fenceParts, langLabel } from '../editor/live-preview/code'
 import { calloutAt, parseImage } from '../editor/live-preview/decorate'
 import { katexNow } from '../editor/live-preview/widgets'
@@ -87,19 +88,6 @@ export function escapeHtml(text: string): string {
 /** 属性值。和正文同一套转义，单独留个名字是为了读代码时一眼看出这是属性位 */
 function attr(text: string): string {
   return escapeHtml(text)
-}
-
-/**
- * 链接地址。`javascript:` / `data:text/html` 这类会在导出的文件里变成可执行的东西 ——
- * 导出物是要发给别人的，这一刀必须在这里切（渲染层自己的链接走 openExternal，不受影响）。
- */
-function safeUrl(url: string): string | null {
-  const scheme = /^[a-zA-Z][\w+.-]*:/.exec(url.trim())
-  if (!scheme) return url
-  const lower = scheme[0].toLowerCase()
-  if (lower === 'javascript:' || lower === 'vbscript:') return null
-  if (lower === 'data:' && !/^data:image\//i.test(url.trim())) return null
-  return url
 }
 
 // ---------- 数学 ----------
@@ -261,9 +249,9 @@ function inlineNode(ctx: Ctx, node: SyntaxNode): string {
 }
 
 function anchor(url: string, label = url): string {
-  const safe = safeUrl(url)
-  // 裸邮箱（GFM autolink）自己不带 scheme
-  const href = safe && !/^[a-zA-Z][\w+.-]*:/.test(safe) && safe.includes('@') ? `mailto:${safe}` : safe
+  // 裸邮箱 / `www.` 开头的自己不带 scheme —— 补协议走 `editor/link.ts` 那一份，
+  // 编辑器里 ⌘+点击同一个裸链接时用的就是这个函数，两边不会各补各的
+  const href = safeUrl(url) ? autolinkUrl(url) : null
   if (!href) return escapeHtml(label)
   return `<a href="${attr(href)}">${escapeHtml(label)}</a>`
 }
@@ -278,11 +266,8 @@ function renderLink(ctx: Ctx, node: SyntaxNode): string {
     }
   }
   const body = inline(ctx, node, node.from + 1, close ? close.from : node.to)
-  const url = node.getChild('URL')
-  const label = node.getChild('LinkLabel')
-  const raw = url
-    ? ctx.doc.sliceString(url.from, url.to)
-    : refUrl(ctx, label ? ctx.doc.sliceString(label.from, label.to) : ctx.doc.sliceString(node.from, node.to))
+  // 行内写法读 URL 子节点、引用写法查定义表 —— 与编辑器里 ⌘+点击同一个 `linkDest`
+  const raw = linkDest(ctx.doc, node, () => ctx.refs)
   if (!raw) return body
   const href = safeUrl(raw)
   if (!href) return body
@@ -293,7 +278,7 @@ function renderLink(ctx: Ctx, node: SyntaxNode): string {
 
 /** `[ref]` / `[ref][]` → 定义里的地址；没有这条定义返回空串 */
 function refUrl(ctx: Ctx, label: string): string {
-  return ctx.refs.get(label.replace(/^\[|\]$/g, '').trim().toLowerCase()) ?? ''
+  return ctx.refs.get(refKey(label)) ?? ''
 }
 
 function renderImage(ctx: Ctx, node: SyntaxNode): string {
@@ -629,23 +614,6 @@ function renderToc(ctx: Ctx): string {
 }
 
 // ---------- 入口 ----------
-
-/** 全文扫一遍链接引用定义：`[ref]: url "标题"`（行内解析要用，必须先于渲染） */
-function collectRefs(state: EditorState): Map<string, string> {
-  const refs = new Map<string, string>()
-  parsedTree(state).iterate({
-    enter: (node) => {
-      if (node.name !== 'LinkReference') return
-      const label = node.node.getChild('LinkLabel')
-      const url = node.node.getChild('URL')
-      if (!label || !url) return false
-      const key = state.doc.sliceString(label.from + 1, label.to - 1).trim().toLowerCase()
-      if (!refs.has(key)) refs.set(key, state.doc.sliceString(url.from, url.to))
-      return false
-    }
-  })
-  return refs
-}
 
 /**
  * 文档 → HTML 正文片段（不含 `<html>` 外壳，那一层在 `export/index.ts`）。

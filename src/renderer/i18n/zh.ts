@@ -36,6 +36,11 @@ const zh = {
   // ---------- 标签栏（tabbar.ts）----------
   'tab.stale': '文件在外部被修改，此标签的未保存改动已过期',
   'tab.close': '关闭 {title}',
+  'tab.menuClose': '关闭',
+  'tab.closeLeft': '关闭左边的标签',
+  'tab.closeOthers': '关闭其他标签',
+  'tab.closeRight': '关闭右边的标签',
+  'tab.closeAll': '关闭所有标签',
 
   // ---------- 文件树（sidebar.ts）----------
   'sb.newFile': '新建文件',
@@ -132,11 +137,61 @@ const zh = {
   'pf.leading': '行距',
   'pf.column': '栏宽',
   'pf.lang': '语言',
+  'pf.spell': '拼写检查',
+  'pf.spell.off': '关',
+  'pf.spell.on': '开',
   'pf.custom': '自定义样式',
   'pf.customHint': '把 .css 放进 {dir} 后重开',
   'pf.none': '无',
   'pf.hint': '改动即时生效并自动记住',
   'pf.reset': '恢复默认',
+
+  // ---------- 命令面板 / 快速打开（palette.ts · commands.ts）----------
+  'pl.cmdPlaceholder': '输入命令名或快捷键…',
+  'pl.filePlaceholder': '输入文件名…',
+  'pl.noMatch': '没有匹配的命令',
+  'pl.noFile': '没有匹配的文件',
+  'pl.noFolder': '先打开一个文件夹（⇧⌘O）',
+  'cmd.new': '新建标签',
+  'cmd.open': '打开文件…',
+  'cmd.openFolder': '打开文件夹…',
+  'cmd.quickOpen': '快速打开…',
+  'cmd.save': '保存',
+  'cmd.saveAs': '另存为…',
+  'cmd.closeTab': '关闭标签',
+  'cmd.history': '版本历史…',
+  'cmd.exportHtml': '导出为 HTML…',
+  'cmd.find': '查找…',
+  'cmd.replace': '查找并替换…',
+  'cmd.findNext': '查找下一个',
+  'cmd.findPrev': '查找上一个',
+  'cmd.findInFiles': '在文件夹中查找…',
+  'cmd.selectNext': '选择下一个匹配（多光标）',
+  'cmd.copyHtml': '复制为富文本',
+  'cmd.pastePlain': '粘贴为纯文本',
+  'cmd.sidebar': '显示或隐藏文件树',
+  'cmd.outline': '显示或隐藏大纲',
+  'cmd.formatBar': '显示或隐藏格式栏',
+  'cmd.source': '源代码模式',
+  'cmd.focus': '专注模式',
+  'cmd.typewriter': '打字机模式',
+  'cmd.toggleDark': '浅色 / 深色对切',
+  'cmd.prefs': '设置…',
+
+  // ---------- 版本历史（history.ts）----------
+  'hi.title': '版本历史',
+  'hi.close': '关闭版本历史',
+  'hi.versions': '历史版本',
+  'hi.latest': '最近',
+  'hi.pick': '在左边选一个版本，看它与当前文档的差异',
+  'hi.none': '这份文件还没有历史版本',
+  'hi.unnamed': '未命名文档没有历史 —— 先保存一次',
+  'hi.gone': '这份快照已经被清理掉了',
+  'hi.same': '与当前文档完全相同',
+  'hi.stat': '+{added} −{removed}',
+  'hi.skipped': '… 相同的 {n} 行',
+  'hi.hint': '恢复 = 一次普通编辑，⌘Z 可以撤销',
+  'hi.restore': '恢复此版本',
 
   // ---------- 统计（stats.ts）----------
   'st.cursor': '行 {line} · 列 {col}',
@@ -195,6 +250,14 @@ const zh = {
   'w.imgBroken': '图片加载失败',
   'w.calloutExpand': '展开告示块',
   'w.calloutCollapse': '折叠告示块',
+
+  // ---------- 链接跳转（editor/link.ts）----------
+  // 都是「点了之后没能如愿」时状态栏里的那一句。能跳成的路径一句话都不说
+  'link.failed': '打不开：{target}',
+  'link.missing': '找不到文件：{name}',
+  'link.noAnchor': '本文里没有这个锚点：#{slug}',
+  'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
+  'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
 
   // ---------- 代码块语言条（live-preview/code.ts）----------
   'cd.plain': '纯文本',

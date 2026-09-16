@@ -12,6 +12,7 @@ import {
   keymap,
   rectangularSelection
 } from '@codemirror/view'
+import { cursiveCompletion } from './complete'
 import { stableNavigation } from './navigation'
 import { expandOnEnter } from './input-rules'
 import { t } from '../i18n'
@@ -28,6 +29,30 @@ export const livePreviewConf = new Compartment()
 
 /** P3-3 专注/打字机模式的挂载点：切换 = reconfigure（与源代码模式同一套） */
 export const writingConf = new Compartment()
+
+/**
+ * 0.2.0 拼写检查的挂载点。
+ *
+ * CodeMirror 默认在 `.cm-content` 上写死 `spellcheck="false"`；把它翻成 true，
+ * macOS 的 NSSpellChecker 就在 WKWebView 的可编辑区里自动接管 ——
+ * 红波浪线、右键「改正为…」全是系统给的，这边一行检查逻辑都没有。
+ *
+ * **不能在建 state 时钉死**：偏好是可以随时改的，而每个标签一份 EditorState，
+ * 钉死等于「改了设置只对新标签生效」。走 compartment，切换 = 一次 reconfigure。
+ */
+export const spellConf = new Compartment()
+
+/** 拼写检查开关的扩展体。默认关 —— 中文写作用不上，而长文档上 WebKit 的扫描要花 CPU */
+export function spellcheckExt(on: boolean): Extension {
+  return EditorView.contentAttributes.of({ spellcheck: String(on) })
+}
+
+/**
+ * 当前开没开。**全局的，不随标签走** —— 与 `writingNow` 同一个道理：
+ * 新建的 state 拿它当种子（所以七处 `createState` 一处都不用改），
+ * 切标签时 main.ts 的 `syncSpell()` 再把冻结的那份对齐。
+ */
+export const spellNow = { on: false }
 
 /**
  * 当前写作模式。**全局的，不随标签走** —— 每个标签一份 EditorState，新建的
@@ -92,6 +117,10 @@ export function createState(
       indentOnInput(),
       bracketMatching(),
       closeBrackets(),
+      // 0.2.0 自动补全（emoji / 告示块 / 脚注 / 锚点 / 围栏语言，见 complete.ts）。
+      // 它自带的 keymap 是 Prec.highest，但每一条在「没有活动补全」时都返回 false，
+      // 所以下面 Enter / Tab 那几条接管不受影响
+      cursiveCompletion(),
       highlightSelectionMatches(),
       // 查找面板整个换成自己的那一版（editor/search-panel.ts）：右上角浮层、
       // 组字期间不提交、计数画在框里。默认那版的文案在 phrases facet 里，
@@ -110,6 +139,7 @@ export function createState(
       cursiveTheme,
       livePreviewConf.of(options.sourceMode ? [] : livePreview()),
       writingConf.of(writingModes(writingNow)),
+      spellConf.of(spellcheckExt(spellNow.on)),
       keymap.of([
         ...closeBracketsKeymap,
         ...searchKeymap,

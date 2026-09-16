@@ -56,6 +56,18 @@ describe('parseImage（P1-5：尺寸语法）', () => {
     expect(parseImage('![a](<中文 图.png> "标题")')).toEqual({ alt: 'a', src: '中文 图.png' })
   })
 
+  it('裸写的目的地允许空格（方言放宽：markdown-lang.ts 的 SpacedLink 会给节点）', () => {
+    expect(parseImage('![图](我的 图.png)')).toEqual({ alt: '图', src: '我的 图.png' })
+    // 尺寸段与标题不能被目的地吃进去
+    expect(parseImage('![图](我的 图.png =600x400)')).toEqual({
+      alt: '图',
+      src: '我的 图.png',
+      width: 600,
+      height: 400
+    })
+    expect(parseImage('![图](我的 图.png "说明")')).toEqual({ alt: '图', src: '我的 图.png' })
+  })
+
   it('非图片语法返回 null', () => {
     expect(parseImage('普通文本[链接](x)')).toBeNull()
     expect(parseImage('![缺括号](src')).toBeNull()

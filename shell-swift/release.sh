@@ -13,10 +13,13 @@ npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm
 echo "==> [2/4] 编译原生壳"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
 
-echo "==> [3/4] E2E 八用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
+echo "==> [3/4] E2E 九用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 FIX=/tmp/cursive-e2e
 SCRATCH="$HOME/Library/Application Support/cursive/scratch"
 mkdir -p "$SCRATCH"
+# 0.2.0 版本历史：整轮开始前清一次。每份夹具各有自己的目录，不清也不会串，
+# 但清了之后「这一轮留下了几份快照」才是确定的数（同上面清 scratch 的道理）
+rm -rf "$HOME/Library/Application Support/cursive/history"
 rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md \
    test/fixtures/dialect.md test/fixtures/callout.md "$FIX/"
@@ -24,6 +27,53 @@ cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
 # 三张图各守一条链：① 百分号编码的中文文件名；② 尺寸语法 `=宽x高`；
 # ③ 尖括号目的地（文件名带空格时**唯一**的写法）+ 尺寸。②③ 以前在编辑器里从来没生效过
 printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n\n![尺寸图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png =120x80)\n\n![尖括号图](<assets/中文 图.png> =60x40)\n' > "$FIX/img.md"
+# 标签右键菜单（0.2.0）的一次性夹具：那条用例要把它改脏再撤回，
+# 拿别的用例的夹具当小白鼠的话，自动保存会在它们身上留下一个字
+printf '# 标签右键测试\n\n正文一行。\n' > "$FIX/tabs.md"
+# 0.2.0 链接跳转的一对夹具：links.md 里四条去处各一条 + 两条打不开的；
+# link-target.md 只当落点 —— 拿别的用例的夹具当目标的话，那边的探针一改内容，
+# 「落在哪一节」这条断言就跟着飘
+cat > "$FIX/link-target.md" <<'TARGET'
+# 目标文档
+
+## 目标小节
+
+顺着链接跳进来的落点。
+TARGET
+cat > "$FIX/我的 目标 文档.md" <<'SPACED'
+# 带空格的文件名
+
+## 空格小节
+
+文件名里有空格的落点：这是中文笔记最常见的样子，链接必须写成 `<…>` 或 %20。
+SPACED
+cat > "$FIX/links.md" <<'LINKS'
+# 链接测试
+
+## 靶子
+
+这一节是给格式栏探针当靶子的：它会把文档里**第一个**二级标题升成三级。
+没有这一节的话，被升级的就是下面那个锚点落点，「跳到了哪一行」那条断言得跟着别人的
+副作用走 —— 夹具宁可多一节，也不要一条会莫名其妙变红的断言。
+
+## 小节
+
+正文一行。
+
+内部：[跳到小节](#小节)
+
+外链：[外部地址](https://example.com/a)
+
+本地：[别的文档](link-target.md#目标小节)
+
+文件：[一张图](<assets/中文 图.png>)
+
+带空格的文件名：[尖括号写法](<./我的 目标 文档.md#空格小节>) 与 [百分号写法](./%E6%88%91%E7%9A%84%20%E7%9B%AE%E6%A0%87%20%E6%96%87%E6%A1%A3.md) 与 [裸空格写法](./我的 目标 文档.md#空格小节)
+
+坏的：[缺失文件](缺失.md) 与 [缺失锚点](#没有这一节) 与 [缺失图片](缺失.png)
+
+写不对的：[看不出是文件](我的 笔记 没有后缀) —— 地址带空格又没有后缀，认不出来
+LINKS
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
 
@@ -39,8 +89,14 @@ run_case() {
     # 而且它有图有代码，天然跨两页，正好证明「真分页」
     PDF_ENV=""
     [ "$1" = "mermaid.md" ] && PDF_ENV="/tmp/cursive-e2e/out/$1.pdf"
+    # 标签右键那条用例要验「批量关闭时点取消要中止整批」，所以它的「是否保存」
+    # 替身答案设成 cancel（其余用例用默认的 discard —— 万一哪里误关脏标签，
+    # 当场过去而不是把整轮挂起）
+    DISCARD_ENV=""
+    [ "$1" = "dialect.md" ] && DISCARD_ENV="cancel"
     CURSIVE_SMOKE=1 CURSIVE_SMOKE_NAME='e2e-新建.md' CURSIVE_SMOKE_RENAME='e2e-改名.md' \
         CURSIVE_SMOKE_HTML="/tmp/cursive-e2e/out/$1.html" CURSIVE_SMOKE_PDF="$PDF_ENV" \
+        CURSIVE_SMOKE_DISCARD="$DISCARD_ENV" \
         ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
 import json, sys, os, re, unicodedata
@@ -111,6 +167,46 @@ if sys.argv[1] == 'table.md':
     ok = ok and te.get('strong', 0) >= 1
     hd = r.get('handles') or {}   # 悬停 +/− 手柄：行/列各一颗药丸
     ok = ok and hd.get('on') is True and hd.get('pills') == 2
+# ---- 0.2.0：自动补全 / 命令面板 / 快速打开 / 复制为富文本 ----
+# 每个用例都跑一遍：这四样都挂在编辑器与 chrome 的公共路径上，
+# 哪份文档上坏了都算坏（同 P4-1 导出那条的道理）
+v = r.get('v020') or {}
+ok = ok and not v.get('err')
+# 自动补全：真的敲了 `:sm` 让面板自己弹出来（走 activateOnTyping，不是直接调 API），
+# 第一条必须是 :smile: —— 面板在、但排序坏了的话这一条就抓得到
+ok = ok and v.get('rows', 0) >= 2 and v.get('first', '').startswith(':smile:')
+# 敲完删回去，文档与取样时逐字节相同（红线一：补全不许在别处留下痕迹）
+ok = ok and v.get('restored') is True
+# 命令面板：列的是 MenuAction 全表（40 条以上），筛「高亮」后第一条就是它，Esc 关得掉
+ok = ok and v.get('cmdAll', 0) >= 40 and v.get('cmdHit') == '高亮' and v.get('cmdClosed') is True
+# 快速打开：索引走壳侧 listFiles（契约 v21），树根下那几份夹具都得在，Esc 同样关得掉
+ok = ok and v.get('files', 0) >= 5 and v.get('fileFirst', '').endswith('.md')
+ok = ok and v.get('fileClosed') is True
+# 复制为富文本（契约 v20）：两种风味都得非空，且 HTML 明显比 Markdown 源码长
+ch = e.get('copyHtml') or []
+ok = ok and len(ch) == 2 and ch[1] > 0 and ch[0] > ch[1]
+# 版本历史（契约 v22）：前面「收干净」保存过一次，所以至少落下一份快照；
+# 点开它要能读回正文并算出差异（hiLines 为 0 = 要么没读回、要么 diff 空转）
+ok = ok and v.get('hiRows', 0) >= 1 and v.get('hiLines', 0) >= 1
+ok = ok and v.get('hiStat', '').startswith('+') and v.get('hiClosed') is True
+
+# ---- 0.2.0 标签右键菜单（只在 dialect.md 这条用例上跑）----
+if sys.argv[1] == 'dialect.md':
+    tp = r.get('tabProbe') or {}
+    ok = ok and not tp.get('err')
+    ok = ok and tp.get('added') == 3           # 从侧栏点开三个文件，就该多三个标签
+    ok = ok and tp.get('labels') == ['关闭', '关闭左边的标签', '关闭其他标签',
+                                     '关闭右边的标签', '关闭所有标签']
+    # 灰掉的位置要跟着右键的是哪一个走：第一个没有「左边」，最后一个没有「右边」
+    ok = ok and tp.get('offAtFirst') == [False, True, False, False, False]
+    ok = ok and tp.get('offAtLast') == [False, False, False, True, False]
+    # 命令作用在哪个标签，那个就亮着；菜单收起要跟着灭
+    ok = ok and tp.get('marked') is True and tp.get('stillContext') is False
+    # 关闭右边 / 关闭左边：被右键的那个是唯一的幸存者
+    ok = ok and tp.get('afterRight') == 1 and tp.get('afterLeft') == 1
+    # **最要紧的一条**：批量关闭撞上脏标签、用户点了取消 → 整批停下，一个都不许少
+    ok = ok and tp.get('beforeCancel') == 2 and tp.get('afterCancel') == 2
+
 if sys.argv[1] == 'kitchen-sink.md':
     # P4-1：一份「什么都有」的文档导出后该有的东西（标题锚点 / 表格 / 代码上色 / 公式）
     ok = ok and '<h1 id=' in page and '<table>' in page
@@ -252,6 +348,50 @@ if sys.argv[1] == 'callout.md':
     # `[!summary]-` 默认折起 → 点三角展开 → 再点折回；折叠状态不写回文档
     ok = ok and (cp.get('more0'), cp.get('more1'), cp.get('more2')) == (1, 0, 1)
     ok = ok and cp.get('docLen') == cp.get('docLenAfter')
+if sys.argv[1] == 'links.md':
+    # 0.2.0 链接跳转：⌘+点击的四条去处 + 两种打不开
+    lp = r.get('linkProbe') or {}
+    ok = ok and not lp.get('err')
+    # 预览里地址是藏着的 —— 悬停的 title 是「这条链接通向哪儿」的唯一线索
+    ok = ok and lp.get('title') == '#小节'
+    # ① 本文锚点：光标真的落在那一节的标题上（锚点串与 [TOC]、大纲、导出 id 同一份算法）
+    ok = ok and lp.get('anchorLine') == '## 小节'
+    # ② 本地文档 + 锚点：多出一个标签、活动文档换成目标文件、落点是目标那一节
+    ok = ok and lp.get('tabsAfter') == lp.get('tabsBefore', -9) + 1
+    ok = ok and (lp.get('openedPath') or '').endswith('link-target.md')
+    ok = ok and lp.get('openedLine') == '## 目标小节'
+    ok = ok and lp.get('backOnLinks') is True
+    # ②b 文件名带空格：尖括号写法与百分号写法都要落到同一份文件（锚点也照跳）。
+    # 这一段守的是整条链 —— 渲染层拼路径、过桥、壳侧按原样读盘，中间任何一步把空格
+    # 弄丢或多编码一次都会变成「找不到文件」
+    ok = ok and (lp.get('angPath') or '').endswith('/我的 目标 文档.md')
+    ok = ok and lp.get('angLine') == '## 空格小节'
+    ok = ok and not lp.get('angNote')
+    ok = ok and lp.get('pctPath') == lp.get('angPath')
+    ok = ok and not lp.get('pctNote')
+    # 裸空格写法（方言放宽）：和另外两种写法同一个落点、同一节，一句话都不用说
+    ok = ok and lp.get('barePath') == lp.get('angPath')
+    ok = ok and lp.get('bareLine') == '## 空格小节'
+    ok = ok and not lp.get('bareNote')
+    # 「一个窗口 = 一个工作区」：顺着链接读下去是同一个工作区里的事，不许弹新窗口
+    ok = ok and e.get('windows', 0) == 1
+    # ③④ 外部地址与本地文件都交给系统（自检下只记账）。file:// 那条守的是百分号编码 ——
+    # 文件名里那个空格和中文，壳侧的 scheme handler 要能原样解回来
+    ext = e.get('external') or []
+    ok = ok and 'https://example.com/a' in ext
+    ok = ok and any(u.startswith('file:///tmp/cursive-e2e/assets/') and u.endswith('.png') for u in ext)
+    # 三次交给系统：外部地址、存在的图、不存在的图（最后一条走的就是下面 fileNote 那条路）
+    ok = ok and len(ext) == 3
+    # ⑤⑥⑦ 三种打不开都要在状态栏说一句话：点了没反应是最糟的失败方式
+    ok = ok and lp.get('missingNote') == '找不到文件：缺失.md'
+    ok = ok and lp.get('anchorNote') == '本文里没有这个锚点：#没有这一节'
+    # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
+    # 对 file:// 按「在不在」回话，就是为了让这条路测得到
+    ok = ok and lp.get('fileNote') == '打不开：/tmp/cursive-e2e/缺失.png'
+    # ⑧ 地址带空格**又看不出是哪个文件**（没后缀）：这种解析器仍然不认 ——
+    # 误认比不认更糟（正文里平白多出一条蓝线），但也不能就这么没反应
+    ok = ok and (lp.get('spacedNote') or '').startswith('地址里有空格')
+    ok = ok and '我的 笔记 没有后缀' in (lp.get('spacedNote') or '')
 if sys.argv[1] == 'mermaid.md':
     # P4-1：图烘成静态 SVG 写进文件（导出物里不留运行时依赖）；非法那块保留源码
     ok = ok and '<figure class="mermaid"' in page and '<svg' in page
@@ -278,6 +418,7 @@ run_case math.md
 run_case mermaid.md
 run_case dialect.md
 run_case callout.md
+run_case links.md
 
 # P4-2 真分页：拿一份足够长的文档单独导一次 PDF。八个夹具都只有一两页，而页数又随
 # 探针改文档而变 —— 只有专门造一份长文档，「分页」这件事才断言得住（老实现无论多长都是一页）
@@ -294,8 +435,18 @@ path = '/tmp/cursive-shell-pdf.json'
 d = json.load(open(path)) if os.path.exists(path) else {}
 ok = (not d.get('error') and d.get('width') == 595 and d.get('height') == 842
       and d.get('pages', 0) >= 3 and d.get('bytes', 0) > 5000)
-print(('PASS ' if ok else 'FAIL ') + 'PDF 真分页 '
-      + str({k: d.get(k) for k in ('pages', 'width', 'height')}))
+# 0.2.0 PDF 书签：① 渲染层报了几个标题，就得有几条落进文件（每一条都定位成功）；
+# ② 写完之后 PDFKit 还认得出来 —— 这一条守的是「自己往 PDF 尾部追加的那次增量更新
+# 结构合法」，而不只是「函数跑过了」（PDFKit 自己的 outlineRoot 根本写不出去，
+# 见 main.swift 的 PDFOutlineWriter）
+ok = ok and d.get('headings', 0) >= 1
+ok = ok and d.get('bookmarks', 0) == d.get('headings', 0)
+ok = ok and d.get('bookmarksReadBack', 0) >= 1
+# `headings` 一起印出来：它是 0 就说明**夹具在跑的过程中被改坏了**（标题没了），
+# 而不是书签逻辑坏了 —— 两者的排查方向完全不同
+print(('PASS ' if ok else 'FAIL ') + 'PDF 真分页 + 书签 '
+      + str({k: d.get(k) for k in ('pages', 'width', 'height',
+                                   'headings', 'bookmarks', 'bookmarksReadBack')}))
 sys.exit(0 if ok else 1)
 PAGED
 

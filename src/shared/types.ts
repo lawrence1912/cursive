@@ -16,6 +16,21 @@ export type MenuAction =
   | 'edit:find-next'
   | 'edit:find-prev'
   | 'edit:paste-plain'
+  // ---- 0.2.0 ----
+  /** 复制为富文本（契约 v20）：同一份导出 HTML 进剪贴板，纯文本风味放 Markdown 源码 */
+  | 'edit:copy-html'
+  /**
+   * 选择下一个匹配（多光标）。CodeMirror 的 `searchKeymap` 本来就带 ⌘D，
+   * 但 `performKeyEquivalent` 把所有带 ⌘ 的事件交还给菜单系统（判断 1），
+   * 菜单里没有这一条 = 这个键一直是死的。补一条菜单项，不必去赌键能不能落回编辑器
+   */
+  | 'edit:select-next'
+  /** 快速打开：按名字模糊跳文件（索引走契约 v21 的 `listFiles`） */
+  | 'file:quick-open'
+  /** 命令面板：列的就是这份 `MenuAction` 表自己 */
+  | 'view:command-palette'
+  /** 版本历史：看这份文件历次保存留下的快照，并可整份回滚（契约 v22） */
+  | 'file:history'
   | 'view:toggle-source'
   | 'view:toggle-sidebar'
   | 'view:toggle-outline'
@@ -165,6 +180,15 @@ export interface PrefValues {
   custom: string | null
   /** 界面语言（契约 v16：切换时推 setLanguage 给壳重建菜单/对话框） */
   lang: UiLang
+  /**
+   * 系统拼写检查（0.2.0）。**默认关**。
+   *
+   * 开关落在 `EditorView.contentAttributes` 的 `spellcheck` 上 —— 可编辑区一旦声明
+   * 要拼写检查，macOS 的 NSSpellChecker 在 WKWebView 里自动接管，红波浪线、
+   * 右键改正菜单全是系统给的，这边一行代码都不用写。
+   * 默认关是因为它对中文写作没有价值，而长文档上 WebKit 的扫描要实打实花 CPU
+   */
+  spellcheck: boolean
 }
 
 /** 用户自定义主题：`~/Library/Application Support/cursive/themes/*.css`（P3-4） */
@@ -179,6 +203,20 @@ export interface DirEntry {
   name: string
   path: string
   isDir: boolean
+}
+
+/**
+ * ---- 0.2.0 版本历史（契约 v22）----
+ * 一次保存留下的快照。内容不在这里 —— 列表可能有几十条，全带上正文就是几 MB
+ * 过一次桥（判断 3）；真要看哪一条，再用 `snapshotRead` 单取。
+ */
+export interface Snapshot {
+  /** 快照 id，同时也是落盘的文件名（毫秒时间戳） */
+  id: string
+  /** ISO 时间串，界面上按本地时区显示 */
+  savedAt: string
+  /** 正文字节数，列表里给一个「这版有多大」的直观量 */
+  bytes: number
 }
 
 /** scratch 自动保存文件里的一条未命名文档 */
@@ -209,7 +247,13 @@ export interface CursiveApi {
   setDocState(state: DocState): void
   confirmClose(): void
   confirmDiscard(name: string): Promise<DiscardChoice>
-  openExternal(url: string): Promise<void>
+  /**
+   * 交给系统打开：外部地址给浏览器 / 邮件客户端，`file://` 给默认应用或 Finder。
+   * **返回「系统真的接手了吗」**（`NSWorkspace.open` 的返回值）—— 本地文件被删、
+   * 地址不合法都会是 false，渲染层据此在状态栏说一句「打不开」。
+   * 不回这个的话，一次点击失败与成功长得一模一样，也就是最糟的那种失败：什么都没发生。
+   */
+  openExternal(url: string): Promise<boolean>
   pickFolder(): Promise<string | null>
   readDir(path: string): Promise<DirEntry[]>
   /** 这个窗口的工作区根（契约 v19）：带文件开出来的窗口 = 那个文件所在的目录，
@@ -232,6 +276,17 @@ export interface CursiveApi {
   revealInFinder(path: string): void
   /** 读系统剪贴板的纯文本（⇧⌥⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
   readClipboardText(): Promise<string>
+  /** ---- 0.2.0 复制为富文本（契约 v20）----
+   * 正文仍由渲染层渲染（与 P4-1 导出、P4-2 打印共用同一棵语法树），壳只负责把它
+   * 按 `.html` 放上 `NSPasteboard`。**两种风味一起放**：`html` 给邮件 / 飞书 / Notion
+   * 这类富文本目标，`plain`（Markdown 源码）给终端 / 代码框。只放 html 的话，
+   * 纯文本目标收到的会是一堆标签 */
+  copyHtml(html: string, plain: string): Promise<void>
+  /** ---- 0.2.0 文件索引（契约 v21）----
+   * 树根下的全部文档路径（与跨文件搜索同一套目录黑名单与后缀白名单，壳侧 `DocScan`）。
+   * 遍历在壳侧做 —— 渲染层递归 `readDir` 是几百次桥调用（判断 3 同款理由）。
+   * 上限 4000 条，超出即截断（快速打开的列表本来也只看前几十条） */
+  listFiles(root: string): Promise<string[]>
   /** ---- 写剪贴板（契约 v9，P3-6 大纲「复制本节锚点」）----
    * 与读那条同源：剪贴板归壳管。`navigator.clipboard` 在 `app://r` 下不是安全上下文，
    * 压根拿不到，别绕这条路 */
@@ -247,6 +302,21 @@ export interface CursiveApi {
   scratchList(): Promise<ScratchDoc[]>
   /** 标签真正关闭或已另存为路径后，清掉对应 scratch */
   scratchClear(id: string): Promise<void>
+  /** ---- 0.2.0 版本历史（契约 v22）----
+   * 每次**保存到真实路径**之后留一份快照，落在
+   * `~/Library/Application Support/cursive/history/<路径摘要>/<时间戳>.md`。
+   *
+   * 三条约束都在壳侧实现，渲染层不必知道：
+   * ① **去重** —— 与最新那份逐字节相同就不写（自动保存会反复触发同一份内容）；
+   * ② **留存上限** —— 每份文件只留最近 50 条，且丢掉 30 天前的（但至少保住 10 条）；
+   * ③ 只有带路径的文档才有历史，未命名文档归 scratch 管（那是另一件事：崩溃恢复）。
+   *
+   * `snapshotSave` 返回是否真的写了一份（去重命中时是 false）。 */
+  snapshotSave(path: string, content: string): Promise<boolean>
+  snapshotList(path: string): Promise<Snapshot[]>
+  /** 单取一份的正文；快照已被清理掉则返回 null */
+  snapshotRead(path: string, id: string): Promise<string | null>
+
   /** 外部修改确认（脏标签收到外部变更时弹）：'reload' 重载 | 'keep' 保留我的版本 */
   confirmReload(name: string): Promise<'reload' | 'keep'>
   /** 当前打开的全部文档路径（壳侧据此注册外部变更监听） */

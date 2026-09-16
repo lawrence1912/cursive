@@ -176,12 +176,23 @@ const BANG = 33
 const LBRACKET = 91
 const CARET2 = 94
 const RBRACKET = 93
+const LPAREN = 40
 
 /**
  * 尺寸图片的形状：`![alt](目的地 =宽x高)`，目的地可以写成 `<a b.png>`。
  * 只在行内解析阶段用一次，跟 `CALLOUT_SHAPE` 一样单独摆在上面，方便对着源码改。
  */
 const SIZED_IMAGE = /^!\[([^\]\n]*)\]\([ \t]*(<[^<>\n]*>|[^\s()]+)([ \t]+=[ \t]*\d+[xX]\d*)[ \t]*\)/
+
+/**
+ * 目的地**带空格**的本地链接 / 图片：`[部署手册](VPS 从 0 到 1 部署.md)`、`![图](我的 图.png =600x400)`。
+ * 组：1 `!`、2 链接文字、3 `(` 后的空白、4 目的地、5 尺寸段、6 标题前的空白、7 标题。
+ */
+const SPACED_LINK =
+  /^(!?)\[([^\]\n]*)\]\(([ \t]*)([^()\n]*?)([ \t]+=[ \t]*\d+[xX]\d*)?([ \t]*)(["'][^"'\n]*["'])?[ \t]*\)/
+
+/** 目的地要「看得出是个文件」才放宽：`/` 结尾，或 `.后缀` 且后缀首字母是字母 */
+const FILE_TAIL = /(?:\/|\.[A-Za-z][A-Za-z0-9]{0,7})$/
 
 /** 成对单字符定界符（^…^ / ~…~）的通用行内解析器 */
 function makePairedParser(
@@ -352,6 +363,75 @@ function parseSizedImage(cx: InlineContext, next: number, pos: number): number {
   )
 }
 
+/**
+ * 目的地带空格的链接 / 图片（0.2.0 链接跳转的后续）。
+ *
+ * CommonMark 的链接目的地不能带空格 —— 得写成 `<我的 文件.md>` 或 `我的%20文件.md`。
+ * 不这么写的话整段落进正文：连 `Link` 节点都没有，于是不上色、点不动、导出也不是链接。
+ * 而**带空格的文件名正是中文笔记最常见的样子**：本仓库作者在自己的 vault 里连试六种
+ * 写法（版本历史里一条不落地记着），最后把文件改了名才算完 —— 这不是用户的错，是方言太严。
+ *
+ * 放宽的边界钉死在「看得出是个文件」上，而不是「括号里有东西就算链接」：
+ *   · 目的地里**必须真有空格** —— 没空格的内置解析器自己认得，轮不到这儿；
+ *   · **不能带协议**（`http://a b` 本来就不是合法地址，放宽它只会把错误藏起来）；
+ *   · **不能是 `<…>` 写法**（那是内置的地盘，重复认领等于两个解析器抢同一段）；
+ *   · **必须以 `/` 或 `.后缀` 结尾**（只看 `#` 之前那半截，锚点不算），且后缀首字母是
+ *     字母 —— 于是 `[备注](见 下文)`、
+ *     `[版本](见 v1.2)` 都不会被误认成链接。误认比不认更糟：正文里平白多出一条蓝线。
+ *
+ * 节点形状**与内置完全一致**（`LinkMark` + `URL` + 可选 `SizeMark`/`LinkTitle` + 括号标记），
+ * 所以装饰、导出、大纲取词、表格格内四条路都不必为它加分支 —— 它们看到的就是一条链接。
+ *
+ * **已知取舍**：链接文字里的行内语法不再解析（`[**粗**](我的 文件.md)` 的星号以字面量
+ * 示人）—— 与 `SizedImage` 同款。换来的是不去动 lezer 的分隔符栈：那条路要自己配对
+ * 方括号，配错一次就是一棵坏树，而这种链接的文字九成九是一句大白话。
+ */
+function parseSpacedLink(cx: InlineContext, next: number, pos: number): number {
+  if (next !== LBRACKET && next !== BANG) return -1
+  const open = next === BANG ? pos + 1 : pos
+  if (next === BANG && cx.char(open) !== LBRACKET) return -1
+  // 先用两个字符挡一下再切片：任务项 `- [ ]`、脚注 `[^1]` 这些形状满文档都是，
+  // 每撞上一个就复制 512 字节 + 跑一遍正则，纯属白花（同 parseSizedImage 的上界理由）
+  let close = -1
+  for (let i = open + 1; i < cx.end && i < open + 256; i++) {
+    const ch = cx.char(i)
+    if (ch === NEWLINE) return -1
+    if (ch === RBRACKET) {
+      close = i
+      break
+    }
+  }
+  if (close < 0 || cx.char(close + 1) !== LPAREN) return -1
+
+  const m = SPACED_LINK.exec(cx.slice(pos, Math.min(cx.end, pos + 512)))
+  if (!m) return -1
+  const [raw = '', bang = '', label = '', lead = '', dest = '', size = '', gap = '', title = ''] = m
+  // 没空格 = 内置解析器的活；`<…>` 同理。带协议的地址里出现空格只能是写错了
+  if (!/\s/.test(dest) || dest.startsWith('<')) return -1
+  if (/^[a-zA-Z][\w+.-]*:/.test(dest)) return -1
+  // 「像不像文件」只看 `#` 之前那半截 —— `我的 笔记.md#小节` 的后缀在锚点前面
+  if (!FILE_TAIL.test(dest.split('#')[0] ?? '')) return -1
+  // 尺寸段只对图片有意义，链接后面跟一段 `=600x400` 就当它不是这种链接
+  if (size && !bang) return -1
+
+  const marks = (b: number, e: number) => cx.elt('LinkMark', b, e)
+  const labelEnd = pos + bang.length + 1 + label.length
+  const destStart = labelEnd + 2 + lead.length
+  const destEnd = destStart + dest.length
+  const titleStart = destEnd + size.length + gap.length
+  const end = pos + raw.length
+  const kids = [
+    marks(pos, pos + bang.length + 1), // `[` 或 `![`
+    marks(labelEnd, labelEnd + 1), // ]
+    marks(labelEnd + 1, labelEnd + 2), // (
+    cx.elt('URL', destStart, destEnd)
+  ]
+  if (size) kids.push(cx.elt('SizeMark', destEnd, destEnd + size.length))
+  if (title) kids.push(cx.elt('LinkTitle', titleStart, titleStart + title.length))
+  kids.push(marks(end - 1, end)) // )
+  return cx.addElement(cx.elt(bang ? 'Image' : 'Link', pos, end, kids))
+}
+
 const extras: MarkdownConfig = {
   defineNodes: [
     { name: 'Highlight', style: t.emphasis },
@@ -374,7 +454,10 @@ const extras: MarkdownConfig = {
     { name: 'Highlight', parse: parseHighlight },
     { name: 'Emoji', parse: parseEmoji },
     { name: 'FootnoteRefParser', before: 'Link', parse: parseFootnoteRef },
-    { name: 'CalloutMarkParser', before: 'Link', parse: parseCalloutMark }
+    { name: 'CalloutMarkParser', before: 'Link', parse: parseCalloutMark },
+    // 排在脚注 / 告示块之后：它们认的 `[^1]`、`[!note]` 后面都没有 `(…)`，
+    // 本来也撞不上；顺序写明白是为了改动时一眼看出谁先挑走哪种形状
+    { name: 'SpacedLink', before: 'Link', parse: parseSpacedLink }
   ],
   parseBlock: [
     {

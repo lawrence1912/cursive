@@ -12,7 +12,8 @@ const KEY = 'cursive.prefs'
  * 而且 DEFAULTS 会随存储而变 —— 一个名字叫 DEFAULTS 的东西不该有状态
  */
 const DEFAULTS: PrefValues = {
-  theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null, lang: systemLang()
+  theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null,
+  lang: systemLang(), spellcheck: false
 }
 export const COLUMN_RANGE = { min: 30, max: 60 }
 
@@ -31,12 +32,17 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
     custom: parsed.custom ?? null,
     // 有偏好但没记过 lang = 老用户，一直看的是中文，别在某次升级后突然给人翻成英文。
     // 与 i18n 的 `detectLang()` 同一条规则（那边靠 raw 非空走到同一个结果）
-    lang: parsed.lang ?? 'zh'
+    lang: parsed.lang ?? 'zh',
+    // 0.2.0 新增，老偏好里没有 —— 默认关（见 `PrefValues.spellcheck` 的理由）
+    spellcheck: parsed.spellcheck === true
   }
 }
 
 /** 自定义皮肤的落脚点，面板里要原样告诉用户 */
 const THEMES_DIR = '~/Library/Application Support/cursive/themes'
+
+/** 走分段控件的那几项偏好 */
+type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck'
 
 /** 分段控件的选项。带 key 的走字典（跟着语言切）；只有 label 的写死 —— 语言选项各自以自身语言显示 */
 interface SegOpt {
@@ -57,6 +63,11 @@ const FONT_OPTS: SegOpt[] = [
 const LANG_OPTS: SegOpt[] = [
   { val: 'zh', label: '中文' },
   { val: 'en', label: 'English' }
+]
+/** 0.2.0 拼写检查。做成分段控件而不是另造一个复选框：面板里已经有这一种控件了 */
+const SPELL_OPTS: SegOpt[] = [
+  { val: 'false', key: 'pf.spell.off' },
+  { val: 'true', key: 'pf.spell.on' }
 ]
 
 /**
@@ -282,6 +293,7 @@ export class Prefs {
         ${this.rangeRow('size', 'pf.size', 13, 24, 1, 'px')}
         ${this.rangeRow('leading', 'pf.leading', 1.4, 2.4, 0.05, '')}
         ${this.rangeRow('column', 'pf.column', COLUMN_RANGE.min, COLUMN_RANGE.max, 1, 'rem')}
+        ${this.segRow('spellcheck', 'pf.spell', SPELL_OPTS)}
         <div class="pf-row pf-custom"></div>
         <div class="pf-foot">
           <span class="pf-hint" data-i18n="pf.hint">${t('pf.hint')}</span>
@@ -304,10 +316,11 @@ export class Prefs {
     el.addEventListener('click', (e) => {
       const btn = (e.target as Element).closest<HTMLElement>('.pf-seg button')
       if (!btn) return
-      const group = btn.closest<HTMLElement>('.pf-seg')!.dataset['key'] as 'lang' | 'theme' | 'font'
+      const group = btn.closest<HTMLElement>('.pf-seg')!.dataset['key'] as SegKey
       const val = btn.dataset['val']!
       if (group === 'lang') this.setLang(val as Lang)
       else if (group === 'theme') this.setTheme(val as AppearanceMode)
+      else if (group === 'spellcheck') this.set('spellcheck', val === 'true')
       else this.set('font', val as BodyFont)
     })
 
@@ -433,9 +446,10 @@ export class Prefs {
   private sync(): void {
     if (!this.el) return
     for (const seg of this.el.querySelectorAll<HTMLElement>('.pf-seg')) {
-      const key = seg.dataset['key'] as 'lang' | 'theme' | 'font'
+      const key = seg.dataset['key'] as SegKey
       for (const btn of seg.querySelectorAll<HTMLElement>('button')) {
-        const on = btn.dataset['val'] === this.v[key]
+        // `String(...)` 是为了 spellcheck：它的值是布尔，而 data-val 永远是字符串
+        const on = btn.dataset['val'] === String(this.v[key])
         btn.classList.toggle('is-on', on)
         btn.setAttribute('aria-checked', String(on))
       }
