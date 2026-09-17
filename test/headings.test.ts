@@ -221,3 +221,27 @@ describe('在此后新建同级标题', () => {
     expect(state.update(newSiblingSpec(state, h)).state.doc.toString()).toBe('# 甲\n甲正文\n# 新标题\n')
   })
 })
+
+/**
+ * 取数按 state 记一次（`collectHeadings` 的 WeakMap）。一次大纲刷新里这份取数会被
+ * 要好几遍（大纲面板 / 每个 `[TOC]` / `](#` 补全源 / 章节跟随），而它是全文走一遍树、
+ * 每个标题再摘一次纯文本 —— 3600 个标题实测 20ms 上下。
+ */
+describe('标题表按 state 记一次', () => {
+  const mk = (doc: string): EditorState =>
+    EditorState.create({ doc, extensions: [cursiveMarkdown()] })
+
+  it('同一个 state 问两遍拿到的是同一份', () => {
+    const state = mk('# 一\n\n正文\n\n## 二\n')
+    expect(collectHeadings(state)).toBe(collectHeadings(state))
+  })
+
+  it('改了文档就是另一份', () => {
+    const state = mk('# 一\n\n正文\n')
+    const before = collectHeadings(state)
+    const next = state.update({ changes: { from: state.doc.length, insert: '\n## 二\n' } }).state
+    const after = collectHeadings(next)
+    expect(after).not.toBe(before)
+    expect(after.map((h) => h.text)).toEqual(['一', '二'])
+  })
+})

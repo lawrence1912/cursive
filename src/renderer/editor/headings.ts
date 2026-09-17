@@ -47,9 +47,22 @@ export const HEADING_RE = /^(ATXHeading|SetextHeading)([1-6])$/
  * 记过同款坑的行级版和块级版），所以这里自己 ensure —— `parsedTree` 兼管
  * 「ensure 完别再读旧快照」那一层（见 `editor/syntax.ts`），已经解析过时是空操作。
  */
+/**
+ * 同一个 state 上的结果记在这儿。一次大纲刷新里这份取数会被要好几遍 ——
+ * 大纲面板一次、文档里每个 `[TOC]` 各一次、`](#` 那个补全源一次、章节跟随高亮一次；
+ * 而它是**全文走一遍树、每个标题再摘一次纯文本**（3600 个标题实测 20ms 上下）。
+ * state 不可变，同一个 state 的标题表不会变，所以记一次就够。
+ *
+ * **别改返回的数组**：它是共享的。要加工就像 `sections()` 那样 map 出新对象。
+ */
+const headingCache = new WeakMap<EditorState, Heading[]>()
+
 export function collectHeadings(state: EditorState): Heading[] {
+  const hit = headingCache.get(state)
+  if (hit) return hit
   const out: Heading[] = []
-  parsedTree(state).iterate({
+  const tree = parsedTree(state)
+  tree.iterate({
     from: 0,
     to: state.doc.length,
     enter: (node) => {
@@ -74,6 +87,9 @@ export function collectHeadings(state: EditorState): Heading[] {
     const next = out.slice(i + 1).find((h) => h.level <= out[i]!.level)
     out[i]!.end = next ? next.pos : state.doc.length
   }
+  // **半截树上的结果不记**：文档大到一次 ensure 解析不完时，这一份只有前半截的标题，
+  // 而下一次问同一个 state 时 ensure 可能就成功了 —— 记下来等于把「只有半截目录」钉死
+  if (tree.length >= state.doc.length) headingCache.set(state, out)
   return out
 }
 

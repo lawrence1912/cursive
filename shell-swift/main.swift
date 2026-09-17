@@ -216,6 +216,38 @@ func LF(_ key: String, _ args: [String: String]) -> String {
 
 // MARK: - 注入渲染进程的 bridge（atDocumentStart，先于页面脚本）
 
+/// 页面缩放的上下界（⌘+ / ⌘−）。下界再小就点不中按钮了，上界再大正文一行放不下几个字
+/// 主题模式 → 系统外观。**全仓库唯一一份**（`setAppearance` 与启动首帧共用）。
+/// **护眼按浅色算**：它是一张暖色的纸，配深色标题栏与红绿灯是「上半截深、下半截浅」。
+/// 原先它落在 `else` 里跟随系统，于是系统深色 + 护眼正文 = 首帧先黑一下再变纸色。
+func appearanceFor(_ mode: String) -> NSAppearance? {
+    switch mode {
+    case "dark": return NSAppearance(named: .darkAqua)
+    case "light", "sepia": return NSAppearance(named: .aqua)
+    default: return nil // system：交还给系统
+    }
+}
+
+/**
+ * 启动首帧的外观。**必须赶在任何窗口出现之前**（`applicationWillFinishLaunching`）。
+ *
+ * 页面那半本来就不闪：`base.css` 里有一份 `@media (prefers-color-scheme: dark)`
+ * 专管「JS 起来之前的首帧」。但它跟的是**系统**外观，而 WKWebView 的
+ * `prefers-color-scheme` 跟的是 `NSApp.appearance` —— 于是「系统浅色 + 用户手动选了
+ * 深色」这一种，首帧仍然是白的（data-theme 要等渲染层读完 localStorage 才钉上，
+ * 按 P4-6 的实测那是页面开跑后 216–271ms）。这里把上次记下的模式提前摆上，
+ * 那份媒体查询自己就把首帧画对了 —— 不必给渲染层注入任何东西。
+ *
+ * 自检下不恢复：探针会显式切主题并按像素目检，带着上次的模式跑等于起点不确定。
+ */
+func applyStartupAppearance() {
+    guard !smokeAuto, let mode = UserDefaults.standard.string(forKey: "appearance") else { return }
+    NSApp.appearance = appearanceFor(mode)
+}
+
+let ZOOM_MIN: CGFloat = 0.5
+let ZOOM_MAX: CGFloat = 3.0
+
 let BRIDGE_JS = """
 (() => {
   // 把渲染进程的报错转发给原生（定位初始化失败用）
@@ -1621,6 +1653,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
         webView = MainWebView(frame: .zero, configuration: config)
+        // 记住的缩放（见 AppDelegate.setZoom）。**自检下一律 1.0** —— 探针里有一批按
+        // 像素来的断言（拖拽条挖洞区、红绿灯对齐、截图目检），带着上次的缩放跑就全飘了
+        if !smokeAuto {
+            let z = UserDefaults.standard.object(forKey: "pageZoom") as? Double
+            if let z, z > 0 { webView.pageZoom = min(max(CGFloat(z), ZOOM_MIN), ZOOM_MAX) }
+        }
         if let main = webView as? MainWebView {
             main.enableFileDrop()
             main.dropHandler = { [weak self] urls in self?.handleDroppedFiles(urls) ?? false }
@@ -2059,8 +2097,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // nil = 交还给系统。标题栏、红绿灯、NSAlert、NSOpenPanel 都吃 NSApp.appearance，
             // 不设的话切主题只切了网页那一半，系统面板还是亮的
             let mode = args.first as? String ?? "system"
-            NSApp.appearance = mode == "dark" ? NSAppearance(named: .darkAqua)
-                             : mode == "light" ? NSAppearance(named: .aqua) : nil
+            NSApp.appearance = appearanceFor(mode)
+            // **记下来给下次启动用**（见 `applyStartupAppearance`）。真相仍在渲染层的
+            // localStorage，这一份只是「上一次是什么样」的影子，够首帧用就行
+            UserDefaults.standard.set(mode, forKey: "appearance")
             appDelegate?.syncThemeMenu(mode)
             respond(id, NSNull())
 
@@ -4023,6 +4063,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         mark("willFinishLaunching")
         appDelegate = self
+        // 首帧的深浅（见 `applyStartupAppearance`）—— 要赶在第一个窗口之前
+        applyStartupAppearance()
         // **在任何窗口出现之前**把「上次留下的草稿」定下来（见 `recoverableScratch`）
         snapshotRecoverableScratch()
         buildMenu()
@@ -4367,9 +4409,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mi.state = order[i] == mode ? .on : .off
         }
     }
-    @objc func zoomIn(_ sender: Any?) { key.map { $0.webView.pageZoom *= 1.1 } }
-    @objc func zoomOut(_ sender: Any?) { key.map { $0.webView.pageZoom /= 1.1 } }
-    @objc func resetZoom(_ sender: Any?) { key?.webView.pageZoom = 1.0 }
+    /// ⌘+ / ⌘− / ⌘0 的页面缩放。**两件事是后补的**：
+    /// ① **记住**（`pageZoom` 进 UserDefaults，新开的窗口照着来）—— 缩放是「我眼睛
+    ///    今天不舒服」这类设定，每开一次应用都要重按一遍毫无道理；
+    /// ② **夹住**（0.5–3.0）—— 原先没有上下界，连按十下 ⌘− 能把界面缩到点不中任何
+    ///    东西，而缩放本身又是唯一能把它调回来的入口。
+    @objc func zoomIn(_ sender: Any?) { key.map { setZoom($0, $0.webView.pageZoom * 1.1) } }
+    @objc func zoomOut(_ sender: Any?) { key.map { setZoom($0, $0.webView.pageZoom / 1.1) } }
+    @objc func resetZoom(_ sender: Any?) { key.map { setZoom($0, 1.0) } }
+
+    private func setZoom(_ wc: WindowController, _ z: CGFloat) {
+        let clamped = min(max(z, ZOOM_MIN), ZOOM_MAX)
+        wc.webView.pageZoom = clamped
+        UserDefaults.standard.set(Double(clamped), forKey: "pageZoom")
+    }
 
 }
 

@@ -38,6 +38,8 @@ interface Row {
 export class Outline {
   readonly el: HTMLElement
   private items: Section[] = []
+  /** 上一次真正画出来的那份内容的签名（见 `setItems`） */
+  private sig = ''
   private rows: Row[] = []
   private activePos: number | null = null
   private listEl: HTMLElement
@@ -145,10 +147,27 @@ export class Outline {
     if (key === this.docKey) return
     this.docKey = key
     this.folded = new Set(this.loadFold()[key] ?? [])
+    // **换文档必须让签名作废**：这里只换了折叠集合、指望紧随其后的 `setItems` 去渲染，
+    // 而两份文档的标题恰好一模一样时（复制出来的稿子、模板文件）签名会相同 ——
+    // 早退一走，画面上留着的就是上一份文档的折叠状态
+    this.sig = ''
   }
 
+  /**
+   * **没变就别重建。** 大纲刷新挂在「停手 450ms」上，而绝大多数停手时标题一个字都没动
+   * （在段落里打字就是这样）—— 照旧重建的话，一份三千多个标题的长文每次停手都要把
+   * 三千多行 DOM 重造一遍，就为了画出一模一样的东西。
+   *
+   * 签名里放**渲染要用到的每一项**（层级 / 位置 / 字数 / 文字）：少放一项就会出现
+   * 「改了但没刷新」，那比多刷几次糟得多。位置也在里面，所以签名相同 = 跳转落点也相同。
+   * 与内容无关的那几样（折叠 / 过滤 / 层级档位 / 语言）各自直接 `render()`，
+   * 不经这条路；只有 `setDoc` 是例外，它在那边把签名清掉了。
+   */
   setItems(items: Section[]): void {
+    const sig = items.map((i) => `${i.level}\u0001${i.pos}\u0001${i.words}\u0001${i.text}`).join('\u0002')
     this.items = items
+    if (sig === this.sig) return
+    this.sig = sig
     this.render()
   }
 
