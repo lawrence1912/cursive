@@ -28,7 +28,13 @@ export interface Section extends Heading {
   words: number
 }
 
-const HEADING_RE = /^(ATXHeading|SetextHeading)([1-6])$/
+/**
+ * 标题节点名 —— **全仓库唯一一份**。除了这里取数，`live-preview/index.ts` 的增量重建
+ * 也要拿它判「这次改动有没有动到标题」：动到了就得把整份目录（`[TOC]` 烘的是全文
+ * 标题表）重算，脏区那条路盖不住。两处口径必须是同一条，否则会漏出「改了标题、
+ * 目录没跟上」这种只在长文档上偶发的缝。
+ */
+export const HEADING_RE = /^(ATXHeading|SetextHeading)([1-6])$/
 
 /**
  * 全文标题表 —— 大纲、`[TOC]`、章节跟随高亮**共用这一份取数**。

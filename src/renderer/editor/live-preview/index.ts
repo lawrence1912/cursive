@@ -3,9 +3,11 @@ import {
   Prec,
   StateEffect,
   StateField,
+  type ChangeDesc,
   type EditorState,
   type Extension,
-  type Range
+  type Range,
+  type Text
 } from '@codemirror/state'
 import {
   Decoration,
@@ -19,6 +21,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
 import { carryDecorations } from '../carry'
 import { docDir } from '../doc-dir'
+import { HEADING_RE } from '../headings'
 import { followLink } from '../link'
 import { knownTree, parsedTree, rememberTree } from '../syntax'
 import { extractFence } from './code'
@@ -141,11 +144,22 @@ export const blockField = StateField.define<DecorationSet>({
     // 全量重建永远停不下来，下面那条增量的路一次都轮不上（实测 40/40 次全落在这儿）。
     const grew = syntaxTree(tr.state).length > syntaxTree(tr.startState).length
     const pointerChanged = tr.startState.field(pointerSelection, false) !== tr.state.field(pointerSelection, false)
-    if (!tr.docChanged && !effect && !grew && tr.state.field(pointerSelection, false)) return value
-    if (!tr.docChanged && !tr.selection && !effect && !grew && !pointerChanged) return value.map(tr.changes)
-    // 只是移动了一下光标：能翻面的就那两个块，别为此重扫全文（3602 行实测 10.9ms → 0.3ms）
-    if (!tr.docChanged && !effect && !grew) {
-      const patched = patchBlocks(value, tr.startState, tr.state)
+    if (!tr.docChanged && !effect && !grew && tr.state.field(pointerSelection, false))
+      return carryToc(tr.startState, tr.state, value)
+    if (!tr.docChanged && !tr.selection && !effect && !grew && !pointerChanged)
+      return carryToc(tr.startState, tr.state, value.map(tr.changes))
+    // 三条路共用同一台增量机器（见 `patchBlocks`）：挪光标只重建翻面的那两个块
+    // （3602 行实测 10.9ms → 0.3ms）、打字只重建改动落在的那个块、后台 parse 推进
+    // 只重建新长出来的那一段。效应那三个（主题 / 表格编辑态 / 折叠）是**每一个**块
+    // 都可能跟着变样，没有脏区可言，只能全量。
+    if (!effect) {
+      const patched = patchBlocks(
+        value,
+        tr.startState,
+        tr.state,
+        tr.docChanged ? tr.changes : null,
+        grew ? syntaxTree(tr.startState).length : null
+      )
       if (patched) return patched
     }
     return buildBlocks(tr.state)
@@ -154,55 +168,169 @@ export const blockField = StateField.define<DecorationSet>({
 })
 
 /**
- * 选区变化的增量重建：文档一个字没变，翻面的只有「光标离开的那个块」和
- * 「光标进来的这个块」—— 其余几千行的块级装饰一模一样，重扫全文纯属白干。
- * 于是只在这两段上「清掉旧的 + 重建新的」。
+ * 「这份文档里有没有 `[TOC]`」—— 按 state 记。
+ *
+ * 目录是这一堆块级构件里**唯一的全文依赖**：烘进 `TocWidget` 的是
+ * `collectHeadings(state)` 的整份标题表，改一个标题、或者后台再解析出几个标题，
+ * 全篇的目录都得跟着变 —— 而脏区只盖得住改动落在的那个块。于是遇到「可能动到
+ * 标题表」的事务时，有目录的文档一律退回全量重建（见 `patchBlocks`）。
+ *
+ * 这个标记是**白拿的**：全量重建本来就要走遍全树，`collectBlocks` 顺手记一笔；
+ * 增量那条把上一份带过来，再并上脏区里新看到的。**拿不到就当有** —— 宁可多做一次
+ * 全量，不能让目录停在半截。只有一个方向不准：删掉文档里唯一的 `[TOC]` 之后标记
+ * 仍是 true，代价是此后改标题多走全量，下一次全量重建自己就把它纠正回来。
+ */
+const tocDocs = new WeakMap<EditorState, boolean>()
+
+/** 两条「原样带过去」的早退路也要把目录标记带上，否则下一次判定只能按「当有」走全量 */
+function carryToc(old: EditorState, now: EditorState, value: DecorationSet): DecorationSet {
+  const seen = tocDocs.get(old)
+  if (seen !== undefined) tocDocs.set(now, seen)
+  return value
+}
+
+/** 脏区里有没有标题节点 —— 有就意味着这次改动可能改了标题表（`[TOC]` 要重算） */
+function touchesHeading(tree: Tree, span: Span): boolean {
+  let found = false
+  tree.iterate({
+    from: span.from,
+    to: span.to,
+    enter: (node) => {
+      if (found) return false
+      if (HEADING_RE.test(node.name)) {
+        found = true
+        return false
+      }
+      return undefined
+    }
+  })
+  return found
+}
+
+/**
+ * 「配对跨多远都算数」的标记：围栏 ``` / ~~~ 与 front matter 的 `---`。
+ *
+ * 别的块级构件都是**一段连续的行**，开头在哪儿、到哪一行为止只由它自己那几行决定 ——
+ * 于是一次改动能搅动的范围，不会超出「老树里它所在的那个块 ∪ 新树里它所在的那个块」。
+ * 围栏是唯一的例外：它靠**配对**收尾，改动落在一条围栏行上，几百行之外的那条 ```
+ * 会从「收尾」变成「开头」，把后面整篇吞进代码块 —— 而那一段离脏区要多远有多远。
+ * （实测：在 ```mermaid 那行行首插一个字，文末的脚注定义在全量重建里已经被吞掉，
+ * 增量那边却还留着一条过期装饰 —— test/block.test.ts 的逐位置扫描当场抓到。）
+ *
+ * 判定按**改动碰到的整行**来，不是按插进去的那几个字：在 ```mermaid 行首插一个 `字`，
+ * 插入的内容里一个反引号都没有，可它照样把这条围栏废掉了。
+ */
+const PAIRING_MARK = /```|~~~|^---[ \t]*$/m
+function pairingRisk(doc: Text, span: Span): boolean {
+  const start = doc.lineAt(span.from)
+  const end = span.to <= start.to ? start : doc.lineAt(span.to)
+  return PAIRING_MARK.test(doc.sliceString(start.from, end.to))
+}
+
+/** 老坐标上的一段脏区搬到新坐标。两端各按各的方向映射，改动贴着边界时才不会缩进去 */
+function mapSpan(span: Span, changes: ChangeDesc | null): Span {
+  if (!changes) return span
+  return { from: changes.mapPos(span.from, -1), to: changes.mapPos(span.to, 1) }
+}
+
+/**
+ * 增量重建 —— **三条路共用这一台机器**，区别只在脏区是怎么算出来的：
+ *   · **挪光标**（`changes`/`grownFrom` 都为空）：翻面的只有「光标离开的那个块」和
+ *     「光标进来的这个块」；
+ *   · **打字**（带 `changes`）：变样的只有改动落在的那个块；
+ *   · **后台 parse 推进**（带 `grownFrom` = 上一份快照的末尾）：新长出来的只有
+ *     `[旧快照末尾, 新树末尾]` 那一段。
+ * 其余几千行的块级装饰一模一样，重扫全文纯属白干（1 万行实测：每按一个键 3.3ms 的
+ * 全文遍历，3 万行 10.9ms —— 后者已经吃掉一整帧）。
  *
  * 换得干净是因为两边的「相交」判定正好是同一条：
  *   · `RangeSet.update` 的 filter 作用于**与 [from,to] 相交**的每一条装饰（哪怕它伸出区间外）；
  *   · `Tree.iterate({from,to})` 进入的也正是**与 [from,to] 相交**的每一个节点。
  * 而一条块级装饰的范围就是它那个节点的范围 —— 两边收的是同一批，不会漏也不会重。
  *
- * 树只认现成的（`knownTree`）：在这儿 ensure 一次就是 5ms，正是要躲开的那笔。
- * 没有现成的树、或选区大到横跨半份文档，就返回 null 交回全量重建 ——
+ * **改动的脏区要在新旧两棵树上各撑一次**（只有打字这条路有这个要求）：一次改动能让
+ * 块的边界整个搬家 —— 新树那侧盖住「块长大了」（一行字把后面几段并了进来），老树那侧
+ * 盖住「块缩短了」（原先被它盖住的那一段，在新树里成了别的块，得有人去建）。
+ * 而**跨多远都算数**的那一种（围栏配对）不在脏区的能力范围内，由下面 `pairingRisk`
+ * 那条红线整条交回全量 —— 老树那一侧因此更像安全网：正确性不该押在
+ * 「我把所有能跨块的语法都数全了」上。
+ *
+ * 树只认现成的（`knownTree`）：在这儿为老 state 再 ensure 一次就是 5ms，正是要躲开
+ * 的那笔。没有现成的树、或脏区大到横跨半份文档，就返回 null 交回全量重建 ——
  * 宁可慢一次，不能画错。
  *
- * 导出给单测：`test/block.test.ts` 拿一串光标位置逐个比对
+ * 导出给单测：`test/block.test.ts` 拿一串光标位置、一串改动逐个比对
  * 「增量结果 === 全量重建结果」，这条路一旦漂移就当场红。
  */
 export function patchBlocks(
   value: DecorationSet,
   old: EditorState,
-  now: EditorState
+  now: EditorState,
+  changes: ChangeDesc | null = null,
+  grownFrom: number | null = null
 ): DecorationSet | null {
   const scope = now.facet(revealScope)
   const upto = old.doc.length
-  const tree = knownTree(old, upto)
-  if (!tree) return null
-  const spans = mergeSpans(
-    [...new Reveal(old, scope).ranges, ...new Reveal(now, scope).ranges].map((s) =>
-      blockSpan(tree, s.from, s.to)
-    )
-  )
-  // 脏区盖住大半份文档（全选、几十个光标）就别绕了：那时候增量省不下什么，
-  // 还要多走几趟 RangeSet。阈值按**撑开之后**的脏区算 —— 撑到顶层块边界之后，
-  // 一个长代码块就可能占掉小半份文档，卡在 1/2 会让绝大多数光标移动白白退回全量
-  const touched = spans.reduce((n, s) => n + (s.to - s.from), 0)
-  if (spans.length > 8 || touched * 5 >= now.doc.length * 4) return null
-  // 文档没动，这棵树对新 state 一样成立 —— 记在它名下，下一次移动光标才接得上
-  // （不记的话增量与全量会一步一跳地交替，等于白改）
-  rememberTree(now, tree, upto)
+  const oldTree = knownTree(old, upto)
+  if (!oldTree) return null
+  // 文档变了、或者树长出来了，就得拿新树；两者都没有时老树对新 state 一样成立
+  const tree = changes || grownFrom !== null ? parsedTree(now) : oldTree
 
-  let out = value
-  for (const s of spans) {
+  const spans: Span[] = []
+  // 改动的原始范围（新旧坐标各一份）留一份底：围栏红线与目录判定都要按它来，而
+  // **两条判定都排在阈值之后** —— 脏区大到该退回全量时，这两趟扫描纯属白花
+  const edits: { a: Span; b: Span }[] = []
+  const dirtyOld = (from: number, to: number): void =>
+    void spans.push(mapSpan(blockSpan(oldTree, from, to), changes))
+  const dirtyNow = (from: number, to: number): void => void spans.push(blockSpan(tree, from, to))
+
+  // 光标翻面的那两个块：动前的按老树撑再映射，动后的按新树撑
+  for (const s of new Reveal(old, scope).ranges) dirtyOld(s.from, s.to)
+  for (const s of new Reveal(now, scope).ranges) dirtyNow(s.from, s.to)
+  // 改动落在的那个块（两棵树各撑一次，理由见上面）
+  changes?.iterChangedRanges((fromA, toA, fromB, toB) => {
+    edits.push({ a: { from: fromA, to: toA }, b: { from: fromB, to: toB } })
+    dirtyOld(fromA, toA)
+    dirtyNow(fromB, toB)
+  })
+  // 后台 parse 新解析出来的那一段。左边界撑到顶层块：旧快照很可能断在某个块的中间
+  if (grownFrom !== null) dirtyNow(Math.min(grownFrom, tree.length), tree.length)
+
+  const merged = mergeSpans(spans)
+  // 脏区盖住大半份文档（全选、几十个光标、一次改动把后面整篇吞进代码块）就别绕了：
+  // 那时候增量省不下什么，还要多走几趟 RangeSet。阈值按**撑开之后**的脏区算 ——
+  // 撑到顶层块边界之后，一个长代码块就可能占掉小半份文档，卡在 1/2 会让绝大多数
+  // 光标移动白白退回全量
+  const touched = merged.reduce((n, s) => n + (s.to - s.from), 0)
+  if (merged.length > 8 || touched * 5 >= now.doc.length * 4) return null
+  // 改动碰到围栏行：这一次能搅动的范围没有上界，脏区那套推理不成立（见 `pairingRisk`）
+  if (edits.some((e) => pairingRisk(old.doc, e.a) || pairingRisk(now.doc, e.b))) return null
+  // 目录是全文依赖，脏区盖不住（见 `tocDocs`）。两棵树都要查：新树认得出**新写出来**
+  // 的标题，而**删掉**一行 `## 小节` 之后只有老树那边还看得见它
+  if (
+    (tocDocs.get(old) ?? true) &&
+    edits.some((e) => touchesHeading(oldTree, e.a) || touchesHeading(tree, e.b))
+  )
+    return null
+  // 文档没动，这棵树对新 state 一样成立 —— 记在它名下，下一次移动光标才接得上
+  // （不记的话增量与全量会一步一跳地交替，等于白改）。文档变了那条不必记：
+  // 上面的 `parsedTree(now)` 自己就记过了
+  if (!changes) rememberTree(now, tree, upto)
+
+  let out = changes ? value.map(changes) : value
+  let toc = tocDocs.get(old) ?? true
+  for (const s of merged) {
+    const got = collectBlocks(now, tree, s.from, s.to)
+    toc ||= got.toc
     out = out.update({
       filterFrom: s.from,
       filterTo: s.to,
       filter: () => false,
-      add: collectBlocks(now, tree, s.from, s.to),
+      add: got.add,
       sort: true
     })
   }
+  tocDocs.set(now, toc)
   return out
 }
 
@@ -221,6 +349,10 @@ export function patchBlocks(
 function blockSpan(tree: Tree, from: number, to: number): Span {
   let out: Span = { from, to }
   const grow = (pos: number, side: -1 | 1): void => {
+    // 先把落点夹进树里：树可能是半截的（ensure 超预算就只解析到一半），而脏区是按
+    // **文档**坐标来的 —— 树外的位置 resolveInner 给不出有意义的节点。夹的是解析的
+    // 起点，不是 out：脏区右边界照旧留在文档坐标上，过期装饰才清得干净
+    pos = Math.max(0, Math.min(pos, tree.length))
     // 往上走到 Document 的直接子节点 —— 与 `reveal.ts` 的 block 档同一条规矩。
     // 「一路走到再往上就是整棵树」那种写法在这里是错的：带 YAML frontmatter 的文档里，
     // 正文被套在**第二层 Document** 里（Document 0-N → [FrontMatter, Document 96-N]），
@@ -264,17 +396,26 @@ export function buildBlocks(state: EditorState): DecorationSet {
   // 块级装饰本来就是全文范围的，这里只能全文强制同步解析 —— 且**必须用 ensure 的
   // 返回值**，`syntaxTree(state)` 读的快照这会儿还停在打开文件时那 3000 字上
   // （见 `editor/syntax.ts`）。
-  return Decoration.set(collectBlocks(state, parsedTree(state), 0, state.doc.length), true)
+  const got = collectBlocks(state, parsedTree(state), 0, state.doc.length)
+  // 走遍全树的这一趟顺手把「有没有 `[TOC]`」记下来（见 `tocDocs`）：全量重建是这个
+  // 标记唯一的准确来源，增量那条只能在自己的脏区里看见新增的那一个
+  tocDocs.set(state, got.toc)
+  return Decoration.set(got.add, true)
 }
 
-/** 在 [from,to] 这段上产出块级装饰：全量重建给 0..doc.length，增量那条只给脏区 */
+/**
+ * 在 [from,to] 这段上产出块级装饰：全量重建给 0..doc.length，增量那条只给脏区。
+ * 顺带回报这一段里**有没有 `[TOC]`**（`toc`）—— 那是目录那条全文依赖的唯一信号源，
+ * 见 `tocDocs`；它得在 reveal 判定之前记，因为光标正压着的目录同样是一份目录。
+ */
 function collectBlocks(
   state: EditorState,
   tree: Tree,
   from: number,
   to: number
-): Range<Decoration>[] {
+): { add: Range<Decoration>[]; toc: boolean } {
   const out: Range<Decoration>[] = []
+  let toc = false
   const reveal = new Reveal(state, state.facet(revealScope))
   const editAt = tableEditAt(state)
   tree.iterate({
@@ -357,7 +498,10 @@ function collectBlocks(
           return false
         }
         case 'TocBlock': {
-          // [TOC] → 目录组件；标题数据来自全文语法树（此处已全文 ensure）
+          // [TOC] → 目录组件；标题数据来自全文语法树（此处已全文 ensure）。
+          // **先记账再判 reveal**：回显源码的目录、以及还没有任何标题可列的目录都
+          // 没有装饰可查，漏记就会让增量那条路以为「这文档没有目录」
+          toc = true
           if (reveal.touches(node.from, node.to)) return false
           const entries = collectHeadings(state)
           if (!entries.length) return false
@@ -372,7 +516,7 @@ function collectBlocks(
       }
     }
   })
-  return out
+  return { add: out, toc }
 }
 
 export function livePreview(): Extension {

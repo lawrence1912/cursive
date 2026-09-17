@@ -2016,3 +2016,20 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
   background: transparent;
   color: var(--mark-idle);
 }
+
+/* ---------------------------------------------------------------- 减弱动态效果
+   系统设置里开了「减弱动态效果」就把过渡关掉。这份界面上的动效全是「顺手」级别的
+   —— 悬停变色、折叠箭头转向、关闭键淡入、专注模式压暗 —— 一条都不承载信息，
+   关掉不丢任何东西，只是变成瞬时。
+
+   **只关 transition，不碰 animation**：本仓库自己一条 `@keyframes` 都没有，而
+   CodeMirror 的光标闪烁正是一条 animation —— 拿 `*` 把 animation 一并压成 0.01ms
+   是这条 media query 最常见的抄法，代价是光标可能停在关键帧的「隐藏」那一帧上，
+   变成一个看不见的插入点。那比动效本身糟得多。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

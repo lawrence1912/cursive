@@ -73,7 +73,12 @@ const editorTheme = EditorView.theme({
     padding: '48px 32px 0',
     caretColor: 'var(--fg)'
   },
-  '.cm-line': { padding: '0' },
+  // 落点提示（`editor/navigation.ts`）：跳过去的那一行先亮一下，再淡出。
+  // **亮是瞬时的、灭才有过渡** —— 过渡挂在 `.cm-line` 上、而亮着的那一份自己
+  // `transition: none`：加类时按「加完之后」的样式算，也就是不过渡；撤类时按
+  // 撤完之后的样式算，于是淡出。系统开了「减弱动态效果」时 base.css 会把它压成瞬时。
+  '.cm-line': { padding: '0', transition: 'background-color 480ms ease' },
+  '.cm-line.cm-jump-flash': { backgroundColor: 'var(--accent-wash)', transition: 'none' },
   '&.cm-focused': { outline: 'none' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--fg)', borderLeftWidth: '2px' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {

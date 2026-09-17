@@ -56,6 +56,32 @@ export function rememberTree(state: EditorState, tree: Tree, upto: number): void
 export function parsedTree(state: EditorState, upto = state.doc.length): Tree {
   const hit = treeCache.get(state)
   if (hit && hit.upto >= upto) return hit.tree
+  /*
+   * **快照已经盖住要的这一段就直接用它，不 ensure。**
+   *
+   * 上面那段说的是「ensure 完别读快照」，这里说的是反过来的一半：**先看快照够不够长**。
+   * 够长的时候那一发 ensure 是白付的，而且一点都不便宜 —— `ensureSyntaxTree` 每次都
+   * 把 ParseContext 的视口改成 [0, upto] 再改回去，而视口一动、只要撞上被跳过的区间
+   * （嵌套语言的代码块就会留下这种区间），CM 就 cutFragments + reset，下一句 work()
+   * 于是真的重新解析一遍。代价实测：1 万行、每 20 段掺一个 ```ts 的文档，**每按一个键
+   * 12.5ms**；同一份文档把 ```ts 去掉只要 2.2ms —— 差的那 10ms 全是这个 reset。
+   * 而每次按键之后快照的覆盖率实测中位数是 **100%**（CM 自己在每个事务里就把改动那一段
+   * 重新解析好了），也就是说这 10ms 绝大多数时候买不到任何东西。
+   *
+   * **为什么快照当得起**：`tree.length` 就是这棵树真解析到哪儿（`takeTree()` 把树停在
+   * `parsedPos` 上），所以 `>= upto` 意味着这一段是真解析过的、不是占位。至于嵌套语言
+   * 的内层挂载可能还没做 —— 本仓库没有一个 `parsedTree` 的消费者读它：块级装饰、大纲、
+   * 表格取数、行内文本、链接引用、导出全都只看**外层块结构**（导出的代码高亮是自己
+   * `parser.parse(src)` 另起一棵树，编辑器里的则走 CM 自带的高亮器、读的本来就是这份快照）。
+   *
+   * 不够长（打开文件那一刻只解析前 3000 字）才落到下面真 ensure —— 那正是上面那段
+   * 记的坑，`test/block.test.ts`「首开长文档」守着它。
+   */
+  const snap = syntaxTree(state)
+  if (snap.length >= upto) {
+    treeCache.set(state, { upto: snap.length, tree: snap })
+    return snap
+  }
   const tree = ensureSyntaxTree(state, upto)
   if (!tree) return syntaxTree(state)
   treeCache.set(state, { upto, tree })

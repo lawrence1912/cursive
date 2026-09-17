@@ -1608,6 +1608,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             pendingOpen = nil
             mark("首个文档随页面注入")
         }
+        // 契约 v24：**自检标记**。自检下渲染层要停掉一切「把上次的样子恢复出来」的行为
+        // —— 会话恢复会把上一轮探针开过的文件又开回来，标签数/大纲行数这类断言就跟着飘，
+        // 而且探针改文档是常态，恢复出来的那几份还会被一并改写。
+        // 与壳侧 `lastFolder` 在 smokeAuto 下短路是同一条理由（见 `setup()` 里那段注释）。
+        if smokeAuto {
+            config.userContentController.addUserScript(WKUserScript(
+                source: "window.__cursiveSelfCheck = true;",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         // DevTools：右键页面 →「检查元素」
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 

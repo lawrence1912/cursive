@@ -1,5 +1,5 @@
-import { StateEffect } from '@codemirror/state'
-import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { StateEffect, StateField, type EditorState, type Extension } from '@codemirror/state'
+import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 
 const navigate = StateEffect.define<number>()
 
@@ -7,9 +7,85 @@ const navigate = StateEffect.define<number>()
 export function jumpTo(view: EditorView, pos: number): void {
   view.dispatch({
     selection: { anchor: pos },
-    effects: [navigate.of(pos), EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })]
+    effects: [
+      navigate.of(pos),
+      flashAt.of(pos),
+      EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })
+    ]
   })
 }
+
+// ---------------------------------------------------------------- 落点提示
+
+/**
+ * **跳完了，落在哪儿要说一声。**
+ *
+ * 大纲点一条、⌘T 开一个文件、⌘+点击一个 `#锚点` —— 这几条路都是「按名字找过去」，
+ * 而画面是**瞬间**换的：视线得自己在新的一屏里找回光标。给落点那一行一次淡出的底色
+ * 就够了，一秒不到自己消失。
+ *
+ * **有意不做滚动动画**：位置换得再顺，滚动动画本身会让人失焦（长文档里尤其），
+ * 而这里要回答的只有一个问题 —— 「我现在在哪儿」。
+ *
+ * 文档一改就撤：改的往往正是落点那一行，留着它会跟着字一起挪，看起来像个 bug。
+ */
+const flashAt = StateEffect.define<number | null>()
+const FLASH_LINE = Decoration.line({ class: 'cm-jump-flash' })
+/** 亮多久（之后由 CSS 的过渡淡出，见 `editor/theme.ts`） */
+export const FLASH_MS = 550
+
+const flashField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (!e.is(flashAt)) continue
+      if (e.value === null) return Decoration.none
+      return Decoration.set([FLASH_LINE.range(tr.state.doc.lineAt(e.value).from)])
+    }
+    // 文档变了就撤 —— 顺带免掉「行级装饰被映射到行中间」那类越界问题
+    return tr.docChanged ? Decoration.none : value
+  },
+  provide: (f) => EditorView.decorations.from(f)
+})
+
+/** 当前亮着的那一行的起点；没有就是 null。导出给单测与调试 */
+export function flashedLine(state: EditorState): number | null {
+  const set = state.field(flashField, false)
+  if (!set) return null
+  let at: number | null = null
+  set.between(0, state.doc.length, (from) => {
+    at = from
+    return false
+  })
+  return at
+}
+
+/**
+ * 到点把它撤掉。**用 `setTimeout` 不用 rAF**（窗口不在最前面时 rAF 会被降频甚至
+ * 不回调，那会让底色一直挂在那儿），**也不在 update 里直接 dispatch**（嵌套派发）。
+ */
+const flashClear = ViewPlugin.fromClass(
+  class {
+    private timer: ReturnType<typeof setTimeout> | null = null
+    constructor(private readonly view: EditorView) {}
+    update(u: ViewUpdate): void {
+      const lit = u.transactions.some((tr) =>
+        tr.effects.some((e) => e.is(flashAt) && e.value !== null)
+      )
+      if (!lit) return
+      if (this.timer !== null) clearTimeout(this.timer)
+      this.timer = setTimeout(() => {
+        this.timer = null
+        if (flashedLine(this.view.state) !== null) this.view.dispatch({ effects: flashAt.of(null) })
+      }, FLASH_MS)
+    }
+    destroy(): void {
+      if (this.timer !== null) clearTimeout(this.timer)
+    }
+  }
+)
+
+export const landingFlash: Extension = [flashField, flashClear]
 
 export const stableNavigation = ViewPlugin.fromClass(class {
   target: number | null = null

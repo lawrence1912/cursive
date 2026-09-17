@@ -1,7 +1,7 @@
 import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { buildBlocks } from '../src/renderer/editor/live-preview/index'
+import { buildBlocks, patchBlocks } from '../src/renderer/editor/live-preview/index'
 import { tableEditField } from '../src/renderer/editor/live-preview/table'
 import { collectHeadings, slugs } from '../src/renderer/editor/headings'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
@@ -82,6 +82,44 @@ describe('长文档（红线三）', () => {
     })
     // 公式 120 + 表 48 + 代码块 60（告示块是**行级**装饰、图片是行内的，不在这一份里）
     expect(n).toBeGreaterThan(150)
+  })
+
+  /**
+   * **打字这条路不许退回全文重扫。**
+   *
+   * 上面那条守的是「全量重建本身别变慢」，而这一条守的是「别再走全量」——
+   * 两者会一起骗人：`buildBlocks` 永远是对的，于是哪天一个过度保守的判定让每次
+   * 按键都退回它，功能测试全绿、断言也全绿，只有手感悄悄变回去（1 万行 3.4ms、
+   * 3 万行 10.9ms，一帧的预算是 16ms）。
+   *
+   * 比的是**比值而不是毫秒**：时间是噪声大的量（见文件头那段），而「增量比全量便宜
+   * 一个数量级」是机制决定的、与机器快慢无关 —— 比值把机器快慢约掉了。本机实测
+   * 约 19 倍（0.11ms vs 2.2ms），卡在 5 倍：退回全量时这个比值会掉到 1 附近，
+   * 5 倍既拦得住又不会被单次抖动误伤。
+   * 树先备好 —— 这里量的是装饰层的成本，不是 lezer 的（与上面那条同一口径）。
+   */
+  it('打字走增量：每按一个键的块级重建 < 全量的 1/5', () => {
+    // 在一段正文中间连打：围栏行与标题行按机制退回全量（见 live-preview/index.ts 的
+    // `pairingRisk` 与 `tocDocs`），拿它们当基准等于在量 buildBlocks 自己
+    const anchor = doc.indexOf('这是第 900 段正文') + 6
+    expect(anchor).toBeGreaterThan(0)
+    let s = state
+    const times: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const value = buildBlocks(s)
+      const tr = s.update({ changes: { from: anchor + i, insert: '字' } })
+      ensureSyntaxTree(tr.state, tr.state.doc.length, 30_000)
+      const t0 = performance.now()
+      const patched = patchBlocks(value, s, tr.state, tr.changes)
+      times.push(performance.now() - t0)
+      expect(patched, `第 ${i} 个字`).not.toBeNull()
+      s = tr.state
+    }
+    const sorted = [...times].sort((a, b) => a - b)
+    const patch = sorted[Math.floor(sorted.length / 2)]!
+    const full = fastest(3, () => buildBlocks(s))
+    console.log(`[perf] 按键增量 ${patch.toFixed(2)}ms vs 全量 ${full.toFixed(1)}ms（${(full / patch).toFixed(0)}×）`)
+    expect(patch * 5).toBeLessThan(full)
   })
 
   it('大纲取数 < 120ms（[TOC]、大纲面板、锚点补全共用这一条）', () => {

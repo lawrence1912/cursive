@@ -33,6 +33,7 @@ import {
   writingNow
 } from './editor/setup'
 import { cursiveMarkdown } from './editor/markdown-lang'
+import { warmLazyModules } from './editor/warmup'
 import { anchorPos, destLiteral, linkHost } from './editor/link'
 import { jumpTo } from './editor/navigation'
 import { writingModes } from './editor/writing-modes'
@@ -43,6 +44,14 @@ import { exportHtmlDocument } from './export'
 import { openReplace, searchStat } from './editor/search-panel'
 import { relativeDir, relativePath } from './ui/file-search'
 import { Sidebar } from './ui/sidebar'
+import {
+  browserStorage,
+  loadSession,
+  packSession,
+  planRestore,
+  saveSession,
+  type SessionTab
+} from './ui/session'
 import { TabBar } from './ui/tabbar'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
@@ -142,6 +151,13 @@ try {
  * 「等就绪 → 一趟 IPC → file:opened」那一圈以及它带来的竞态。
  */
 const initialDoc = window.__cursiveInitialDoc ?? null
+
+/**
+ * 契约 v24：自检标记。**自检下不做任何「把上次的样子恢复出来」的事**（现在是会话恢复）——
+ * 探针要的是确定的起点，而恢复出来的标签会让「开了几个标签 / 大纲几行 / 快速打开列几个
+ * 文件」这类断言跟着上一轮的残留飘；探针还会改文档，恢复出来的那几份会被一并改写。
+ */
+const selfCheck = window.__cursiveSelfCheck === true
 
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
@@ -435,7 +451,17 @@ function newUntitledTab(): void {
   spawnTab(createState('', listener), null, DEFAULT_FINGERPRINT)
 }
 
-function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint): Tab {
+/**
+ * `focus=false` = **开在背景里**：不激活、不刷 chrome。会话恢复要一次接回好几个标签
+ * （见下面 `restoreSession`），一个个激活等于把 `view.setState` + 大纲重建 + 一趟 IPC
+ * 各做 N 遍，而其中 N-1 遍的结果立刻就被下一个覆盖掉。
+ */
+function spawnTab(
+  state: EditorState,
+  path: string | null,
+  fp: FileFingerprint,
+  focus = true
+): Tab {
   // 启动时的空白首标签直接复用，避免「打开一个文件却多出一个空标签」
   const pristine = tabs.find(
     (t) => !t.path && !isTabDirty(t) && t.state.doc.length === 0
@@ -445,12 +471,12 @@ function spawnTab(state: EditorState, path: string | null, fp: FileFingerprint):
     pristine.path = path
     pristine.fp = fp
     pristine.savedDoc = state.doc
-    activate(pristine.id)
+    if (focus) activate(pristine.id)
     return pristine
   }
   const t: Tab = { id: nextId++, path, fp, state, savedDoc: state.doc, scroll: 0, sourceMode }
   tabs.push(t)
-  activate(t.id)
+  if (focus) activate(t.id)
   return t
 }
 
@@ -508,6 +534,7 @@ function activate(id: number): void {
   updateOutline()
   void sidebar.setActive(tab.path)
   view.focus()
+  scheduleSession()
   markFirstPaint()
 }
 
@@ -544,6 +571,7 @@ async function closeTab(id: number, discard = false): Promise<boolean> {
   }
   if (id === activeId) activate(tabs[Math.min(idx, tabs.length - 1)]!.id)
   else syncStatus(true)
+  scheduleSession() // 关掉的那个不该在下次启动时又冒出来
   return true
 }
 
@@ -779,10 +807,17 @@ function syncMode(): void {
 // ---------- 文档生命周期 ----------
 
 /** 打开到新标签页；同一文件已开着则激活原标签，避免覆盖未保存内容 */
+/** 预热计时器：切标签切得快时只留最后那一份 */
+let warmTimer: number | undefined
+
 function openTab(content: string, path: string | null, fp: FileFingerprint): Tab {
   // 文档进编辑器**之前**把落盘的 widget 高度捞进内存：CM 先查 `estimatedHeight` 进高度表、
   // 再 `toDOM`，晚一步的话这份文档的第一个图/公式/图表照样跳一下（见 widgets.ts 那边的注释）
   primeHeights(view)
+  // 首帧之后在空闲里热一遍这份文档用得上的懒加载模块（见 `editor/warmup.ts`）：
+  // 切标签切得快时只留最后那一份
+  clearTimeout(warmTimer)
+  warmTimer = warmLazyModules(content)
   const existing = path ? tabs.find((t) => t.path === path) : undefined
   if (existing) {
     activate(existing.id)
@@ -943,6 +978,107 @@ async function saveAs(): Promise<boolean> {
   return true
 }
 
+// ---------- 0.2.x 会话恢复：关掉再开，回到上次那几个标签 ----------
+
+/**
+ * **这一段必须排在启动序列之前**：`activate()` 里会调 `scheduleSession()`，而启动
+ * 时的第一次 `spawnTab` 就会 activate 一次 —— 下面那个 `let sessionRoot` 要是排在
+ * 启动序列后面，那一下读到的就是一个还没初始化的绑定（TDZ），整条启动路径当场抛
+ * `ReferenceError`。**自检下反而看不出来**：`selfCheck` 为真时 `||` 短路，压根不读它。
+ * （真踩过：单测全绿、探针全绿，普通启动一开就是一片空白。）
+ */
+
+/**
+ * 这个窗口的工作区根（契约 v19）。会话按它分组 —— 一个窗口 = 一个工作区，
+ * A 文件夹的标签不该在 B 窗口里冒出来。拿不到根（空手开出来的窗口）就整条不记。
+ */
+let sessionRoot: string | null = null
+const sessionStore = browserStorage()
+
+/** 现在这一屏的样子。活动标签的滚动/光标要从 `view` 上现取 —— 冻结的那份还停在切走那一刻 */
+function currentSession(): { tabs: SessionTab[]; active: number } {
+  const out: SessionTab[] = []
+  let active = 0
+  for (const t of tabs) {
+    if (!t.path) continue // 无路径的草稿归 scratch 管，两边都记会开出两份
+    if (t.id === activeId) active = out.length
+    out.push({
+      path: t.path,
+      scroll: t.id === activeId ? view.scrollDOM.scrollTop : t.scroll,
+      cursor: (t.id === activeId ? view.state : t.state).selection.main.head
+    })
+  }
+  return { tabs: out, active }
+}
+
+let sessionTimer: number | undefined
+/**
+ * 攒一下再写：切标签、滚动、开关标签都会触发，而 localStorage 的写是同步的。
+ * 800ms 是「一串连续动作结束」的档位，与自动保存那 2s 各管各的。
+ */
+function scheduleSession(): void {
+  if (selfCheck || !sessionRoot) return
+  clearTimeout(sessionTimer)
+  sessionTimer = window.setTimeout(flushSession, 800)
+}
+
+function flushSession(): void {
+  if (selfCheck || !sessionRoot) return
+  clearTimeout(sessionTimer)
+  const now = currentSession()
+  saveSession(sessionStore, sessionRoot, packSession(now.tabs, now.active))
+}
+
+/**
+ * 启动时把上次那几个标签接回来。
+ *
+ * **顺序上的三条规矩**（前两条与崩溃恢复同源，那边已经踩过）：
+ * ① 恢复出来的是**背景内容**，不能把用户刚双击打开的那份挤下去 —— 先记住 `keep`，
+ *   开完再 `activate` 回去；② 每个标签都 `focus=false` 开，最后只激活一次；
+ * ③ 文件不在了（改名 / 删了 / 外接盘没挂）就**跳过那一条**，绝不摆一个空壳标签出来
+ *   —— 读不到时壳只是 reject，不弹框，所以这里静默跳过是安全的。
+ */
+async function restoreSession(): Promise<void> {
+  if (selfCheck) return
+  sessionRoot = await window.api.workspaceRoot()
+  if (!sessionRoot) return
+  const saved = loadSession(sessionStore, sessionRoot)
+  if (!saved) return
+  const keep = activeTab()?.path ? activeId : null
+  const plan = planRestore(
+    saved,
+    tabs.map((t) => t.path).filter((p): p is string => p !== null),
+    keep !== null
+  )
+  const where = new Map(saved.tabs.map((t) => [t.path, t]))
+  for (const path of plan.open) {
+    const doc = await window.api.read(path).catch(() => null)
+    if (!doc) continue // 文件没了（改名 / 删了 / 外接盘没挂）就跳过这一条
+    const tab = spawnTab(
+      createState(doc.content, listener, { dir: dirname(doc.path), sourceMode }),
+      doc.path,
+      doc.fingerprint,
+      false
+    )
+    const st = where.get(path)
+    if (!st) continue
+    tab.scroll = st.scroll
+    // 光标夹回文档里：磁盘上这份文件可能在上次之后被别的程序改短了
+    if (st.cursor) {
+      const at = Math.min(st.cursor, tab.state.doc.length)
+      tab.state = tab.state.update({ selection: { anchor: at } }).state
+    }
+  }
+  // 落点：启动那份文档优先，其次是会话里的活动标签，再不行就手上还剩的最后一个
+  const target = plan.focus ? tabs.find((t) => t.path === plan.focus)?.id : undefined
+  const focus = keep ?? target ?? (tabs.length ? tabs[tabs.length - 1]!.id : null)
+  if (focus !== null && tabs.some((t) => t.id === focus)) activate(focus)
+  else syncStatus(true)
+}
+
+// 滚动位置是会话里最容易过期的一项：不听滚动的话，恢复出来永远停在切走那一刻
+view.scrollDOM.addEventListener('scroll', scheduleSession, { passive: true })
+
 // ---------- P0-2 自动保存（2s 防抖 / 切标签 / 失焦即时落盘） ----------
 
 let autosaveTimer: number | undefined
@@ -979,6 +1115,8 @@ async function flushAutosave(): Promise<void> {
 
 window.addEventListener('blur', () => {
   for (const t of [...tabs]) void flushTabAutosave(t)
+  // 会话不等那 800ms：失焦之后下一步很可能就是关窗
+  flushSession()
 })
 
 /**
@@ -1433,4 +1571,8 @@ void (async () => {
     t.scratchId = s.id
   }
   if (keep !== null) activate(keep)
-})()
+})().finally(() => {
+  // **排在崩溃恢复之后**：那边会把「启动空白标签」过滤掉并校正 activeId，
+  // 先跑会话恢复的话，它开出来的标签会连同空白页一起被那个过滤扫一遍
+  void restoreSession()
+})

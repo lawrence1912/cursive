@@ -236,3 +236,297 @@ describe('只动选区不重扫全文', () => {
     }
   })
 })
+
+/**
+ * 打字这条路的增量重建（`patchBlocks` 带 `changes`）—— 与上面那串光标位置同一套对账，
+ * 每一步换成一次真改动。
+ *
+ * 它比光标那条更容易错：**一次改动能让块的边界整个搬家**，而光标动来动去时块的
+ * 形状是不变的。所以这里除了逐位置扫一遍，还专门摆了三种「边界搬家」的形状 ——
+ * 补收尾围栏（老树吞到文末、新树只到补的那行）、删收尾围栏（反过来）、
+ * 开一个围栏把后面整篇吞掉（该退回全量）。
+ */
+describe('打字时的增量重建 === 全量重建', () => {
+  // 与上面那份同形，但**没有 `[TOC]`**：目录是全文依赖，带着它的话改标题一律退回
+  // 全量（另有用例守这条），这里要的是让尽可能多的位置真正走进增量那条路
+  const doc = [
+    '---',
+    'title: 测试',
+    '---',
+    '',
+    '# 标题',
+    '',
+    '正文一段，带 **粗体** 和 `代码`。',
+    '',
+    '> [!note]- 这一条默认折起',
+    '> 折叠态的装饰从首行末尾画到块尾。',
+    '',
+    '| 甲 | 乙 |',
+    '| :-- | --: |',
+    '| 1 | 2 |',
+    '',
+    '$$',
+    'x = 1',
+    '$$',
+    '',
+    '```mermaid',
+    'flowchart LR',
+    '  A --> B',
+    '```',
+    '',
+    '## 小节',
+    '',
+    '又一段正文[^1]。',
+    '',
+    '[^1]: 脚注定义',
+    ''
+  ].join('\n')
+
+  function dump(set: ReturnType<typeof buildBlocks>, state: EditorState): string[] {
+    const out: string[] = []
+    set.between(0, state.doc.length, (f, t, v) => {
+      const widget = (v.spec as { widget?: { constructor: { name: string } } }).widget
+      out.push(`${f}-${t}:${widget?.constructor.name ?? '?'}`)
+    })
+    return out
+  }
+
+  /**
+   * 走一次改动：返回增量与全量两份结果（增量退回全量时 patched 为 null）。
+   *
+   * **两棵树都先钉死**（`buildBlocks` 顺带缓存老树，改完再 ensure 一次新树）：这条扫描
+   * 量的是**脏区算法**，不该把 lezer 的挂钟预算算进来 —— `parsedTree` 会在快照够长时
+   * 直接用快照（见 `editor/syntax.ts`），而快照走到哪儿取决于 CM 那一轮 `work()` 的
+   * 时间预算，机器一忙就变。不钉的话这就成了仓库里第三条「机器忙就随机变红」的测试，
+   * 而 `release.sh` 是「测试全绿才出包」。
+   */
+  function step(
+    before: EditorState,
+    changes: { from: number; to?: number; insert?: string }
+  ): { patched: string[] | null; full: string[] } {
+    const value = buildBlocks(before)
+    const tr = before.update({ changes })
+    ensureSyntaxTree(tr.state, tr.state.doc.length, 5000)
+    const patched = patchBlocks(value, before, tr.state, tr.changes)
+    return {
+      patched: patched ? dump(patched, tr.state) : null,
+      full: dump(buildBlocks(tr.state), tr.state)
+    }
+  }
+
+  function at(anchor: number, text = doc): EditorState {
+    const state = EditorState.create({
+      doc: text,
+      selection: { anchor },
+      extensions: [cursiveMarkdown(), livePreview()]
+    })
+    // 老 state 这棵树也要钉死（理由同 step()）：`parsedTree` 内部那一发 ensure 的预算
+    // 是 50ms，机器满载时真的会超 —— 超了就拿半截树建 `value`，这条扫描随即变成
+    // 「半截树 vs 完整树」的对账，与它要守的东西毫无关系
+    ensureSyntaxTree(state, text.length, 5000)
+    return state
+  }
+
+  /**
+   * **命中率也要断言**：这一串对账只在「真走了增量」时才有意义，而退回全量的那条路
+   * 永远是对的 —— 哪天一个过度保守的红线让每个位置都退回全量，上面的 expect 会全绿，
+   * 而增量那条路已经名存实亡（每按一个键重扫全文，1 万行 3.3ms、3 万行 10.9ms）。
+   * 本机实测 89%（余下的是围栏行、标题行与阈值那三种退回），卡在 70% 留足余量。
+   */
+  const HIT_FLOOR = 0.7
+
+  it('每一个位置插一个字都对得上', () => {
+    let hit = 0
+    for (let pos = 0; pos <= doc.length; pos += 1) {
+      const { patched, full } = step(at(pos), { from: pos, insert: '字' })
+      if (!patched) continue
+      hit++
+      expect(patched, `在 ${pos} 插字`).toEqual(full)
+    }
+    expect(hit / (doc.length + 1)).toBeGreaterThan(HIT_FLOOR)
+  })
+
+  it('每一个位置删一个字都对得上', () => {
+    let hit = 0
+    for (let pos = 0; pos < doc.length; pos += 1) {
+      const { patched, full } = step(at(pos), { from: pos, to: pos + 1 })
+      if (!patched) continue
+      hit++
+      expect(patched, `删掉 ${pos}`).toEqual(full)
+    }
+    expect(hit / doc.length).toBeGreaterThan(HIT_FLOOR)
+  })
+
+  it('整段回车断开 / 合并两行也对得上', () => {
+    for (let pos = 0; pos <= doc.length; pos += 7) {
+      const enter = step(at(pos), { from: pos, insert: '\n\n' })
+      if (enter.patched) expect(enter.patched, `在 ${pos} 敲两个回车`).toEqual(enter.full)
+      const join = step(at(pos), { from: Math.max(0, pos - 3), to: pos })
+      if (join.patched) expect(join.patched, `吞掉 ${pos} 前面三个字`).toEqual(join.full)
+    }
+  })
+
+  /**
+   * 围栏是**成对**的，配对跨多远都算数 —— 改动落在一条围栏行上，几百行之外那条
+   * ``` 会从「收尾」变成「开头」，把后面整篇吞进代码块。那一段离脏区要多远有多远，
+   * 脏区那套推理在这里不成立，只能整条交回全量（`pairingRisk`）。
+   *
+   * 下面三条各守一个方向。**第一条是真摔出来的**：逐位置扫描当场抓到「在 ```mermaid
+   * 行首插一个字，文末的脚注定义在全量里已经被吞掉、增量那边还留着一条过期装饰」。
+   */
+  it('在围栏行上打字退回全量（插进去的字里一个反引号都没有也一样）', () => {
+    const pos = doc.indexOf('```mermaid')
+    const before = at(pos, doc)
+    const value = buildBlocks(before)
+    const tr = before.update({ changes: { from: pos, insert: '字' } })
+    expect(patchBlocks(value, before, tr.state, tr.changes)).toBeNull()
+    // 全量那边：围栏废掉之后，文末的脚注定义被后面那条 ``` 吞进代码块
+    expect(dump(buildBlocks(tr.state), tr.state).some((d) => d.endsWith('FootnoteDefWidget'))).toBe(
+      false
+    )
+  })
+
+  it('补上收尾的 ``` 同样退回全量（老树里它一路吞到文末）', () => {
+    const head = '前言\n\n' + '正文段落。\n\n'.repeat(24)
+    const tail = '| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n\n$$\ny = 2\n$$\n'
+    const text = `${head}\`\`\`ts\nconst a = 1\n\n${tail}`
+    const fenceBody = text.indexOf('const a = 1') + 'const a = 1'.length + 1
+    const before = at(fenceBody, text)
+    // 补之前：那一大段真的被围栏吞着，一条块级装饰都没有
+    expect(dump(buildBlocks(before), before)).toEqual([])
+    const value = buildBlocks(before)
+    const tr = before.update({ changes: { from: fenceBody, insert: '```\n' } })
+    expect(patchBlocks(value, before, tr.state, tr.changes)).toBeNull()
+    // 而全量那边，下面重新变回表格与公式
+    expect(dump(buildBlocks(tr.state), tr.state)).toHaveLength(2)
+  })
+
+  it('删掉收尾的 ``` 也退回全量（新树里它一路吞到文末）', () => {
+    const head = '前言\n\n' + '正文段落。\n\n'.repeat(24)
+    const tail = '| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n\n$$\ny = 2\n$$\n'
+    const text = `${head}\`\`\`ts\nconst a = 1\n\`\`\`\n\n${tail}`
+    const close = text.indexOf('```\n\n|')
+    const before = at(close, text)
+    expect(dump(buildBlocks(before), before)).toHaveLength(2)
+    const value = buildBlocks(before)
+    const tr = before.update({ changes: { from: close, to: close + 4 } })
+    expect(patchBlocks(value, before, tr.state, tr.changes)).toBeNull()
+    expect(dump(buildBlocks(tr.state), tr.state)).toEqual([])
+  })
+})
+
+/**
+ * `[TOC]` 是这堆块级构件里唯一的**全文依赖**：烘进 TocWidget 的是整份标题表。
+ * 于是「改动碰到标题」+「这份文档里有目录」= 退回全量重建，否则目录会停在改之前
+ * 那一版（而且只在长文档上才看得出来，肉眼极难抓）。
+ */
+describe('目录（全文依赖）与增量重建', () => {
+  const body = ['# 标题', '', '正文。', '', '## 小节', '', '又一段正文。', ''].join('\n')
+  const withToc = `[TOC]\n\n${body}`
+
+  function make(text: string, anchor: number): EditorState {
+    const state = EditorState.create({
+      doc: text,
+      selection: { anchor },
+      extensions: [cursiveMarkdown(), livePreview()]
+    })
+    ensureSyntaxTree(state, text.length, 5000) // 同上：树先钉死
+    return state
+  }
+
+  function typeAt(text: string, pos: number, insert: string, caret = pos) {
+    const before = make(text, caret)
+    const value = buildBlocks(before)
+    const tr = before.update({ changes: { from: pos, insert } })
+    ensureSyntaxTree(tr.state, tr.state.doc.length, 5000) // 同 step()：树先钉死
+    return { patched: patchBlocks(value, before, tr.state, tr.changes), next: tr.state }
+  }
+
+  it('有目录时：在标题里打字退回全量', () => {
+    const pos = withToc.indexOf('# 标题') + 4
+    expect(typeAt(withToc, pos, '甲').patched).toBeNull()
+  })
+
+  it('有目录时：删掉一整行标题同样退回全量（只有老树看得见它）', () => {
+    const from = withToc.indexOf('## 小节')
+    const before = make(withToc, from)
+    const value = buildBlocks(before)
+    const tr = before.update({ changes: { from, to: from + '## 小节\n'.length } })
+    expect(patchBlocks(value, before, tr.state, tr.changes)).toBeNull()
+  })
+
+  it('有目录时：改正文照旧走增量', () => {
+    const pos = withToc.indexOf('正文。') + 1
+    expect(typeAt(withToc, pos, '甲').patched).not.toBeNull()
+  })
+
+  it('没有目录时：改标题也走增量，且与全量一致', () => {
+    const pos = body.indexOf('# 标题') + 4
+    const { patched, next } = typeAt(body, pos, '甲')
+    expect(patched).not.toBeNull()
+    const dump = (set: ReturnType<typeof buildBlocks>): string[] => {
+      const out: string[] = []
+      set.between(0, next.doc.length, (f, t, v) => {
+        const w = (v.spec as { widget?: { constructor: { name: string } } }).widget
+        out.push(`${f}-${t}:${w?.constructor.name ?? '?'}`)
+      })
+      return out
+    }
+    expect(dump(patched!)).toEqual(dump(buildBlocks(next)))
+  })
+
+  // 新写出来的 `[TOC]` 落在脏区里，增量那条自己就看得见它 —— 不必也退回全量。
+  // 光标要摆远一点：压在 `[TOC]` 那一行上本来就该回显源码（reveal），那样测的就不是
+  // 「建没建出来」而是「回显对不对」了
+  it('现写一个 [TOC]：增量就能把目录建出来', () => {
+    const { patched, next } = typeAt(body, 0, '[TOC]\n\n', body.length)
+    expect(patched).not.toBeNull()
+    const names: string[] = []
+    patched!.between(0, next.doc.length, (_f, _t, v) => {
+      const w = (v.spec as { widget?: { constructor: { name: string } } }).widget
+      names.push(w?.constructor.name ?? '?')
+    })
+    expect(names).toEqual(['TocWidget'])
+  })
+})
+
+/**
+ * 与「只动选区不重扫全文」同一条规矩，守的是打字这一路：在文末打字时，开头那张表的
+ * 装饰对象必须**原样留着**。退回全量重扫是无声的 —— 结果一模一样，只是每按一个键多
+ * 花几毫秒（1 万行 3.3ms、3 万行 10.9ms），只能靠身份比对守住。
+ */
+describe('打字时不重扫全文', () => {
+  it('远处的块级装饰对象原样保留', () => {
+    const rows = Array.from({ length: 60 }, (_, i) => `| 第${i + 1}行 | 数据 |`)
+    const tail = Array.from(
+      { length: 150 },
+      (_, i) => `第 ${i + 1} 段正文，离那张表很远。\n\n\`\`\`ts\nconst x${i} = ${i}\n\`\`\``
+    )
+    const doc = `| 甲 | 乙 |\n| --- | --- |\n${rows.join('\n')}\n\n${tail.join('\n\n')}\n`
+    let state = EditorState.create({ doc, extensions: [cursiveMarkdown(), livePreview()] })
+    ensureSyntaxTree(state, doc.length, 5000)
+
+    const tableWidget = (s: EditorState): unknown => {
+      let found: unknown = null
+      s.field(blockField).between(0, 10, (_f, _t, v) => {
+        found = (v.spec as { widget?: unknown }).widget
+      })
+      return found
+    }
+
+    // 先走一个事务让快照追平（首开时快照只到 3000 字，那一次本来就该全量重建）
+    state = state.update({ selection: { anchor: state.doc.length - 20 } }).state
+    const first = tableWidget(state)
+    expect(first).toBeTruthy()
+
+    // 在文末连打十个字：那张表离得远，一次都不该被重建。
+    // **每一步先把树钉死再读字段**（字段是惰性的，`tableWidget` 那一下才真跑）：
+    // 不钉的话字段内部那一发 ensure 会在满载时超预算，退回半截树 → 全量重建 →
+    // widget 换新对象，于是这条断言变成在量机器忙不忙
+    for (let i = 1; i <= 10; i++) {
+      state = state.update({ changes: { from: state.doc.length, insert: '字' } }).state
+      ensureSyntaxTree(state, state.doc.length, 5000)
+      expect(tableWidget(state), `第 ${i} 个字`).toBe(first)
+    }
+  })
+})

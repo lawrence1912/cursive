@@ -13,7 +13,7 @@ import {
   rectangularSelection
 } from '@codemirror/view'
 import { cursiveCompletion } from './complete'
-import { stableNavigation } from './navigation'
+import { landingFlash, stableNavigation } from './navigation'
 import { expandOnEnter } from './input-rules'
 import { t } from '../i18n'
 import { changeListIndent } from './list-ops'
@@ -110,6 +110,7 @@ export function createState(
     extensions: [
       history(),
       stableNavigation,
+      landingFlash,
       drawSelection(),
       dropCursor(),
       rectangularSelection(),

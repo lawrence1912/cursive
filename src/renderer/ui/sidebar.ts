@@ -520,11 +520,28 @@ export class Sidebar {
       const startW = this.el.getBoundingClientRect().width
       document.body.classList.add('is-resizing')
 
+      /**
+       * **一帧最多写一次宽度。** `mousemove` 在一帧里能来好几发（触控板尤其密），
+       * 而改侧栏宽度不是改一个盒子 —— 编辑区跟着变窄，CodeMirror 要把视口里每一行
+       * 重新折行、重新量高。每发都写等于一帧里做好几遍同样的重排，拖起来发涩。
+       * 攒到 rAF 里只用最后那个值：光标在哪儿、宽度就是多少，一点都不欠账。
+       */
+      let pending: number | null = null
+      let frame = 0
       const move = (e: MouseEvent): void => {
-        const w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + e.clientX - startX))
-        this.el.style.width = `${w}px`
+        pending = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + e.clientX - startX))
+        if (frame) return
+        frame = requestAnimationFrame(() => {
+          frame = 0
+          if (pending !== null) this.el.style.width = `${pending}px`
+        })
       }
       const up = (): void => {
+        // 松手这一下要**立即**把最后一个值落到位：rAF 还没回调就散了的话，
+        // 宽度会停在上一帧，而下面那句紧接着就把它存进 localStorage
+        if (frame) cancelAnimationFrame(frame)
+        frame = 0
+        if (pending !== null) this.el.style.width = `${pending}px`
         document.body.classList.remove('is-resizing')
         window.removeEventListener('mousemove', move)
         window.removeEventListener('mouseup', up)
