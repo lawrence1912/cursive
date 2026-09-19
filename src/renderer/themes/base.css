@@ -77,11 +77,11 @@
   /* ---- chrome 统一网格：四块面板此前是四套字号三套行高 ----
      13px 是 macOS 的界面字号（Finder 侧栏、Safari 标签都是它）；12px 退一档给次要层，
      两级之间 1.08 的比例正好 —— 产品 UI 的字号梯子要密，拉太开就变噪音。
-     行 30 / 标签栏 40：12px+28px 那套在 Retina 上看着像缩略图，点击也偏小 */
+     行 30：12px+28px 那套在 Retina 上看着像缩略图，点击也偏小。
+     标签栏没有自己的高度了 —— 它就是顶栏，与原生拖拽条同高（`--drag-strip`） */
   --chrome-size: 13px;    /* 树行 / 大纲行 / 标签 */
   --chrome-label: 12px;   /* 面板小标题（大写字距）/ 状态栏 */
   --chrome-row: 30px;     /* 树行 / 大纲行 */
-  --tabbar-h: 40px;
   --status-h: 30px;
 }
 
@@ -223,14 +223,21 @@ html, body {
   font-family: var(--sans);
 }
 
-/* macOS hiddenInset：给红绿灯让出可拖拽区域，两端放面板开关 */
+/* macOS hiddenInset：红绿灯占着窗口左上角，两端放面板开关。
+   **0.2.x 起它不再占一行高度**（正文的标签顶到最上面）：它退成一条钉在窗口顶边的
+   按钮轨，自己 `pointer-events: none`，空白处的点击照旧落给原生拖拽条（拖窗口 /
+   双击缩放）。顶边那 38px 的底色改由下面三块各自画 —— 中间列是 #topbar，
+   两侧是 #sidebar / #outline 的顶部留白，所以这里不再画背景 */
 #drag-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* 压在面板（无）之上、右键菜单（260）与栏宽浮层（260）之下 */
+  z-index: 40;
   height: var(--drag-strip);
-  -webkit-app-region: drag;
-  /* 与侧栏/标签栏/大纲/状态栏同属 chrome 层（--surface），正文那张纸才是 --bg。
-     原来标题栏用 --bg，白条压在灰侧栏上，顶部像断了一截 */
-  background: var(--panel);
-  flex: none;
+  /* 空白处要漏给原生拖拽条；按钮自己把事件收回来（`.tb-btn`） */
+  pointer-events: none;
   display: flex;
   /* 与红绿灯同一条水平线：灯是 14×14、圆心离窗口顶 16pt（探针 trafficMidFromTop 实测），
      26px 的按钮得从 y=3 起画才对得齐 —— align-items:center 会把它按 38px 条高居中到 19，低 3px */
@@ -240,11 +247,13 @@ html, body {
 }
 .tb-spacer { flex: 1; }
 
-/* 标题栏按钮（main.ts 插入）。⚠️ 这三个数字（左 78 / 右 10 / 宽 26）与
-   shell-swift `DragStripView.hitTest` 的挖洞区强耦合：原生拖拽条整条盖在 webview 上，
-   壳不挖洞这两个按钮收不到点击。改这里必须同步壳。 */
+/* 标题栏按钮（main.ts 插入）。原生拖拽条整条盖在 webview 上，这几颗按钮要收得到点击
+   全靠壳侧挖洞 —— 但**那几个数字不再抄在壳里**：`ui/drag-holes.ts` 按真实 rect 量一遍
+   报给壳（契约 v26），改这里的内边距 / 尺寸不必再同步 Swift。壳里那份写死的区间只剩
+   兜底（渲染层还没报上来的那一瞬）。 */
 .tb-btn {
-  -webkit-app-region: no-drag;   /* Electron 退路：否则整条都是拖拽区，按钮点不动 */
+  /* 轨道整条 `pointer-events: none`，按钮这一格自己收回来 */
+  pointer-events: auto;
   flex: none;
   display: flex;
   align-items: center;
@@ -258,9 +267,10 @@ html, body {
   color: var(--mark-idle);
   cursor: pointer;
 }
-/* 右上角的一块：深色 / 栏宽 / 大纲。⚠️ 总宽 26×3 + 间隙 2×2 = 82px，
-   与壳侧 DragStripView 右侧挖洞区（末尾 96px）强耦合，改尺寸要同步壳 */
+/* 右上角的一块：深色 / 栏宽 / 大纲。总宽 26×3 + 间隙 2×2 = 82px，右内边距 10 ——
+   大纲藏起来时 `#topbar.is-inset-right` 要按这个宽度给它让地方（96 = 82 + 10 + 4 留白） */
 .tb-group {
+  pointer-events: auto;
   display: flex;
   gap: 2px;
   flex: none;
@@ -286,6 +296,33 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+/* ---------- 顶栏（0.2.x：正文的标签顶到最上面）----------
+   原来顶上是两条：通栏的拖拽条 38 + 中间列的标签栏 40，正文被压低 78px。现在只剩
+   这一条，它就是标签栏。**高度必须等于 `--drag-strip`** —— 原生拖拽条整条盖在
+   webview 上，标签坐在它下面靠挖洞收事件（`ui/drag-holes.ts` 量、壳侧 `DragStripView`
+   放行）；两个高度对不上就会出现「上半截点不动、下半截点得动」这种最难自查的怪事。
+
+   底色与那道分隔线画在这儿而不是 #tabbar 上：两侧让开的留白（躲红绿灯 / 躲右上三颗）
+   得是同一块底色，画在滚动容器上的话它们会露出正文的纸色。 */
+#topbar {
+  flex: none;
+  display: flex;
+  height: var(--drag-strip);
+  background: var(--panel);
+  box-shadow: inset 0 -1px 0 var(--divider);
+}
+/* 侧栏藏起来时中间列滑到窗口左沿，标签会撞上红绿灯和那颗文件树开关（到 104 为止），
+   大纲藏起来时同理会撞上右上那三颗。两个 class 都由 main.ts 的 `syncTitlebar()` 挂
+   —— 面板显隐的唯一汇合点。
+
+   左边让开的是 140 而不是刚好躲开的 110：多出来那 30px 是**窗口的抓手**。挖洞按真实
+   rect 报，标签排满时整条顶边会被挖穿 —— 侧栏开着时还有它那条顶带可拖，两侧都藏起来
+   就一处都不剩了，窗口从此拖不动。这一截永远没有元素，所以永远归原生拖拽条
+   （E2E `tbGutter` 把关）。右边不必再留：抓手有一处就够，而右边每让一点，
+   标签就窄一点 */
+#topbar.is-inset-left { padding-left: 140px; }
+#topbar.is-inset-right { padding-right: 96px; }
 
 #editor-host {
   flex: 1 1 auto;
@@ -830,6 +867,9 @@ body.is-resizing {
 
 #sidebar {
   position: relative;
+  /* 顶上那 38px 归红绿灯（与那颗文件树开关）—— 中间列的标签已经顶到窗口最上面，
+     两侧面板就得自己躲开窗口控件。留白吃的是 #sidebar 自己的底色，看着仍是一整块 */
+  padding-top: var(--drag-strip);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -1276,19 +1316,19 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
    排出来的参差格栅是标签栏最吵的来源。窄到 92px 就不再挤，标签栏改为横向滚动。
    关闭键**固定在右端**：标题拿走所有多余空间（.tab-title flex:1），× 于是永远贴着
    同一条竖线，扫一眼就知道点哪儿，不用在每个标签里重新找。
-   活动标签 = 编辑区那张纸的顶边：同底色 + 描边，且把标签栏底部那条分隔线压在身下，
-   于是标签和正文连成一片。分隔线所以画成 inset box-shadow（背景层）而不是 border-bottom：
-   border 在盒子外沿，子元素盖不住它；inset shadow 在背景层，标签的底色正好遮住。
-   标签占满内容高（条 40 − 顶部 6 = 34），所有标签等高 —— 活动态不能比别人高，
+   活动标签 = 编辑区那张纸的顶边：同底色 + 描边，且把顶栏底部那条分隔线压在身下，
+   于是标签和正文连成一片。分隔线所以画在 #topbar 的背景层（inset box-shadow）而不是
+   border-bottom：border 在盒子外沿，子元素盖不住它；inset shadow 在背景层，
+   标签的底色正好遮住（父元素的背景层在子元素之下，所以隔一层也照样盖得住）。
+   标签占满内容高（顶栏 38 − 顶部 6 = 32），所有标签等高 —— 活动态不能比别人高，
    否则文字基线会跟着跳。非活动标签不画边框：一排描边盒子会让标签栏变成格栅。 */
 #tabbar {
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   gap: 2px;
-  height: var(--tabbar-h);
+  height: 100%;
   padding: 6px 8px 0;
-  background: var(--panel);
-  box-shadow: inset 0 -1px 0 var(--divider);
   overflow-x: auto;
   user-select: none;
   -webkit-user-select: none;
@@ -1416,6 +1456,8 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
 /* ---------- 大纲视图（右侧，P3-6） ---------- */
 #outline {
   flex: none;
+  /* 同 #sidebar：顶上那 38px 归右上角那三颗按钮（深色 / 栏宽 / 大纲） */
+  padding-top: var(--drag-strip);
   width: 220px;
   display: flex;
   flex-direction: column;

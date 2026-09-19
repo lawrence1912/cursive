@@ -359,6 +359,14 @@ export interface CursiveApi {
    * 'system' = 交还给系统（NSApp.appearance = nil）。 */
   setAppearance(mode: AppearanceMode): void
 
+  /** ---- 标题栏放行区段（契约 v26）----
+   * 原生拖拽条整条盖在 webview 上，落在它下面的东西默认一个点击都收不到；
+   * 这里报的是「这一条上哪几段不归拖拽」（CSS px 的 `[左, 右]`，壳按 pageZoom 换算）。
+   * 正文的标签顶到最上面之后段数与位置跟着标签数 / 窗口宽度 / 面板显隐一起变，
+   * 壳里再写死区间就对不上了 —— 量在渲染层，壳照做。空数组 = 整条都归拖拽。
+   * 算法与合帧去重在 `ui/drag-holes.ts`。 */
+  setTitlebarHoles(holes: [number, number][]): void
+
   /** ---- P3-2 跨文件搜索（契约 v11）----
    * `searchFiles` 立刻返回，结果经 `onSearchHits` 分批推回、`onSearchDone` 收尾。
    * 同一时刻只跑一个搜索：新的一次会自动取消上一次（壳侧 OperationQueue 串行）。 */

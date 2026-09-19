@@ -9,11 +9,14 @@
     <title>Cursive</title>
   </head>
   <body>
+    <!-- 标题栏按钮的轨道：固定在窗口顶边、自己不吃事件（pointer-events:none），
+         只把两端那几颗按钮钉在红绿灯那条线上。它不占位 —— 顶边那 38px 归 #topbar
+         （中间列）与侧栏/大纲各自的顶部留白，正文的标签因此坐在窗口最上面 -->
     <div id="drag-strip"></div>
     <div id="main">
       <!-- #sidebar / #outline 由 main.ts 插到这里 -->
       <div id="center">
-        <!-- #tabbar 由 main.ts 插到这里 -->
+        <div id="topbar"><!-- #tabbar 由 main.ts 插到这里 --></div>
         <main id="editor-host"></main>
       </div>
     </div>

@@ -113,8 +113,14 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and c.get('sbRoot') == '/tmp/cursive-e2e'
       and r.get('autosaved') is True and r.get('reloaded') is True
       and r.get('tabHit') is True    # 文件树藏起来后没有浮层压住第一个标签
+      # 文件树藏起来后，红绿灯右边那一截空当还在 = 窗口还拖得动（两侧都藏 + 标签排满时
+      # 它是唯一的抓手；挖洞按真实 rect 报，没有元素的地方才留得住拖拽）
+      and r.get('tbGutter') is True
       # 标题栏开关：原生条子给两端挖了洞（否则点击到不了网页）+ 渲染层点击真的切了面板
       and c.get('tbHoleLeft') is True and c.get('tbHoleRight') is True
+      # 0.2.x 顶栏合并：正文的标签坐在原生拖拽条底下，挖洞区（契约 v26，渲染层量了报上来）
+      # 必须把它放行 —— 报漏了标签就一个点击都收不到，而页面那一侧的 tabHit 照样是绿的
+      and c.get('tabUnderStrip') is True and c.get('tabNativeHole') is True
       and c.get('trafficEnd', 999) <= 72   # 左按钮（x=78 起）躲开红绿灯
       and r.get('tbHitPage') is True
       # 标题栏按钮与红绿灯同一条水平线（页面 px vs 原生点，zoom=1 时 1:1）

@@ -321,6 +321,7 @@ let BRIDGE_JS = """
     snapshotRead: (path, id) => call('snapshotRead', [path, id]),
     pasteImage: (dir) => call('pasteImage', [dir]),
     setAppearance: (mode) => call('setAppearance', [mode]),
+    setTitlebarHoles: (holes) => call('setTitlebarHoles', [holes]),
     setViewFlags: (flags) => call('setViewFlags', [flags]),
     setLanguage: (lang) => call('setLanguage', [lang]),
     syncPrefs: (values) => call('syncPrefs', [values]),
@@ -588,16 +589,47 @@ final class DragStripView: NSView {
     /// 只为读 pageZoom —— 页面缩放后 CSS px 不等于点，挖洞区得跟着缩放
     weak var host: WKWebView?
 
-    /// 标题栏两端给渲染层的按钮让路：条子整条盖在 webview 上，
-    /// 这里不返回 nil 的话那几颗按钮永远收不到点击。两侧各留几点余量，省得边缘 1px 打偏。
+    /// 渲染层报上来的放行区段（契约 v26，CSS px 的 `[左, 右]`，见 `ui/drag-holes.ts`）。
     ///
-    /// 左：文件树开关一颗（base.css `#drag-strip` 左内边距 78 + `.tb-btn` 宽 26）。
-    /// 右：`.tb-group` 三颗（深色 / 栏宽 / 大纲）= 26×3 + 间隙 2×2 = 82，右内边距 10。
-    /// **这几个数与 base.css 强耦合，改 CSS 记得回来同步**（探针 tbHoleLeft/tbHoleRight 把关）
+    /// 0.2.x 之前这里写死两段（两颗面板开关），base.css 的内边距与这几个数字得手动对齐。
+    /// **正文的标签顶到最上面之后那样不够用了**：要放行的段数与位置跟着标签数、窗口宽度、
+    /// 两侧面板的显隐一起变，只有页面自己知道。于是改成页面量、这里照做。
+    ///
+    /// 反过来（条子自己去问页面）做不到：`hitTest` 是同步的，`evaluateJavaScript` 是异步的。
+    var holes: [(CGFloat, CGFloat)] = []
+
+    /// 兜底：页面还没报上来的那一瞬（首帧、reload），两端那两颗按钮也得能点。
+    /// 数字是 0.2.x 以前的那套（base.css 左内边距 78 + `.tb-btn` 宽 26；
+    /// 右 `.tb-group` 26×3 + 间隙 2×2 = 82 + 右内边距 10），探针 tbHoleLeft/tbHoleRight 把关
+    private func fallbackPasses(_ x: CGFloat, _ z: CGFloat) -> Bool {
+        (x >= 72 * z && x <= 110 * z) || (x >= bounds.maxX - 96 * z && x <= bounds.maxX - 6 * z)
+    }
+
+    /// 条子上第一处**还能拖窗口**的横坐标（点）。只给探针用。
+    ///
+    /// 顶栏合并之后「条子正中」多半是一个标签（正中恰好在洞里），原来那条
+    /// 「hitTest(条子正中) === 条子」的自检于是永远是红的 —— 但它要问的事没变：
+    /// **这条上还有没有地方拖得动窗口**。所以改成在放行区段之外找第一处空当。
+    /// 一处都找不到 = 整条被挖穿，窗口再也拖不动，那时它就该红。
+    ///
+    /// `after` 从红绿灯右边起算：灯本身是窗口 frame view 上的原生按钮，
+    /// 在那儿做 hitTest 命中的是灯，不是条子。
+    func firstDraggableX(after: CGFloat) -> CGFloat? {
+        let z = host?.pageZoom ?? 1
+        let gap: CGFloat = 8      // 空当窄过这个数，人也按不准
+        var x = after
+        for h in holes.map({ ($0.0 * z, $0.1 * z) }).sorted(by: { $0.0 < $1.0 }) {
+            if h.0 - x > gap { return (x + h.0) / 2 }
+            x = max(x, h.1)
+        }
+        return bounds.maxX - x > gap ? (x + bounds.maxX) / 2 : nil
+    }
+
+    /// 条子整条盖在 webview 上，这里不返回 nil 的话洞里那些东西永远收不到点击
     private func passesThrough(_ p: NSPoint) -> Bool {
         let z = host?.pageZoom ?? 1
-        return (p.x >= 72 * z && p.x <= 110 * z)
-            || (p.x >= bounds.maxX - 96 * z && p.x <= bounds.maxX - 6 * z)
+        if holes.isEmpty { return fallbackPasses(p.x, z) }
+        return holes.contains { p.x >= $0.0 * z && p.x <= $0.1 * z }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -1546,6 +1578,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     let isPrimary: Bool
     var window: NSWindow!
     var webView: WKWebView!
+    /// 顶部那条原生拖拽条。渲染层报上来的放行区段写进它（契约 v26）
+    var dragStrip: DragStripView?
     var dirty = false
     var forceClose = false
     var pendingOpen: String?
@@ -1753,6 +1787,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
         // 顶部拖拽条（叠在 webview 上方，与渲染层的 #drag-strip 重合）
         let dragStrip = DragStripView(frame: .zero)
+        self.dragStrip = dragStrip
         dragStrip.host = webView
         dragStrip.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(dragStrip, positioned: .above, relativeTo: webView)
@@ -2169,6 +2204,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // localStorage，这一份只是「上一次是什么样」的影子，够首帧用就行
             UserDefaults.standard.set(mode, forKey: "appearance")
             appDelegate?.syncThemeMenu(mode)
+            respond(id, NSNull())
+
+        case "setTitlebarHoles":
+            // 契约 v26：渲染层量好的「这一条上哪几段不归拖拽」（CSS px）。
+            // 壳只是照做 —— 段数与位置只有页面知道（标签数、窗口宽度、面板显隐一起变）。
+            // 报空数组 = 整条都归拖拽；久久不报则走 `DragStripView` 里那份兜底区间
+            dragStrip?.holes = (args.first as? [[Double]] ?? []).compactMap {
+                $0.count == 2 ? (CGFloat($0[0]), CGFloat($0[1])) : nil
+            }
             respond(id, NSNull())
 
         case "setLanguage":
@@ -2759,16 +2803,29 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           cmTextLen: (document.querySelector('.cm-content')?.textContent || '').length,
           tabs: document.querySelectorAll('.tab-item').length,
           tabList: [...document.querySelectorAll('.tab-item')].map(e => e.title),
+          // 0.2.x 顶栏合并：正文的标签坐到了原生拖拽条底下。把第一个标签的中心报上去，
+          // 原生侧照着做一次真 hitTest（下面的 tabNativeHole）—— 挖洞区没覆盖到它的话，
+          // 点击 / 拖拽重排 / 右键菜单全会被窗口拖拽吃掉，而页面这一侧完全看不出来
+          tabRect: (() => {
+            const r = document.querySelector('.tab-item')?.getBoundingClientRect()
+            return r ? { x: r.left + r.width / 2, top: r.top } : null
+          })(),
           outlineRows: document.querySelectorAll('.ol-row').length
         }))()
         """
         webView.evaluateJavaScript(probe) { [weak self] result, _ in
             guard let self, var obj = result as? [String: Any] else { return }
-            // 原生侧自检：拖拽条就位、命中测试命中它（performDrag 的充分前置）
+            // 原生侧自检：拖拽条就位、命中测试命中它（performDrag 的充分前置）。
+            // **取点是条子上第一处空当**，不再是条子正中 —— 顶栏合并之后正中多半是一个
+            // 标签，那儿本来就该漏给 webview（见 `firstDraggableX`）
             if let container = self.webView.superview,
                let strip = container.subviews.compactMap({ $0 as? DragStripView }).first {
-                let p = strip.convert(CGPoint(x: strip.bounds.midX, y: strip.bounds.midY), to: container.superview)
-                obj["dragStripHit"] = (container.superview?.hitTest(p) === strip)
+                let trafficEnd = self.window.standardWindowButton(.zoomButton)?.frame.maxX ?? 69
+                let dragX = strip.firstDraggableX(after: trafficEnd + 4)
+                obj["dragGapX"] = dragX.map(Double.init) ?? -1
+                let p = strip.convert(CGPoint(x: dragX ?? strip.bounds.midX, y: strip.bounds.midY),
+                                      to: container.superview)
+                obj["dragStripHit"] = (dragX != nil && container.superview?.hitTest(p) === strip)
                 obj["stripFrame"] = "\(strip.frame)"
                 // 红绿灯占到哪儿：base.css `#drag-strip` 的左内边距（78）必须躲开它，
                 // 不然按钮和红绿灯叠在一起 —— 用真值把关，别拍脑袋
@@ -2780,8 +2837,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                     obj["trafficMidFromTop"] = Double(self.window.frame.height - inWin.midY)
                     obj["trafficSize"] = "\(zoomBtn.frame.size)"
                 }
-                // 标题栏按钮的挖洞：两端按钮中心必须漏给 webview，条子中间照旧归拖拽
-                for (key, x) in [("tbHoleLeft", 91.0), ("tbHoleRight", strip.bounds.maxX - 23)] {
+                // 挖洞：这几个点必须漏给 webview，别处照旧归拖拽。
+                // **坐标是 CSS px，得乘 pageZoom 才是点** —— 缩放是记住的（UserDefaults），
+                // 开发机上留着 1.25 倍跑自检的话，不换算这几条会无端变红
+                let z = self.webView.pageZoom
+                var passes: [(String, CGFloat)] = [
+                    ("tbHoleLeft", 91 * z),                        // 文件树开关的圆心
+                    ("tbHoleRight", strip.bounds.maxX - 23 * z)    // 大纲开关的圆心
+                ]
+                // 契约 v26：正文的标签顶到最上面之后也坐在条子底下，挖洞区必须把它放行
+                if let r = obj["tabRect"] as? [String: Any], let cx = r["x"] as? Double {
+                    passes.append(("tabNativeHole", CGFloat(cx) * z))
+                    // 标签真的落在条子那一带，上面那条 hitTest 才算测到了东西
+                    obj["tabUnderStrip"] = CGFloat((r["top"] as? Double) ?? 999) * z < strip.bounds.height
+                }
+                for (key, x) in passes {
                     let q = strip.convert(CGPoint(x: x, y: strip.bounds.midY), to: container.superview)
                     obj[key] = (container.superview?.hitTest(q) !== strip)
                 }
@@ -2881,6 +2951,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         const r0 = document.querySelector('.tab-item').getBoundingClientRect()
         const hitEl = document.elementFromPoint(r0.left + r0.width / 2, r0.top + r0.height / 2)
         const tabHit = !!(hitEl && hitEl.closest('.tab-item'))
+        // 侧栏藏起来时，红绿灯右边那一截空当必须还在（base.css `#topbar.is-inset-left`
+        // 让开的 140 里，104 之后那 30px）。挖洞是按真实 rect 报的 —— 这一截上没有任何
+        // 元素 = 它仍归原生拖拽条。**两侧面板都藏起来 + 标签排满时，这是唯一还能拖窗口
+        // 的地方**，没有它整条顶边会被挖穿，窗口从此拖不动
+        const gutterEl = document.elementFromPoint(122, 16)
+        const tbGutter = !!(gutterEl && gutterEl.id === 'topbar')
         window.__shellEmit('menu', 'view:toggle-sidebar')
         await new Promise(r => setTimeout(r, 80))
         const sbRestored = getComputedStyle(sb).display
@@ -3984,6 +4060,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           tabProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
+          tbGutter,
           tbToggle: { hidden: tbHidden, restored: tbBack, onWhileHidden: tbOn },
           tbHitPage,
           tbMidY,

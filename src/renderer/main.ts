@@ -52,6 +52,7 @@ import {
   saveSession,
   type SessionTab
 } from './ui/session'
+import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
 import { note } from './ui/note'
 import { reorderIds, TabBar } from './ui/tabbar'
@@ -311,6 +312,34 @@ tbSidebar.addEventListener('click', toggleSidebar)
 tbOutline.addEventListener('click', toggleOutline)
 tbTheme.addEventListener('click', () => prefs.toggleDark())
 tbColumn.addEventListener('click', () => prefs.toggleColumn(tbColumn))
+
+/**
+ * 标题栏的挖洞区（契约 v26，算法在 `ui/drag-holes.ts`）。
+ *
+ * 原生拖拽条整条盖在窗口顶边那 38px 上，两颗面板开关、右上那三颗、**以及正文的标签**
+ * 全坐在它底下 —— 不把这几段报上去，它们一个点击都收不到。量的是真实 rect，
+ * 所以改 base.css 的内边距 / 按钮尺寸不必再回头同步 Swift（壳里那份写死的区间只剩兜底）。
+ *
+ * `collect` 里 `tabbar` 是后面才建的，但这里只是个闭包 —— 真正取值要等到 rAF 里，
+ * 那时整个模块早就跑完了（模块级 let 的启动顺序坑见 CONTEXT）。
+ */
+const holes = createHoleReporter({
+  collect: () => [
+    tbSidebar.getBoundingClientRect(),
+    tbGroup.getBoundingClientRect(),
+    ...[...tabbar.el.querySelectorAll('.tab-item')].map((el) => el.getBoundingClientRect())
+  ],
+  strip: () => ({
+    width: window.innerWidth,
+    // 高度只有 base.css 那一处说了算（`--drag-strip`），壳侧的条高也钉在同一个数上
+    height:
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--drag-strip')) || 38
+  }),
+  send: (list) => window.api.setTitlebarHoles(list)
+})
+// 窗口宽度变了（含 ⌘+/⌘−/捏合 —— pageZoom 会改 CSS 视口）就得重量一遍
+window.addEventListener('resize', () => holes.schedule())
+
 syncTitlebar()
 
 function titlebarButton(id: string, name: IconName, label: string, key = ''): HTMLButtonElement {
@@ -335,12 +364,21 @@ function toggleOutline(): void {
   syncTitlebar()
 }
 
-/** 按钮亮=面板开着。aria-pressed 让读屏也拿得到这个状态 */
+/**
+ * 按钮亮=面板开着。aria-pressed 让读屏也拿得到这个状态。
+ *
+ * 顺带管顶栏两侧的留白：面板一藏，中间列就顶到窗口边上，标签会撞上红绿灯（左）
+ * 或右上那三颗（右）。**面板显隐只在这里汇合**，留白挂在别处迟早有一条路忘了改。
+ */
 function syncTitlebar(): void {
   for (const [b, on] of [[tbSidebar, sidebar.visible], [tbOutline, outline.visible]] as const) {
     b.classList.toggle('is-on', on)
     b.setAttribute('aria-pressed', String(on))
   }
+  const topbar = document.getElementById('topbar')!
+  topbar.classList.toggle('is-inset-left', !sidebar.visible)
+  topbar.classList.toggle('is-inset-right', !outline.visible)
+  holes.schedule()
   syncThemeButton()
   syncViewFlags()
 }
@@ -498,7 +536,10 @@ function reorderTab(id: number, before: number | null): void {
   syncStatus()
   scheduleSession()
 }
-center.prepend(tabbar.el)
+// 标签栏坐进顶栏 —— 中间列最上面那一条，与原生拖拽条同高、同一片地方（见 base.css 的 #topbar）
+document.getElementById('topbar')!.appendChild(tabbar.el)
+// 标签栏横向滚动时可见的那一段跟着变，得重报一次挖洞区
+tabbar.el.addEventListener('scroll', () => holes.schedule(), { passive: true })
 
 function newUntitledTab(): void {
   spawnTab(createState('', listener), null, DEFAULT_FINGERPRINT)
@@ -726,6 +767,8 @@ function syncStatus(force = false): void {
     activeId
   )
   window.api.openTabs(tabs.map((x) => x.path).filter((p): p is string => p !== null))
+  // 标签重画了：段数、宽度都可能变，挖洞区跟着重报（合帧 + 没变就不发，见 drag-holes.ts）
+  holes.schedule()
 }
 
 // ---------- P3-8 字数 / 光标位置 / 详细统计 ----------
