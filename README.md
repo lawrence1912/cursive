@@ -262,7 +262,7 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
 | 文档 | 讲什么 |
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | 架构、IPC 契约、每一个踩过的坑（改代码前先读这份） |
-| [`ROADMAP.md`](ROADMAP.md) | 现状盘点、对标主流 WYSIWYG、P0–P4 清单 |
+| [`ROADMAP.md`](ROADMAP.md) | 接下来做什么：0.3.0 交付层 / 0.4.0 长文 / 1.0 的门槛，外加一张「有意不做」总表 |
 | [`EXAMPLE.md`](EXAMPLE.md) | Markdown 效果全览，也是走查渲染的验收稿 |
 | [`docs/table-editing.md`](docs/table-editing.md) | 表格就地编辑的完整设计 |
 | [`brand/README.md`](brand/README.md) | 品牌资产：标志怎么读、配色、用法、重出图标 |
