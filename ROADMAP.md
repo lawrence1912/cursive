@@ -49,7 +49,7 @@ E2E 一条龙 —— 「做错一次要返工一周」的部分全部落地且�
 
 | 能力 | cursive | 主流同类 | 取舍 |
 |---|:--:|:--:|---|
-| **Intel 机器上能不能装** | ○ | ● | **0.3.0 T1**：现成的包只有 arm64，Intel 机器得自己编译 |
+| **Intel 机器上能不能装** | ● | ● | **0.3.0 T1 ✅**：包是 universal 了。唯一验不到的是真 Intel 机器 |
 | **自动更新** | ○ | ● | **0.3.0 T2**：只做「点一下检查」，不引 Sparkle（理由见第八节） |
 | **折叠一节** | ○ | ● | **0.4.0 F1**：正文里一条折叠都没有 —— 能折的只有告示块与脚注定义区 |
 | **跨文件替换** | ○ | ● | **0.4.0 F2**：跨文件搜索 P3-2 就做了，一直只有「读」那一半 |
@@ -131,7 +131,7 @@ StateField 装一个 Set，key 用**块起点**，跟着 `changes.mapPos(…, Ma
 
 | # | 做什么 | 现在撞上什么 |
 |---|---|---|
-| **T1** | **Universal binary（arm64 + x86_64）** | Intel 机器**根本打不开**，只能自己编译 |
+| ✅ **T1** | **Universal binary（arm64 + x86_64）** | ~~Intel 机器**根本打不开**，只能自己编译~~ |
 | **T2** | **检查更新（一颗按钮，不引框架）** | 新版本要自己回 Releases 看，没有任何提示 |
 | **T3** | **导出为长图 PNG** | 发一段到 IM，PDF 太重、HTML 要对方开浏览器 |
 | **T4** | **停用自定义皮肤（安全出口）** | 皮肤写坏了只能去删文件重开 —— 设置面板也在那张 CSS 底下 |
@@ -139,27 +139,74 @@ StateField 装一个 Set，key 用**块起点**，跟着 `changes.mapPos(…, Ma
 
 按顺序做。T1 是唯一一条「这个 app 在那台机器上不存在」，其余都是「少个便利」。
 
-### T1 Universal binary
+### ✅ T1 Universal binary（已完成）
 
-**现状是写死的**：`shell-swift/build.sh:15` 与 `shell-swift/make-app.sh:19` 都是
-`TARGET=arm64-apple-macos12.0`，README 的安装一节因此有一句「现成的包是 arm64，Intel 机器走自己编译」。
+**做完了什么**：架构 / 部署目标 / 链接参数收进新的 `shell-swift/compile.sh` **一处**，
+`build.sh`（开发）与 `make-app.sh`（打包）都调它 —— 那段「部署目标必须写死」的注释此前
+在两个脚本里**逐字复制了两份**，正是这个项目刚在顶栏那轮消掉的那种手动对齐。
 
-**为什么排第一**：清单上别的条目都是「少一个功能」，这一条是「这个 app 不存在」。
-最后一台 Intel Mac 2020 年出货，按 7–8 年的机器寿命算，2026 年仍然在服役 —— 而这个项目
-恰恰主打「不是 Electron、10 MB、装上就能用」，让一半的 Mac 用户先去装 Xcode CLT 编一遍，
-等于把这句话收回去。
+| | 之前 | 现在 |
+|---|---|---|
+| 打包产物 | arm64 一片 | **x86_64 + arm64**（`make-app.sh` 永远出 universal） |
+| 开发编译 | 写死 arm64 | **本机架构**（`uname -m`）—— 写死的话 Intel 机器上 `build.sh` 出来的二进制自己都跑不动 |
+| 壳二进制 | 684 KB | **1.3 MB**（+640 KB；`.app` 从 9.8 → 10.4 MB，红线 12 MB 还有余量） |
+| 编译耗时 | 9s | 开发仍是 **9s**，`CURSIVE_UNIVERSAL=1` 时 18s |
 
-**做法**：两次 `swiftc`（各自 `-target`）+ 一次 `lipo -create`。renderer 是纯 JS，一份就够。
-包体只涨壳的另一份 ≈ **+368 KB**（9.8 → 约 10.2 MB，红线 12 MB 还有余量）。
-部署目标仍钉在 macOS 12 —— 那条不能省的理由原样有效（不指定就跟工具链默认值走，
-跳到比本机系统还高时命令行一切正常、双击 .app 被 LaunchServices 以 `-10825` 拒掉）。
+**路上撞到一堵墙，值得记住**：macOS 27 的 Command Line Tools 里，
+**Swift 的回退兼容库一片 x86_64 都没有** —— 六个 `libswiftCompatibility*.a` 全是 `arm64 arm64e`。
+交叉编 x86_64 于是在链接阶段直接失败（`Undefined symbols: __swift_FORCE_LOAD_$_swiftCompatibility56`），
+报错长得像代码问题，其实是工具链自己缺片。
 
-**验收**：`lipo -info` 报两个架构；`arch -x86_64` 在 Rosetta 下起得来并跑通探针；
-CI 的 `shell` job 编 universal；README 那句删掉。
+解法是 `-runtime-compatibility-version none`（只给 x86_64 那一片加），
+**而它之所以安全，理由是可验证的**：那批库回退的是 Swift 并发运行时与更老运行时的 bug 修复，
+而 `main.swift` 里**一处 Swift 并发都没有**（`func … async` / `actor` / `@MainActor` / `Task {`
+全为零 —— 满屏的 async 是 `DispatchQueue.*.async`，还有注入 webview 的 JS 字符串里那一堆 await）。
+部署目标又钉在 macOS 12，50/51 那两片本来就够不着。
 
-**验不了的一处，写在这儿别装作验了**：本机没有 Intel 机器，只能验到「编得出、合得上、
-Rosetta 下起得来」。真机 Intel 上的 WKWebView 行为（尤其是 mermaid 那两个布局引擎的性能）
-验不了 —— 第一个 Intel 用户就是第一次真机测试，这一点该在 Release notes 里写明。
+**前提有 guard 守着**（`compile.sh` 的 `SWIFT_CONCURRENCY_RE`）：哪天真往壳里写了 Swift 并发，
+这条理由当场不成立，而**表现会极其隐蔽 —— arm64 一切正常，只有 Intel 机器上出问题**。
+正则量过：对着现在的 `main.swift` 命中 0 行，对着 13 种真并发写法全中，
+对 `DispatchQueue.*.async`、JS 的 `const f = async (q) =>`、`async function` 全不误报。
+**第一版还写错过一次**：写成了 `async func` —— 那是错的语序，Swift 写的是 `func f() async`，
+于是 `func probeGuard() async { }` 从 guard 底下整个溜了过去。现在那条写法有回归。
+
+**验到哪儿了**：
+- `lipo -archs` 两片都在（`compile.sh` 合完当场断言 —— lipo 对着一份单架构输入也会「成功」，
+  而一个只有 arm64 的包在 Intel 上的表现是「双击没反应」，出包时看不出来）
+- **x86_64 那一片真的跑得起来**：`release.sh` 末尾新增一条，拿**包里那个二进制**
+  （资源走 Bundle，和用户双击打开的是同一条路）在 Rosetta 下跑一遍冒烟 ——
+  桥通（52 个 api 键）、CodeMirror 活着、读写往返逐字节相等。没装 Rosetta 就 SKIP 并说出来
+- CI 的 `shell` job 改成 `CURSIVE_UNIVERSAL=1`：x86_64 那一片在本地开发里一次都不会被编到，
+  **CI 是唯一能挡住它悄悄烂掉的地方**
+
+**验不了的那一处，写在 README 里而不是假装验过**：本机没有 Intel 机器。
+Rosetta 用的是本机 macOS 27 的 Swift 运行时，而 Intel 的真实用户跑的是 macOS 12–15 上的老运行时 ——
+那条冒烟能证明「这片代码是对的」，证明不了「回退兼容库不链也没事」。后者的依据只有上面那道 guard。
+
+### 顺带修的两处（都不在 T1 里，是 `release.sh` 逼出来的）
+
+做 T1 时才发现**整条流水线本来就是红的**，停在第一条用例上 —— 上一轮（顶栏合并）
+之后没人从头跑完过一次。两处都已修、有断言守着：
+
+1. **挖洞区从来没送到过壳**（`ui/drag-holes.ts`，这是上一轮那件事的真·收尾）。
+   上报走 `requestAnimationFrame`，而**窗口被盖住 / 还没上屏时 rAF 会被降频甚至不回调**
+   —— `warmup.ts` 那条坑同源，只是后果重得多：预热不跑只是慢一点，挖洞区不报，
+   壳就退回它那份写死的兜底区间，**顶栏上的标签一个点击都收不到**。
+   自检里 `tabNativeHole` 每次都 false，壳那边 `holes` 始终是空的（`dragGapX` 恰好等于
+   「一个洞都没有」时的值 386.5，这是认出它的那条线索）。
+   改成 **rAF 与定时器一起下注**，谁先到谁算、另一条撤掉：看得见时照旧贴着帧走，
+   看不见时 100ms 兜底。晚报一帧没关系，**永远不报是另一回事**。
+   - **为什么单测全绿**：`test/drag-holes.test.ts` 只测了纯算法 `holesFrom`，
+     `createHoleReporter`（真正负责送出去的那一半）**一条断言都没有**。现在补了四条，
+     其中「rAF 永远不来也要送到」就是这个 bug 的回归 —— 把修复撤掉，它当场变红。
+2. **`/bin/sh` 里 `$VAR` 后面紧跟全角 `）` 会被连着吃掉**（`release.sh` / `compile.sh` 的提示行）。
+   `echo "另一片（$OTHER）冒烟"` 打出来是「另一片（▒▒冒烟」—— 变量和那个括号一起没了。
+   半角 `)` 没这毛病，写成 `${OTHER}` 也没有。全仓扫过一遍，只有这三处。
+
+**还有一次没能复现的**：kitchen-sink.md 在一轮里 FAIL 过一次，单独重跑与整轮重跑都是 PASS，
+逐条对断言也没找出是哪一条。**先记在这儿，不假装它不存在** —— 这份仓库里已经有过两条
+「机器一忙就随机变红」的测试（`vitest` 的挂钟预算、外部变更那 1.5 秒窗口），
+再红一次就按那两条的办法治：把时刻采样改成轮询等它。
 
 ### T2 检查更新
 

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { holesFrom, type RectLike } from '../src/renderer/ui/drag-holes'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHoleReporter, holesFrom, type Hole, type RectLike } from '../src/renderer/ui/drag-holes'
 
 /**
  * 标题栏的「放行区段」（契约 v26）。
@@ -57,5 +57,96 @@ describe('标题栏放行区段', () => {
     // `#topbar.is-inset-left` 让标签从 110 起，而开关的洞开到 110 —— 两段连成一段，
     // 中间不留「看着能拖、其实点不动」的缝
     expect(holesFrom([btnLeft, tab(110, 300)], strip)).toEqual([[72, 306]])
+  })
+})
+
+/**
+ * 上报那一半（`createHoleReporter`）此前**一条断言都没有** —— 只测了纯算法 `holesFrom`，
+ * 于是「算得对但一次都没送出去」整轮自检都是红的，而单测全绿。
+ */
+describe('挖洞区上报', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** 装一套可控的 rAF / setTimeout：`frames` 为空 = 这一帧永远不来（窗口被盖住） */
+  function harness(opts: { rafFires: boolean }): {
+    sent: Hole[][]
+    schedule: () => void
+    runTimers: () => void
+    runFrames: () => void
+  } {
+    const frames: Array<() => void> = []
+    const timers: Array<() => void> = []
+    vi.stubGlobal('requestAnimationFrame', (fn: () => void) => {
+      if (opts.rafFires) frames.push(fn)
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    vi.stubGlobal('setTimeout', (fn: () => void) => {
+      timers.push(fn)
+      return 2 as unknown as ReturnType<typeof setTimeout>
+    })
+    vi.stubGlobal('clearTimeout', () => {})
+
+    const sent: Hole[][] = []
+    const r = createHoleReporter({
+      collect: () => [
+        { left: 10, right: 40, top: 3, bottom: 29 },
+        { left: 200, right: 260, top: 6, bottom: 38 }
+      ],
+      strip: () => ({ width: 800, height: 38 }),
+      send: (h) => sent.push(h)
+    })
+    return {
+      sent,
+      schedule: () => r.schedule(),
+      runTimers: () => {
+        const q = timers.splice(0)
+        for (const f of q) f()
+      },
+      runFrames: () => {
+        const q = frames.splice(0)
+        for (const f of q) f()
+      }
+    }
+  }
+
+  it('看得见的时候走 rAF', () => {
+    const h = harness({ rafFires: true })
+    h.schedule()
+    expect(h.sent).toHaveLength(0) // 还没到那一帧
+    h.runFrames()
+    expect(h.sent).toEqual([[[4, 46], [194, 266]]])
+  })
+
+  // 这条就是整轮自检红掉的那件事：窗口没上屏 → rAF 不回调 → 壳永远收不到洞 →
+  // 顶栏上的标签一个点击都收不到，而页面这一侧完全看不出来
+  it('rAF 永远不来也要送到（窗口被盖住 / 还没上屏）', () => {
+    const h = harness({ rafFires: false })
+    h.schedule()
+    h.runFrames() // 一帧都没有
+    expect(h.sent).toHaveLength(0)
+    h.runTimers() // 兜底的那条到了
+    expect(h.sent).toEqual([[[4, 46], [194, 266]]])
+  })
+
+  it('一帧里排多次只发一趟', () => {
+    const h = harness({ rafFires: true })
+    h.schedule()
+    h.schedule()
+    h.schedule()
+    h.runFrames()
+    h.runTimers()
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('值没变就一个字节都不发', () => {
+    const h = harness({ rafFires: true })
+    h.schedule()
+    h.runFrames()
+    h.schedule()
+    h.runFrames()
+    expect(h.sent).toHaveLength(1)
   })
 })

@@ -106,6 +106,43 @@
 
 ## 已踩坑（勿再踩）
 
+- **要送到壳里的东西别只押在 rAF 上**（0.3.0 修，`ui/drag-holes.ts`）。
+  挖洞区（契约 v26）的上报走 `requestAnimationFrame` 合帧，而**窗口被盖住 / 还没上屏时
+  rAF 会被降频甚至根本不回调** —— 与 `warmup.ts` 那条坑同源。后果比预热重得多：
+  预热不跑只是慢一点，挖洞区不报，壳退回 `DragStripView.fallbackPasses` 那两段写死的区间，
+  **顶栏上的标签一个点击都收不到**，而页面这一侧完全看不出来（rect 照量、元素照画、
+  `elementFromPoint` 照样命中）。整条 E2E 停在第一条用例上就是它。
+  - **认出它的线索**：`dragGapX` 恰好是 `(trafficEnd+4 + bounds.maxX)/2` ——
+    那正是 `firstDraggableX` 在 `holes` 为空时算出来的值。
+  - **改法**：rAF 与 `setTimeout` 一起下注，谁先到谁算、另一条当场撤掉
+    （看得见时贴着帧走，看不见时 100ms 兜底）。晚报一帧没关系，永远不报是另一回事。
+  - **为什么单测拦不住**：`test/drag-holes.test.ts` 只测了纯算法 `holesFrom`，
+    `createHoleReporter` 那一半一条断言都没有 —— **算得对 ≠ 送得到**。现在两半都有。
+
+- **`/bin/sh` 里 `$VAR` 紧跟全角 `）` 会被连着吃掉**（0.3.0，`release.sh` / `compile.sh`）。
+  `echo "另一片（$OTHER）冒烟"` 打出来是「另一片（▒▒冒烟」，变量和括号一起没了。
+  半角 `)` 不会，`${OTHER}` 也不会。中文注释/提示多的脚本里很容易中招，写 `${}` 最省事。
+
+- **CLT 里 Swift 的回退兼容库没有 x86_64 片**（0.3.0 T1，`shell-swift/compile.sh`）。
+  macOS 27 的 Command Line Tools 里六个 `libswiftCompatibility*.a` 全是 `arm64 arm64e`，
+  交叉编 x86_64 于是在**链接阶段**失败：`Undefined symbols for architecture x86_64:
+  __swift_FORCE_LOAD_$_swiftCompatibility56`。报错长得像代码问题，其实是工具链缺片，
+  装 Xcode.app 可能有 —— 但「不需要装 Xcode.app」是 README 里的承诺，不为一个链接参数收回去。
+  解法：只给 x86_64 那片加 `-runtime-compatibility-version none`。
+  **它安全的理由是可验证的**：那批库回退的是 Swift 并发运行时与更老运行时的 bug 修复，
+  而壳里一处 Swift 并发都没有（`func … async` / `actor` / `@MainActor` / `Task {` 全为零，
+  满屏的 async 是 `DispatchQueue.*.async`，注入 webview 的 JS 字符串里那些 await 不算）。
+  `compile.sh` 的 `SWIFT_CONCURRENCY_RE` 就是守这个前提的 —— **一旦往壳里写 Swift 并发，
+  表现会极其隐蔽：arm64 一切正常，只有 Intel 机器上出问题，而这儿没有 Intel 机器。**
+  - **那条正则第一版写错过**：写成 `async func`。Swift 的语序是 `func f() async`，
+    于是 `func probeGuard() async { }` 从 guard 底下整个溜过去。现在认的是 JS 写不出来的形状
+    （`\bfunc\b` 不匹配 `function`），13 种真并发写法全中、7 种像并发的写法全不误报。
+  - **`lipo -create` 对着一份单架构输入也会「成功」**，所以合完必须当场 `lipo -archs` 断言两片都在：
+    一个只有 arm64 的包在 Intel 上的表现是「双击没反应」，出包时一点都看不出来。
+  - **`lipo` 里有那一片 ≠ 那一片跑得起来**。`release.sh` 末尾因此多一条：拿**包里那个二进制**
+    在 Rosetta 下跑一遍冒烟。但它**代替不了真机** —— Rosetta 用的是本机 macOS 27 的 Swift 运行时，
+    而 x86_64 的真实用户跑的是 macOS 12–15 上的老运行时。
+
 - **mousedown 里不许做滚动补偿**（0.2.x，`editor/pointer-selection.ts`）。
   `start()` 开头那句 `this.release()` 是给「上一次手势没能正常收尾」兜底的，可 release
   不只是翻回跟随光标 —— 它还要把视口滚回落点。于是**按下去的那一刻正文先滚了一段**，
@@ -254,6 +291,16 @@ PASS 标准（新增：`treeProbe` 的 created/renamed/moved/deleted 全真且�
 CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 ./shell-swift/cursive-shell [file.md]   # 开发运行（项目根执行；资源查找 Bundle → cwd → exe 相对）
 ```
+
+**架构 / 部署目标 / 链接参数只有一处**：`shell-swift/compile.sh`（0.3.0 T1 起）。
+`build.sh` 与 `make-app.sh` 都调它，别再各自写 swiftc —— 那段「部署目标必须写死」的注释
+此前在两个脚本里逐字复制了两份。
+
+| 谁 | 编哪几片 | 为什么 |
+|---|---|---|
+| `build.sh`（开发 / release.sh 的 E2E） | **本机一片**（`uname -m`）| 快一倍，而 E2E 本来也只跑本机那片 |
+| `CURSIVE_UNIVERSAL=1 build.sh`（CI） | 两片 | x86_64 在本地开发里一次都不会被编到，**CI 是唯一挡得住它悄悄烂掉的地方** |
+| `make-app.sh`（打包） | **永远两片** | 开发可以只编本机那片，交出去的那份不能挑机器 |
 
 **约定：每轮改动收尾必须跑 `release.sh`，让用户随时拿到全绿的新包。**
 

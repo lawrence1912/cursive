@@ -7,16 +7,8 @@
 set -e
 cd "$(dirname "$0")/.."
 
-# **部署目标必须写死**（2026-09-15 修）。不写的话跟着工具链的默认值走，而那个值
-# 会随系统升级而变：升到 macOS 27 之后，同一套 CLT 给出的默认 minos 跳到了 **28.0**
-# —— 比正在跑的系统还高。裸跑二进制没事（不经 LaunchServices），但双击 .app 会被
-# LaunchServices 以 `-10825`（kLSIncompatibleSystemVersionErr）直接拒掉，
-# 表现就是「命令行能跑，双击打不开」。
-#
-# 12.0 这个数不是随便挑的：它必须与 `make-app.sh` 写进 Info.plist 的
-# `LSMinimumSystemVersion` 和 README 的「需要 macOS 12 或更新」**对上**。
-# 两个脚本的 target 也必须一致，否则开发时跑的和打包出去的不是同一个东西。
-TARGET=arm64-apple-macos12.0
+# 架构 / 部署目标 / 链接参数全在 `compile.sh` 一处（0.3.0 T1 起）。**打包永远出 universal**：
+# 开发可以只编本机那一片，交出去的那份不能挑机器。
 
 VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])" 2>/dev/null || echo "0.1.0")
 APP="dist/Cursive.app"
@@ -30,8 +22,8 @@ echo "==> 组装 $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/renderer"
 
-# 二进制
-swiftc -O -swift-version 5 -target "$TARGET" shell-swift/main.swift -o "$APP/Contents/MacOS/Cursive"
+# 二进制（arm64 + x86_64，compile.sh 里合完就断言过两片都在）
+CURSIVE_UNIVERSAL=1 ./shell-swift/compile.sh "$APP/Contents/MacOS/Cursive"
 
 # renderer 资源（壳经 Bundle.main.resourceURL 找到这里）
 ditto out/renderer "$APP/Contents/Resources/renderer"
@@ -124,4 +116,4 @@ if [ "${CURSIVE_DMG:-0}" = "1" ]; then
 fi
 
 SIZE=$(du -sh "$APP" | cut -f1 | tr -d ' ')
-echo "==> 完成：$APP ($SIZE)"
+echo "==> 完成：$APP ($SIZE, $(lipo -archs "$APP/Contents/MacOS/Cursive"))"

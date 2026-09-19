@@ -105,7 +105,9 @@ KaTeX 行内与块级公式 · mermaid 流程图 / 时序图 / 饼图 · 图片�
 
 到 [Releases](https://github.com/lawrence1912/cursive/releases) 拿 `Cursive-<版本>.dmg`，打开后把 Cursive 拖进「应用程序」。
 装好之后 `.md` 的默认打开方式就归 Cursive；想换回去，在任意 md 文件上「显示简介 → 打开方式」里改。
-**现成的包是 arm64（Apple Silicon）** —— Intel 机器走下面第二条自己编译，一样是三条命令。
+**现成的包是 universal（Apple Silicon + Intel 各一片）**，两种 Mac 直接装。
+Intel 那一片是交叉编译 + Rosetta 冒烟验过的，**没有在真 Intel 机器上跑过** ——
+碰到问题请开 issue，这是目前唯一一处「验不到真机」的地方。
 
 **第一次打开会被 macOS 拦住**，提示「无法验证开发者」或「已损坏，无法打开」。
 
@@ -130,10 +132,11 @@ CURSIVE_DMG=1 ./shell-swift/release.sh   # 顺带出 dist/Cursive-<版本>.dmg
 
 只需要 Node 和 Xcode Command Line Tools（`xcode-select --install`），**不需要装 Xcode.app**。
 
-打出来的二进制部署目标钉在 macOS 12（`build.sh` / `make-app.sh` 里的 `TARGET`）。
-这一条不能省：不指定的话跟着工具链默认值走，而那个值会随系统升级往上跳 ——
-跳到比你正在跑的系统还高时，命令行里一切正常，双击 .app 却会被 LaunchServices
-以 `-10825` 拒掉。
+架构、部署目标、链接参数全在 `shell-swift/compile.sh` **一处**：
+打包永远出 universal（两片合完当场断言），开发只编本机那一片（省一半时间）。
+部署目标钉在 macOS 12 这条不能省 —— 不指定的话跟着工具链默认值走，而那个值会随系统
+升级往上跳，跳到比你正在跑的系统还高时，命令行里一切正常、双击 .app 却会被
+LaunchServices 以 `-10825` 拒掉。
 
 **签名公证是有意不做的**：Developer ID 证书 + 公证要 Apple Developer Program（$99/年），
 换来的只是「下载版少点一次『仍要打开』」。这个项目选择把这笔钱省掉，代价在上面写明 ——
@@ -229,7 +232,7 @@ PDF 就是把这份 HTML 用 `NSPrintInfo` 真打印出来，纸张 / 页边距 
 ```bash
 npm install
 npm run build                    # 构建 renderer 到 out/renderer
-./shell-swift/build.sh           # 编译原生壳 → shell-swift/cursive-shell
+./shell-swift/build.sh           # 编译原生壳（本机架构）→ shell-swift/cursive-shell
 ./shell-swift/cursive-shell a.md # 开发运行（资源查找 Bundle → cwd → exe 相对）
 ```
 
@@ -239,7 +242,9 @@ npm run build                    # 构建 renderer 到 out/renderer
 | `npm test` | 单测：往返保真 + 方言 + 表格 + 导出对账 |
 | `npm run typecheck` | 渲染层 + 共享层类型检查 |
 | `npm run icon` | 从 `brand/app-icon.svg` 重出 `build/icon.png` + `icon.icns` |
-| `./shell-swift/release.sh` | 类型检查 + 单测 → 构建 → 编译壳 → E2E → 组装 `dist/Cursive.app` |
+| `./shell-swift/build.sh` | 编译原生壳，只出本机架构（约 10s）|
+| `CURSIVE_UNIVERSAL=1 ./shell-swift/build.sh` | 两片都编（CI 跑的就是这条，挡住 x86_64 悄悄编不过）|
+| `./shell-swift/release.sh` | 类型检查 + 单测 → 构建 → 编译壳 → E2E → 组装 `dist/Cursive.app` → 另一片冒烟 |
 
 没法手动点界面时（沙箱、自动化），壳内置探针：
 

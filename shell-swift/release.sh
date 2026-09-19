@@ -485,4 +485,49 @@ rm -f "$SCRATCH"/*.json
 
 echo "==> [4/4] 打包"
 ./shell-swift/make-app.sh
-echo "全部通过，包在 dist/Cursive.app"
+
+# ---- 0.3.0 T1：出包之后再验一次「另一片真的能跑」----
+#
+# compile.sh 合完已经断言过两片都在，但「lipo 里有这一片」和「这一片跑得起来」是两回事。
+# 这儿跑的是**包里那个二进制**（资源走 Bundle，和用户双击打开的是同一条路），
+# 只是把架构钉死在非本机那一片上。
+#
+# **这条用例代替不了真机**：Rosetta 用的是本机 macOS 27 的 Swift 运行时，
+# 而 x86_64 的真实用户跑的是 macOS 12–15 上的老运行时。它能证明「这片代码是对的」，
+# 证明不了「回退兼容库不链也没事」—— 后者的依据是 compile.sh 里那道 guard。
+BIN="dist/Cursive.app/Contents/MacOS/Cursive"
+HOST_ARCH=$(uname -m)
+OTHER=$([ "$HOST_ARCH" = "arm64" ] && echo x86_64 || echo arm64)
+# `${OTHER}` 的花括号不能省：`/bin/sh` 里变量名后面紧跟一个**全角**右括号时，
+# `$OTHER）` 会被连着吃掉（实测输出是「另一片（▒▒冒烟」）—— 半角 `)` 没这毛病
+echo "==> [4+] 另一片（${OTHER}）冒烟"
+if ! lipo -archs "$BIN" | grep -q "$OTHER"; then
+    echo "FAIL 包里没有 $OTHER 片（只有 $(lipo -archs "$BIN")）"; exit 1
+fi
+if [ "$HOST_ARCH" = "arm64" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+    # 没装 Rosetta 就跑不了 x86_64 那一片。**不算失败，但要说出来** ——
+    # 装一句 `softwareupdate --install-rosetta` 就能把这条用例打开
+    echo "SKIP 未装 Rosetta（softwareupdate --install-rosetta 之后这条才跑）"
+else
+    rm -f /tmp/cursive-shell-check.json /tmp/cursive-shell-e2e.json
+    rm -f "$SCRATCH"/*.json
+    cp test/fixtures/kitchen-sink.md "$FIX/arch-probe.md"
+    CURSIVE_SMOKE=1 arch -"$OTHER" "$BIN" "$FIX/arch-probe.md" 2>/dev/null
+    python3 - "$OTHER" <<'ARCHPY'
+import json, sys
+arch = sys.argv[1]
+c = json.load(open('/tmp/cursive-shell-check.json'))
+e = json.load(open('/tmp/cursive-shell-e2e.json'))
+r = e['result']
+# 只断言「这一片确实是同一个应用」：桥通了、CodeMirror 活着、往返零损耗。
+# 细项（表格/查找/树…）本机那一片已经逐条验过九遍，这儿再验一遍只是拖时间
+ok = (c['cm'] and c.get('cmState') and c.get('apiKeys', 0) >= 50
+      and e['bytesEqual'] and r.get('jsOK') is True and r.get('cmLines', 0) > 0)
+print(('PASS ' if ok else 'FAIL ') + arch + ' 片：api %s 键 · 行 %s · 往返 %s'
+      % (c.get('apiKeys'), r.get('cmLines'), e['bytesEqual']))
+sys.exit(0 if ok else 1)
+ARCHPY
+    rm -f "$FIX/arch-probe.md"
+fi
+
+echo "全部通过，包在 dist/Cursive.app（$(lipo -archs "$BIN")）"

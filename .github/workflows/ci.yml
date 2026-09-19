@@ -38,4 +38,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build          # 壳要找 out/renderer，先构建出来
-      - run: ./shell-swift/build.sh
+      # **编 universal**（0.3.0 T1）：x86_64 那一片在本地开发里一次都不会被编到
+      # （build.sh 默认只编本机架构），CI 是唯一能挡住它悄悄烂掉的地方 —— 代价 +10s
+      - run: CURSIVE_UNIVERSAL=1 ./shell-swift/build.sh

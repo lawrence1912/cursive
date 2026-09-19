@@ -74,7 +74,19 @@ export interface HoleReporter {
  * 一帧里量几十个 rect 再发一趟桥调用是白费的。
  * **去重**：绝大多数重画之后这几段一个像素都没动（改的是脏点、是标题），
  * 值没变就一个字节都不发 —— 与 `applyPageZoom` 那条「值没变就别写」同一个道理。
+ *
+ * **合帧不能只押在 rAF 上**（0.3.0 修）：窗口被盖住 / 还没上屏时 rAF 会被降频甚至
+ * 根本不回调 —— `warmup.ts` 那条坑同源。而这里比预热更要命：预热不跑只是慢一点，
+ * 挖洞区不报，壳就退回它那份写死的兜底区间，**顶栏上的标签一个点击都收不到**，
+ * 而页面这一侧完全看不出来（rect 照量、元素照画）。整轮自检就是这么红的：
+ * `tabNativeHole` 每次都 false，壳那边 `holes` 始终是空的。
+ *
+ * 所以两条路一起下注：rAF 管「看得见的时候贴着帧走」，定时器管「看不见的时候也得送到」，
+ * 谁先到谁算数，另一条当场撤掉。晚报一帧没关系，永远不报是另一回事。
  */
+
+/** rAF 迟迟不来时的兜底延时。比一帧长得多，正常情况下永远轮不到它 */
+const FALLBACK_MS = 100
 export function createHoleReporter(opts: {
   collect: () => readonly RectLike[]
   strip: () => { width: number; height: number }
@@ -97,7 +109,15 @@ export function createHoleReporter(opts: {
     schedule(): void {
       if (queued) return
       queued = true
-      requestAnimationFrame(flush)
+      let raf = 0
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const run = (): void => {
+        cancelAnimationFrame(raf)
+        clearTimeout(timer)
+        flush()
+      }
+      raf = requestAnimationFrame(run)
+      timer = setTimeout(run, FALLBACK_MS)
     }
   }
 }
