@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs'
-import { ensureSyntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { calloutAt } from '../src/renderer/editor/live-preview/decorate'
@@ -8,9 +8,15 @@ import { tableEditField } from '../src/renderer/editor/live-preview/table'
 import { loadKatex } from '../src/renderer/editor/live-preview/widgets'
 import { plainInline } from '../src/renderer/editor/inline-text'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
-import { parsedTree } from '../src/renderer/editor/syntax'
+import { parsedTree, primeTree, rememberTree } from '../src/renderer/editor/syntax'
 import { collectCodeLangs, loadCodeLangs, renderBody } from '../src/renderer/export/render'
-import { EXPORT_CSS } from '../src/renderer/export/style'
+import {
+  EXPORT_CSS,
+  TYPOGRAPHY_DEFAULT,
+  typographyCss,
+  type Typography
+} from '../src/renderer/export/style'
+import { wrapDocument } from '../src/renderer/export/index'
 
 // widgets.ts 的 currentTheme（mermaid 分支用）读 document.documentElement，
 // node 测试环境补一个最小桩（同 test/block.test.ts）。
@@ -127,10 +133,27 @@ describe('导出 HTML：块级', () => {
     expect(out).toContain('href="#fnref-a"')
   })
 
-  it('一个脚注节点里连着几条定义要各自成条', () => {
+  it('连着几条定义各自成条，并进同一个脚注区', () => {
     const out = html('[^1]: 甲\n[^2]: 乙\n')
     expect(out).toContain('<li id="fn-1">')
     expect(out).toContain('<li id="fn-2">')
+    // .footnotes 自带 2em 上边距和一道上边框，一条一个容器就在文末摞出好几道分隔线
+    expect(countOf(out, '<div class="footnotes">')).toBe(1)
+  })
+
+  it('空行分隔的几条定义同样只出一个脚注区', () => {
+    const out = html('[^1]: 甲\n\n[^2]: 乙\n')
+    expect(countOf(out, '<li id="fn-')).toBe(2)
+    expect(countOf(out, '<div class="footnotes">')).toBe(1)
+  })
+
+  it('悬空的脚注引用保持字面量，不发死锚点', () => {
+    const out = html('正文 [^ref] 结束。\n')
+    expect(out).toContain('[^ref]')
+    expect(out).not.toContain('footnote-ref')
+    expect(out).not.toContain('#fn-ref')
+    // 有定义的那个照旧发链接
+    expect(html('正文 [^ref] 结束。\n\n[^ref]: 有了。\n')).toContain('href="#fn-ref"')
   })
 
   it('空文档不炸：正文是空串，标题退到兜底', () => {
@@ -247,7 +270,9 @@ describe('导出与编辑器同一种理解（方言不漂移）', () => {
       expect(countOf(out, '<div class="math-block">')).toBe(widgets['MathWidget'] ?? 0)
       expect(countOf(out, '<figure class="mermaid"')).toBe(widgets['MermaidWidget'] ?? 0)
       expect(countOf(out, '<nav class="toc">')).toBe(widgets['TocWidget'] ?? 0)
-      expect(countOf(out, '<div class="footnotes">')).toBe(widgets['FootnoteDefWidget'] ?? 0)
+      // 脚注按**定义**对账：连着摞的几条并进同一个 .footnotes 容器，
+      // 容器数不等于定义数（老口径数容器，两条定义合成一个节点时照样绿，漏掉了 B1）
+      expect(countOf(out, '<li id="fn-')).toBe(widgets['FootnoteDefWidget'] ?? 0)
       expect(countOf(out, '<div class="callout ')).toBe(calloutCount(state))
     })
   }
@@ -286,10 +311,128 @@ describe('导出样式表（P4-2 的地基）', () => {
   })
 })
 
+describe('导出排版跟随设置（0.2.x）', () => {
+  const type = (over: Partial<Typography> = {}): Typography => ({ ...TYPOGRAPHY_DEFAULT, ...over })
+
+  it('与默认值全等 = 一个字节都不加（没改过设置的人，导出物与从前逐字节相同）', () => {
+    expect(typographyCss()).toBe('')
+    expect(typographyCss(type())).toBe('')
+    // 顺带把这条钉在最要紧的地方：整份外壳也必须逐字节相同
+    expect(wrapDocument('<p>x</p>', 'T', type())).toBe(wrapDocument('<p>x</p>', 'T'))
+  })
+
+  it('四个 token 与 themes/base.css 同名 —— 覆盖段盖的就是 EXPORT_CSS 里那四个', () => {
+    for (const name of ['--body-font', '--body-size', '--body-leading', '--column']) {
+      expect(EXPORT_CSS).toContain(`${name}:`)
+    }
+    expect(EXPORT_CSS).toContain('font-family: var(--body-font)')
+    expect(EXPORT_CSS).toContain('font-size: var(--body-size)')
+    expect(EXPORT_CSS).toContain('line-height: var(--body-leading)')
+    expect(EXPORT_CSS).toContain('max-width: var(--column)')
+  })
+
+  it('字族走 --serif / --sans 那两个现成的栈，不另写一份字体名', () => {
+    expect(typographyCss(type({ font: 'sans' }))).toContain('--body-font: var(--sans);')
+    expect(typographyCss(type({ font: 'sans' }))).not.toMatch(/PingFang|Georgia/)
+  })
+
+  it('字号：屏幕原样 px，纸上按比例缩（16px = 五号 10.5pt）', () => {
+    const css = typographyCss(type({ size: 20 }))
+    expect(css).toContain('--body-size: 20px;')
+    // 10.5 × 20/16 = 13.125 → 13.13pt。原样搬成 20pt 的话一页少放三分之一的字
+    expect(css).toContain('--print-size: 13.13pt;')
+    // 缩小同理
+    expect(typographyCss(type({ size: 13 }))).toContain('--print-size: 8.53pt;')
+  })
+
+  it('行距：屏幕原样，纸上保持「比屏幕紧一点」那 3%（1.75 → 1.7）', () => {
+    const css = typographyCss(type({ leading: 2 }))
+    expect(css).toContain('--body-leading: 2;')
+    expect(css).toContain('--print-leading: 1.94;')
+    // 默认那档正是纸上原来的值，比例基准没走样
+    expect(typographyCss(type({ leading: 1.75, size: 17 }))).toContain('--print-leading: 1.7;')
+  })
+
+  it('栏宽只作用于屏幕 —— 纸的宽度归 NSPrintInfo，@media print 里仍是 max-width: none', () => {
+    expect(typographyCss(type({ column: 30 }))).toContain('--column: 30rem;')
+    const print = EXPORT_CSS.slice(EXPORT_CSS.indexOf('@media print'))
+    expect(print).toContain('max-width: none')
+    // 覆盖段里不许出现第二条 max-width，否则纸上又被压回去
+    expect(typographyCss(type({ column: 30 }))).not.toContain('max-width')
+  })
+
+  it('覆盖段排在 EXPORT_CSS 之后（同名 token 后来者胜）', () => {
+    const doc = wrapDocument('<p>x</p>', 'T', type({ font: 'sans' }))
+    expect(doc.indexOf('--body-font: var(--sans)')).toBeGreaterThan(doc.indexOf('--body-font: var(--serif)'))
+    // 仍然只有一个 <style>：导出物是单文件，样式全内联
+    expect(countOf(doc, '<style>')).toBe(1)
+  })
+
+  it('坏值不炸：NaN / 0 / 负数退回默认，不写出 NaNpx', () => {
+    const css = typographyCss(type({ size: Number.NaN, leading: 0, column: -5, font: 'sans' }))
+    expect(css).not.toMatch(/NaN|Infinity|-\d/)
+    expect(css).toContain('--body-size: 16px;')
+    expect(css).toContain('--body-leading: 1.75;')
+    expect(css).toContain('--column: 42rem;')
+  })
+})
+
 // ---------- golden ----------
 //
 // 整份产出存一份快照：导出这条路上任何一处改动都会在 diff 里现形，
 // 该不该改由人看一眼。确认新产出正确后 `UPDATE_GOLDEN=1 npx vitest run export` 重录。
+
+/**
+ * 导出不接受半截树（0.2.x）。
+ *
+ * `parsedTree` 的最后一句是「ensure 超预算（50ms）就退回手上那棵快照」——
+ * 屏幕上那是「先画一部分，后台 parse 跟上再补」，而导出**只有一次机会**：
+ * 少的那一截就是交出去的文件里没有的内容，产物看着还完好。真摔过：E2E 里偶发地
+ * 只导出了文档的前三分之一（正文停在代码围栏之前）。
+ */
+describe('导出前先把整棵树确保出来', () => {
+  it('没预先 ensure 过的 state：primeTree 之后树盖住全文', () => {
+    const doc = readFileSync(new URL('fixtures/export.md', import.meta.url), 'utf8')
+    // **故意不 ensure** —— 复刻「刚开出来 / 刚改过」的那一刻
+    const state = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
+    expect(primeTree(state).length).toBe(doc.length)
+  })
+
+  it('确保之后第二次直接命中缓存，不重复解析', () => {
+    const doc = readFileSync(new URL('fixtures/export.md', import.meta.url), 'utf8')
+    const state = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
+    expect(primeTree(state)).toBe(primeTree(state))
+  })
+
+  it('确保过的树记进了同一份缓存 —— renderBody 里的每次 parsedTree 直接命中', () => {
+    const doc = readFileSync(new URL('fixtures/export.md', import.meta.url), 'utf8')
+    const state = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
+    expect(parsedTree(state)).toBe(primeTree(state))
+  })
+
+  it('拿不到全长的树画出来的正文**真的会短** —— 钉住「短了会怎样」，也就是这条改动在防什么', () => {
+    // 得比 3000 字长：CM 打开文档时只解析前 3000 字（`Work.InitViewport`，
+    // `test/block.test.ts` 的「首开长文档」守的是同一个常数）
+    const doc = Array.from({ length: 300 }, (_, i) => `## 第 ${i} 节\n\n正文一段。\n`).join('\n')
+    expect(doc.length).toBeGreaterThan(3000)
+
+    // ① 复刻「ensure 超预算、退回手上那棵快照」那一幕：把首开那棵半截树钉进缓存
+    const short = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
+    const snap = syntaxTree(short)
+    expect(snap.length, '首开的快照本来就该是半截的').toBeLessThan(doc.length)
+    rememberTree(short, snap, doc.length)
+    // `blocks()` 按 topNode 的范围走 —— 树盖不住文档，正文就是这么悄悄少掉的
+    const half = renderBody(short, {}).html
+
+    // ② 导出那条路：primeTree 先把整棵确保出来，正文才是全的
+    const full = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
+    primeTree(full)
+    expect(renderBody(full, {}).html.length).toBeGreaterThan(half.length)
+    // 最后一节必须在里面 —— 「短了一截」的产物看着完好，只有末尾能揭穿它
+    expect(renderBody(full, {}).html).toContain('第 299 节')
+    expect(half).not.toContain('第 299 节')
+  })
+})
 
 describe('golden', () => {
   it('export.md 的产出与快照一致', async () => {

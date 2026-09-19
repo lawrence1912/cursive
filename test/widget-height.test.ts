@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import type { EditorView } from '@codemirror/view'
-import { FootnoteDefWidget, ImageWidget, MathWidget, loadKatex, primeHeights } from '../src/renderer/editor/live-preview/widgets'
+import { FootnoteDefWidget, ImageWidget, MathWidget, TocWidget, loadKatex, primeHeights } from '../src/renderer/editor/live-preview/widgets'
 import { HEIGHT_STORE_KEY, HEIGHT_STORE_VERSION } from '../src/renderer/editor/live-preview/height-store'
 
 vi.mock('../src/renderer/editor/live-preview/katex', () => ({
@@ -183,4 +184,60 @@ it('脚注定义支持 Enter 和空格进入源码', () => {
       selection: { anchor: 21 }, scrollIntoView: true, userEvent: 'select'
     })
   }
+})
+
+/**
+ * 块级 widget 的**根节点不能有上下 margin**。
+ *
+ * CM 给每个块记高度用的是 `dom.getBoundingClientRect().height`，margin 不在里面 ——
+ * 一张 `margin: 8px 0` 的表在高度图里就比真实版面矮 16px，它后面的每一行都往下偏这么多，
+ * 还一路累加。偏移超过半个行盒，`posAtCoords` 就会挑中下一行：**表格下方点一条链接，
+ * 光标落到下一条上**（实测行高 28px、偏 16px 必现）；`pointer-selection.ts` 的滚动复位
+ * 同样按高度图算，偏多少就还错多少。
+ *
+ * 所以留白一律写成根节点的 padding（根节点自己不画东西），根节点有皮肤的
+ * （目录、脚注定义）则套一层 `.cm-lp-blockgap`。新增块级 widget 时把根类名加进下表。
+ */
+const BLOCK_ROOTS = ['cm-lp-blockgap', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-mermaid']
+
+/** 选择器里作用在**元素自身**的那几条（`.a.b` `.a:hover` 算，`.a .b` `.a > .b` 不算） */
+function selfRules(css: string, cls: string): string[] {
+  const out: string[] = []
+  // 注释先剥掉：块注释会被当成选择器的一部分，正文里又常写着类名
+  for (const m of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    for (const sel of m[1]!.split(',')) {
+      const t = sel.trim()
+      if (new RegExp(`^\\.${cls}(?![\\w-])[^\\s>+~]*$`).test(t)) out.push(m[2]!)
+    }
+  }
+  return out
+}
+
+describe('块级 widget 的上下留白', () => {
+  const css = readFileSync('src/renderer/themes/live-preview.css', 'utf8')
+
+  it.each(BLOCK_ROOTS)('.%s 不写上下 margin（CM 量不到，高度图会矮一截）', (cls) => {
+    const rules = selfRules(css, cls)
+    expect(rules.length).toBeGreaterThan(0)
+    for (const body of rules) {
+      expect(body).not.toMatch(/(^|[\s;])margin(-top|-bottom|-block(-start|-end)?)?\s*:/)
+    }
+  })
+
+  it('有皮肤的那两个把留白交给 .cm-lp-blockgap 外壳，量到的就是含留白的那一层', () => {
+    const toc = new TocWidget([{ text: '一', level: 1, pos: 0 }])
+    const tocDom = toc.toDOM(view) as unknown as Element
+    expect(tocDom.className.split(' ')[0]).toBe('cm-lp-blockgap')
+    expect(tocDom.children[0]!.className).toBe('cm-lp-toc')
+    // 量的必须是外壳：记进盘里的高度少一圈留白的话，视口外的估值又会偏
+    toc.destroy(tocDom as unknown as HTMLElement)
+    expect(observers[0]!.disconnect).toHaveBeenCalledOnce()
+
+    const note = new FootnoteDefWidget('a', '正文').toDOM(view) as unknown as Element
+    expect(note.className.split(' ')[0]).toBe('cm-lp-blockgap')
+    expect(note.children[0]!.className).toBe('cm-lp-footnote-def')
+
+    // 根节点自己不画东西的那几个照旧是根节点本身
+    expect((new MathWidget('x', true).toDOM(view) as unknown as Element).className).toBe('cm-lp-mathview')
+  })
 })

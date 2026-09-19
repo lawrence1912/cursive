@@ -2,6 +2,37 @@
    这些类名全部由 live-preview 插件通过装饰器挂上，
    源代码模式把插件撤掉，样式自然全部消失 —— 不需要另写一套。 */
 
+/* ---------- 块级 widget 的上下留白：**只能用 padding，不能用 margin** ----------
+
+   CodeMirror 给每个块记高度用的是 `dom.getBoundingClientRect().height`
+   （`DocView.measureVisibleLineHeights`），而 margin **不在**这个盒子里。
+   于是一张 `margin: 8px 0` 的表在高度图里比真实版面矮 16px，它**后面的每一行**
+   都比高度图以为的位置低 16px —— 而且一路累加（两张表就是 32px）。
+
+   这不是「差一点点」：
+   - **点正文会落到下一行**。`posAtCoords` 先用高度图 `elementAtHeight(y)` 挑出那一行，
+     再在行内找列。偏移超过半个行盒时挑中的就是下一行 —— 表格下方点链接、光标跳到下一条，
+     就是这么来的（实测偏 16px、行高 28px 时必现）。
+   - **滚动复位算不准**。`editor/pointer-selection.ts` 回显翻面后按坐标把行首放回原处，
+     坐标来自高度图，偏多少就还错多少。
+
+   所以：块级 widget 的**根节点**（CM 量的就是它）一律不写上下 margin。
+   - 根节点自己不画东西（表格、公式、mermaid）→ 留白直接写成它的 padding；
+   - 根节点有皮肤（底色/边框：目录、脚注定义）→ 外面套一层 `.cm-lp-blockgap`，
+     皮肤留在里层，外壳只负责那圈留白。
+   行内 widget 不受这条约束（它们量在所属 `.cm-line` 的行盒里）。 */
+.cm-lp-blockgap {
+  display: block;
+  padding: 10px 0;
+}
+/* 脚注定义那圈窄一档（原本就是 margin: 6px 0）。
+   顺带一提：留白进了盒子，相邻两块之间**不再折叠** —— 连着摞的两条脚注定义
+   从 6px 变成 6+6。这是这套改法的必然代价（能折叠的 margin 就是 CM 量不到的那部分），
+   换来的是高度图对得上，值 */
+.cm-lp-blockgap.is-tight {
+  padding: 6px 0;
+}
+
 /* ---------- 强调 ----------
    注意：这个类由 theme.ts 的 HighlightStyle 挂上（不是 live-preview 插件），
    所以源代码模式下依然生效 —— 和下面的 .cm-lp-* 不是一回事。
@@ -191,7 +222,10 @@ body.cursive-em-italic .cm-md-em {
 }
 
 .cm-lp-tableview {
-  margin: 8px 0;
+  /* 上下留白走 padding（原因见文件开头「块级 widget 的上下留白」）。
+     浮动工具栏挂在这圈留白之外，所以把它单独记成一个变量给下面用 */
+  --lp-gap: 8px;
+  padding: var(--lp-gap) 0;
   /* 工具栏与手柄都相对它定位；不给 overflow，两者才能探出表格边界 */
   position: relative;
   /* 表格外壳（边框、行间空隙）不给选：点在这些地方会把原生选区送进 contentDOM，
@@ -257,7 +291,8 @@ body.cursive-em-italic .cm-md-em {
    绝对定位挂在表格下沿：出现和消失都不把正文顶动一行 */
 .cm-lp-tbl-bar {
   position: absolute;
-  top: 100%;
+  /* 100% 是**含那圈留白**的高度，减回去才贴在表格下沿而不是留白下沿 */
+  top: calc(100% - var(--lp-gap, 0px));
   left: 0;
   z-index: 3;
   display: flex;
@@ -549,6 +584,39 @@ body.cursive-em-italic .cm-md-em {
   border-radius: 6px;
   vertical-align: middle;
 }
+/* 0.2.x 拖角改尺寸。摆在右下角，与右上角那颗放大镜对称；同样是 hover 才露面 ——
+   常态下这张图周围应该什么都没有 */
+.cm-lp-img-handle {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 14px;
+  height: 14px;
+  border-right: 3px solid var(--accent);
+  border-bottom: 3px solid var(--accent);
+  border-bottom-right-radius: 7px;
+  opacity: 0;
+  cursor: nwse-resize;
+}
+.cm-lp-img-handle[hidden] { display: none; }
+.cm-lp-image:hover > .cm-lp-img-handle,
+.cm-lp-image:focus-within > .cm-lp-img-handle {
+  opacity: 0.85;
+}
+/* 拖的时候把数字写出来：不然只能靠眼睛估，而文档里存的就是这两个数 */
+.cm-lp-img-tip {
+  position: absolute;
+  right: 6px;
+  bottom: 22px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--bg);
+  background: color-mix(in srgb, var(--fg) 82%, transparent);
+  pointer-events: none;
+}
+.cm-lp-img-tip[hidden] { display: none; }
 .cm-lp-image.is-broken {
   font-size: 0.82em;
   line-height: 1.5;
@@ -640,7 +708,6 @@ body.cursive-em-italic .cm-md-em {
 }
 .cm-lp-footnote-def {
   display: block;
-  margin: 6px 0;
   padding: 4px 10px;
   font-size: 0.85em;
   color: var(--muted);
@@ -656,7 +723,6 @@ body.cursive-em-italic .cm-md-em {
 }
 .cm-lp-toc {
   display: block;
-  margin: 10px 0;
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -704,8 +770,8 @@ body.cursive-em-italic .cm-md-em {
 }
 .cm-lp-mathview {
   display: block;
-  margin: 10px 0;
-  padding: 6px 0;
+  /* 16 = 原来的 margin 10 + padding 6，合成一层；根节点不画东西，看不出区别 */
+  padding: 16px 0;
   overflow-x: auto;
   overflow-y: hidden;
   text-align: center;
@@ -726,8 +792,8 @@ body.cursive-em-italic .cm-md-em {
 .cm-lp-mermaid {
   position: relative;
   display: block;
-  margin: 10px 0;
-  padding: 10px;
+  /* 上下 20 = 原来的 margin 10 + padding 10；底色就是 --bg（纸本身），撑开看不出来 */
+  padding: 20px 10px;
   overflow-x: auto;
   text-align: center;
   background: var(--bg);

@@ -42,6 +42,7 @@ const en: Record<Key, string> = {
   'sb.collapseAll': 'Collapse all',
   'sb.search': 'Search in Folder',
   'sb.openFolder': 'Open Another Folder',
+  'sb.tree': 'File tree',
   'sb.openFolderBtn': 'Open Folder',
   'sb.orOpen': 'or press ⌘⇧O',
   'sb.resize': 'Drag to resize',
@@ -141,7 +142,8 @@ const en: Record<Key, string> = {
 
   // ---------- Command palette / quick open ----------
   'pl.cmdPlaceholder': 'Type a command or shortcut…',
-  'pl.filePlaceholder': 'Type a file name…',
+  'pl.filePlaceholder': 'Type a file name, or :line…',
+  'pl.gotoLine': 'Go to line {n}',
   'pl.noMatch': 'No matching command',
   'pl.noFile': 'No matching file',
   'pl.noFolder': 'Open a folder first (⇧⌘O)',
@@ -152,6 +154,8 @@ const en: Record<Key, string> = {
   'cmd.save': 'Save',
   'cmd.saveAs': 'Save As…',
   'cmd.closeTab': 'Close Tab',
+  'cmd.nextTab': 'Next Tab',
+  'cmd.prevTab': 'Previous Tab',
   'cmd.history': 'Version History…',
   'cmd.exportHtml': 'Export as HTML…',
   'cmd.find': 'Find…',
@@ -241,6 +245,7 @@ const en: Record<Key, string> = {
   'w.closePreview': 'Close preview',
   'w.toc': 'Contents',
   'w.imgBroken': 'Image failed to load',
+  'w.imgResize': 'Drag to resize',
   'w.calloutExpand': 'Expand callout',
   'w.calloutCollapse': 'Collapse callout',
 
@@ -248,6 +253,17 @@ const en: Record<Key, string> = {
   'link.failed': 'Could not open: {target}',
   'link.missing': 'File not found: {name}',
   'link.noAnchor': 'No such anchor in this document: #{slug}',
+
+  // 0.2.x status-bar receipts (`ui/note.ts`)
+  'note.undo': 'Undo',
+  'note.reveal': 'Show in Finder',
+  'note.trashed': '“{name}” moved to Trash',
+  'note.restored': '“{name}” restored',
+  'note.restoreFailed': 'Can’t restore: something else is at that path, or it’s no longer in the Trash',
+  'note.copiedHtml': 'Copied as rich text',
+  'note.imageSaved': 'Image saved to {path}',
+  'note.exported': 'Exported “{name}”',
+  'note.rolledBack': 'Rolled back to this version (⌘Z to undo)',
   'link.unsaved': 'Unsaved document — the relative link {path} has no starting point',
   'link.spaced': 'Spaces in this destination and no file to be seen: write it as <{dest}> or replace the spaces with %20',
 

@@ -876,7 +876,8 @@ function fillCell(
  * 行高估算（见 `TableWidget.estimatedHeight`）。34 只是**第一次画出来之前**的兜底：
  * 单元格 padding 5+5 + 边框 1 + 行高（0.92em × 1.55）≈ 34，与 `themes/live-preview.css`
  * 同源；格子一换行就远不止，所以量到真值之后就以真值为准（`learn()` 回灌）。
- * 表格上下 margin 8+8 = 16 不在 offsetHeight 里，单独加。
+ * 表格上下那圈留白 8+8 = 16 也算在块里（它是 `.cm-lp-tableview` 的 padding，
+ * 不是 margin —— 为什么不能是 margin，见 `themes/live-preview.css` 开头那段）。
  */
 let rowH = 34
 const TABLE_PAD = 16

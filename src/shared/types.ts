@@ -8,6 +8,16 @@ export type MenuAction =
   | 'file:save-and-close'
   // ⌘W 关当前标签；关窗口是 ⇧⌘W（走壳侧 performClose:，不经这条通道）
   | 'file:close-tab'
+  /**
+   * 下一个 / 上一个标签（0.2.x，⌃Tab / ⌃⇧Tab）。
+   *
+   * **走原生菜单而不是渲染层的 keydown**（判断 1 的同一条理由）：⌃Tab 落在
+   * WKWebView 里首先是 CodeMirror 的事，而菜单的 `performKeyEquivalent` 排在
+   * 所有键盘处理之前 —— 摆进「窗口」菜单还顺带让人看得见这两条键。
+   * 到头折回（最后一个的下一个 = 第一个），一个标签时原地不动
+   */
+  | 'file:next-tab'
+  | 'file:prev-tab'
   | 'file:open-folder'
   // ---- P4-1 导出 HTML ----
   | 'file:export-html'
@@ -255,6 +265,8 @@ export interface CursiveApi {
    */
   openExternal(url: string): Promise<boolean>
   pickFolder(): Promise<string | null>
+  /** 列目录。文件只回「能打开的文档」（后缀白名单在壳侧 `DocScan.exts` 一处说了算，
+   *  与跨文件搜索、快速打开共用），目录原样回，隐藏文件两头都不进树 */
   readDir(path: string): Promise<DirEntry[]>
   /** 这个窗口的工作区根（契约 v19）：带文件开出来的窗口 = 那个文件所在的目录，
    *  带文件夹开出来的 = 那个文件夹，空手开的 = 上次 `pickFolder` 选过的那个。
@@ -266,7 +278,21 @@ export interface CursiveApi {
    * 三个通道都过壳侧的 `safeTarget` 防穿越：消解 `..`，且必须落在当前树根之下 */
   createFile(dir: string): Promise<{ path: string } | null>
   createFolder(dir: string): Promise<{ path: string } | null>
-  trashItem(path: string): Promise<boolean>
+  /**
+   * 删除进废纸篓。返回它**在废纸篓里的落点**（`restoreItem` 撤销那一下要用），
+   * 取消或失败 = null（契约 v25 把原来的 boolean 换成了这个 —— 只有壳知道
+   * `trashItem(at:resultingItemURL:)` 把它放到了哪儿，而那正是撤销唯一的线索）
+   */
+  trashItem(path: string): Promise<{ trashed: string } | null>
+  /**
+   * 契约 v25：把废纸篓里那一份挪回原处（状态栏那颗「撤销」）。
+   *
+   * 壳侧两道闸：`trashed` **必须真的在用户的废纸篓里**（不是 `safeTarget` 那道 ——
+   * 废纸篓本来就不在树根底下），`to` 必须过 `safeTarget` 且**此刻不存在**。
+   * 不覆盖任何东西：删掉之后又新建了同名文件时，撤销直接失败（返回 false）——
+   * 让用户自己去废纸篓拿 —— 悄悄盖掉新文件比撤不回来糟得多
+   */
+  restoreItem(trashed: string, to: string): Promise<boolean>
   /** ---- P3-1 收尾（契约 v10）----
    * `renameItem` 的新名字同样由壳弹原生输入框问（预填旧名），取消/同名返回 null；
    * `moveItem` 是文件树内拖拽，目标必须是目录，重名自动加 `-2`；

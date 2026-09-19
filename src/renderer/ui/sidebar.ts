@@ -14,13 +14,36 @@ interface Node {
 const WIDTH_KEY = 'cursive.sidebarWidth'
 const MIN_WIDTH = 180
 const MAX_WIDTH = 560
+/**
+ * 首字母跳的落点：从 `from` 起绕一圈，第一个以 `want` 开头的行下标（找不到 = -1）。
+ *
+ * **绕圈那一下是这条路唯一会错的地方**：不绕，按到最后一个 `r` 开头的文件就卡住了；
+ * 绕错了（比如从 0 开始），同一个字母连按会永远停在第一个匹配上。大小写不敏感 ——
+ * 文件名 `README` 与 `readme` 在这儿说的是一回事。
+ */
+export function typeaheadIndex(names: string[], from: number, want: string): number {
+  if (!names.length || !want) return -1
+  const needle = want.toLowerCase()
+  const start = ((from % names.length) + names.length) % names.length
+  for (let i = 0; i < names.length; i++) {
+    const at = (start + i) % names.length
+    if (names[at]!.toLowerCase().startsWith(needle)) return at
+  }
+  return -1
+}
+
 /** 超过这个位移才算拖拽 —— 否则每次点文件都会被判成一次微小的拖动 */
 const DRAG_SLOP = 5
+/** 首字母跳：两次按键隔得超过这个数就当是新的一个词（Finder 也是 0.8 秒上下） */
+const TYPEAHEAD_GAP = 800
 
 export interface SidebarHooks {
   openFile: (path: string) => void
-  /** 文件被移进废纸篓：让 main.ts 有机会关掉对应标签 */
-  trashed?: (path: string) => void
+  /**
+   * 文件被移进废纸篓：让 main.ts 有机会关掉对应标签，并给出那条带「撤销」的回执。
+   * `trashed` 是它在废纸篓里的落点（契约 v25），空串 = 壳没能给出落点，撤销这一下就不提供
+   */
+  trashed?: (path: string, trashed: string) => void
   /** 重命名 / 移动之后路径变了：开着的标签要跟着走，否则它指着一个不存在的文件 */
   moved?: (from: string, to: string) => void
   /** 跨文件搜索点中一处命中 */
@@ -56,6 +79,10 @@ export class Sidebar {
   private activePath: string | null = null
   /** 最后点过的那一行：工具栏的「新建」以它所在目录为落点 */
   private selected: string | null = null
+  /** 行的 `id` 序号（`aria-activedescendant` 要指得到某一行），每次 render 从 0 重来 */
+  private rowSeq = 0
+  /** 首字母跳的缓冲：连着按算一个词，停手 `TYPEAHEAD_GAP` 之后从头算 */
+  private typeahead = { text: '', at: 0 }
   /** 刚结束一次拖拽 —— 紧随其后的 click 不该再把文件打开 */
   private dragged = false
 
@@ -71,7 +98,7 @@ export class Sidebar {
           ${TOOL_BTNS.map((b) => toolButton(b)).join('')}
         </div>
       </div>
-      <div class="sb-tree" tabindex="-1"></div>
+      <div class="sb-tree" tabindex="0" role="tree" aria-label="${t('sb.tree')}" data-i18n-aria="sb.tree"></div>
       <div class="sb-empty">
         <button class="sb-open-btn" data-i18n="sb.openFolderBtn">${t('sb.openFolderBtn')}</button>
         <p data-i18n="sb.orOpen">${t('sb.orOpen')}</p>
@@ -96,6 +123,7 @@ export class Sidebar {
     this.el.querySelector('.sb-open-btn')!.addEventListener('click', () => void this.pick())
     this.treeEl.addEventListener('click', (e) => void this.onRowClick(e))
     this.treeEl.addEventListener('mousedown', (e) => this.onRowMouseDown(e))
+    this.treeEl.addEventListener('keydown', (e) => void this.onKeyDown(e))
     this.el.addEventListener('contextmenu', (e) => this.onContextMenu(e))
     this.setupResize()
 
@@ -172,18 +200,35 @@ export class Sidebar {
       const dir = dirname(path)
       if (dir) await this.open(dir)
     }
-    if (path && this.root && path.startsWith(`${this.root}/`)) {
-      // 逐级展开，让这个文件在树里可见
-      const rel = path.slice(this.root.length + 1).split('/')
-      let prefix = this.root
-      for (const seg of rel.slice(0, -1)) {
-        prefix = `${prefix}/${seg}`
-        await this.loadChildren(prefix)
-        this.expanded.add(prefix)
-      }
-    }
+    if (path) await this.reveal(path)
     this.render()
     this.treeEl.querySelector('.sb-row.is-active')?.scrollIntoView({ block: 'nearest' })
+  }
+
+  /** 逐级展开，让这个路径在树里可见。`setActive` 与 `refresh` 共用 */
+  private async reveal(path: string): Promise<void> {
+    if (!this.root || !path.startsWith(`${this.root}/`)) return
+    const rel = path.slice(this.root.length + 1).split('/')
+    let prefix = this.root
+    for (const seg of rel.slice(0, -1)) {
+      prefix = `${prefix}/${seg}`
+      await this.loadChildren(prefix)
+      this.expanded.add(prefix)
+    }
+  }
+
+  /**
+   * 重新读一遍树（0.2.x）。给「磁盘被我们自己改了、但没经过这棵树」那条路用 ——
+   * 目前只有一条：状态栏那颗「撤销」把文件从废纸篓挪了回来（契约 v25）。
+   * `reload()` 自己是私有的（它还管着展开状态的保持），所以这里另开一个口子，
+   * 顺带把还原出来的那个**展开到看得见**。
+   */
+  async refresh(select?: string): Promise<void> {
+    await this.reload()
+    if (!select) return
+    await this.reveal(select)
+    this.selected = select
+    this.render()
   }
 
   // ---------- P3-2 搜索面板（与文件树二选一占这块地方）----------
@@ -258,11 +303,20 @@ export class Sidebar {
     const row = (e.target as HTMLElement).closest<HTMLElement>('.sb-row')
     const path = row?.dataset['path']
     if (!path) return
+    await this.activateRow(path)
+  }
+
+  /**
+   * 「激活一行」：文件 = 打开，目录 = 收/展。点击与 Enter 共用同一条路 ——
+   * 分成两份的话，某天给点击加了什么（比如预览），键盘那条就会悄悄少一块
+   */
+  private async activateRow(path: string): Promise<void> {
     const node = this.byPath.get(path)
     if (!node) return
     this.selected = path
 
     if (!node.entry.isDir) {
+      this.paintCursor()
       this.hooks.openFile(path)
       return
     }
@@ -288,8 +342,10 @@ export class Sidebar {
     if (!hasRoot) return
 
     const frag = document.createDocumentFragment()
+    this.rowSeq = 0
     this.appendRows(frag, this.nodes, 0)
     this.treeEl.replaceChildren(frag)
+    this.paintCursor()
   }
 
   private appendRows(parent: DocumentFragment | HTMLElement, nodes: Node[], depth: number): void {
@@ -299,6 +355,12 @@ export class Sidebar {
       row.className = 'sb-row'
       row.dataset['path'] = entry.path
       row.style.paddingLeft = `${4 + depth * 16}px`
+      // 读屏要的那三件：这是棵树的一项、在第几层、（目录）此刻是收还是展。
+      // `id` 是给 `aria-activedescendant` 指的 —— 见 `paintCursor`
+      row.id = `sb-row-${this.rowSeq++}`
+      row.setAttribute('role', 'treeitem')
+      row.setAttribute('aria-level', String(depth + 1))
+      if (entry.isDir) row.setAttribute('aria-expanded', String(this.expanded.has(entry.path)))
       if (entry.isDir) row.classList.add('is-dir')
       if (entry.path === this.activePath) row.classList.add('is-active')
 
@@ -316,8 +378,10 @@ export class Sidebar {
       item.className = 'sb-item'
       const name = document.createElement('span')
       name.className = 'sb-name'
-      // 文件名去掉 .md 后缀，树里更清爽
-      name.textContent = entry.isDir ? entry.name : entry.name.replace(/\.(md|markdown)$/i, '')
+      // 文件名去掉文档后缀，树里更清爽（白名单与壳侧 DocScan.exts 对齐）
+      name.textContent = entry.isDir
+        ? entry.name
+        : entry.name.replace(/\.(md|markdown|mdown|mkd|txt)$/i, '')
       name.title = entry.name
       item.appendChild(name)
       row.appendChild(item)
@@ -370,11 +434,12 @@ export class Sidebar {
   }
 
   private async trash(path: string): Promise<void> {
-    if (!(await window.api.trashItem(path))) return
+    const res = await window.api.trashItem(path)
+    if (!res) return
     this.expanded.delete(path)
     if (this.selected === path) this.selected = null
     await this.reload()
-    this.hooks.trashed?.(path)
+    this.hooks.trashed?.(path, res.trashed)
   }
 
   private async rename(path: string): Promise<void> {
@@ -448,6 +513,144 @@ export class Sidebar {
     })
   }
 
+  // ---------- 键盘（0.2.x）----------
+  //
+  // 在这之前**整棵树只认鼠标**：大纲有过滤框、命令面板有键盘、查找有键盘，
+  // 只有文件树得把手从键盘上拿开。这里补的是树控件的常规那一套（VS Code / Finder
+  // 同款）：↑↓ 走行、←→ 收展、Enter 打开、首字母跳、F2 重命名、⌘⌫ 进废纸篓。
+  //
+  // 焦点模型走 **aria-activedescendant**：焦点始终在 `.sb-tree` 这**一个**元素上，
+  // 「光标在哪一行」只是它的一个属性。换成「每行一个 tabindex、焦点跟着行走」的话，
+  // 每一次 `render()`（自动保存、外部变更、展开一级、撤销删除…）都会把带着焦点的
+  // 那个元素整个换掉，焦点当场掉回 body —— 而这棵树重建得非常勤。
+
+  private rows(): HTMLElement[] {
+    return [...this.treeEl.querySelectorAll<HTMLElement>('.sb-row')]
+  }
+
+  /** 光标所在行；还没落过光标就当在第一行 */
+  private cursorRow(): HTMLElement | null {
+    const rows = this.rows()
+    return rows.find((r) => r.dataset['path'] === this.selected) ?? rows[0] ?? null
+  }
+
+  private moveCursor(to: HTMLElement | null | undefined): void {
+    if (!to) return
+    this.selected = to.dataset['path'] ?? null
+    this.paintCursor()
+    to.scrollIntoView({ block: 'nearest' })
+  }
+
+  /**
+   * 把光标画出来，并告诉读屏它在哪一行。
+   * `selected` 本来就是「新建落到哪个目录」「右键作用在谁身上」的依据，
+   * 键盘光标用的是同一个字段 —— 两套光标会立刻打架。
+   */
+  private paintCursor(): void {
+    let id = ''
+    for (const row of this.rows()) {
+      const on = row.dataset['path'] === this.selected
+      row.classList.toggle('is-cursor', on)
+      if (on) id = row.id
+    }
+    if (id) this.treeEl.setAttribute('aria-activedescendant', id)
+    else this.treeEl.removeAttribute('aria-activedescendant')
+  }
+
+  private async expandDir(path: string): Promise<void> {
+    await this.loadChildren(path)
+    this.expanded.add(path)
+    this.render()
+  }
+
+  private async onKeyDown(e: KeyboardEvent): Promise<void> {
+    // 组字期间一个键都别接：中文输入法在树上也会先走这儿
+    if (e.isComposing) return
+    const rows = this.rows()
+    if (!rows.length) return
+    const cur = this.cursorRow()
+    const at = cur ? rows.indexOf(cur) : -1
+    const path = cur?.dataset['path'] ?? null
+    const node = path ? this.byPath.get(path) : undefined
+    const isDir = node?.entry.isDir === true
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        this.moveCursor(rows[Math.min(at + 1, rows.length - 1)])
+        return
+      case 'ArrowUp':
+        e.preventDefault()
+        this.moveCursor(rows[Math.max(at - 1, 0)])
+        return
+      case 'Home':
+        e.preventDefault()
+        this.moveCursor(rows[0])
+        return
+      case 'End':
+        e.preventDefault()
+        this.moveCursor(rows[rows.length - 1])
+        return
+      case 'ArrowRight':
+        e.preventDefault()
+        if (!path || !isDir) return
+        // 收着 → 展开（光标留在目录上，同 Finder）；已经展开 → 进它的第一个孩子
+        if (!this.expanded.has(path)) await this.expandDir(path)
+        else this.moveCursor(rows[at + 1])
+        return
+      case 'ArrowLeft': {
+        e.preventDefault()
+        if (path && isDir && this.expanded.has(path)) {
+          this.expanded.delete(path)
+          this.render()
+          return
+        }
+        // 文件、或者已经收起的目录：退到父目录那一行（已经在根这一层就原地不动）
+        const parent = path ? dirname(path) : null
+        this.moveCursor(parent ? rows.find((r) => r.dataset['path'] === parent) : null)
+        return
+      }
+      case 'Enter':
+      case ' ':
+        e.preventDefault()
+        if (path) await this.activateRow(path)
+        return
+      case 'F2':
+        e.preventDefault()
+        if (path) await this.rename(path)
+        return
+      case 'Backspace':
+      case 'Delete':
+        // **⌘⌫ 才算数**（Finder 同款）。裸 ⌫ 有意不接：删除是这棵树上唯一
+        // 「按错一个键就没了」的动作，得要一个修饰键。壳侧还会再问一次，
+        // 而且现在删完状态栏那条回执里有「撤销」（契约 v25）
+        if (!e.metaKey) return
+        e.preventDefault()
+        if (path) await this.trash(path)
+        return
+      default:
+        this.onTypeahead(e, rows, at)
+    }
+  }
+
+  /**
+   * 首字母跳（Finder / VS Code 同款）。连着按算一个词，停手 `TYPEAHEAD_GAP` 从头算。
+   * 单个字母时从**下一行**开始找 —— 同一个字母连按就是在这几行之间轮着走；
+   * 攒成词之后从**当前行**开始找，否则打 `re` 会跳过正对着的那个 `readme`。
+   */
+  private onTypeahead(e: KeyboardEvent, rows: HTMLElement[], at: number): void {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return
+    const now = Date.now()
+    this.typeahead.text = now - this.typeahead.at > TYPEAHEAD_GAP ? e.key : this.typeahead.text + e.key
+    this.typeahead.at = now
+    const names = rows.map((r) => r.querySelector('.sb-name')?.textContent ?? '')
+    const from = this.typeahead.text.length > 1 ? Math.max(at, 0) : at + 1
+    const hit = typeaheadIndex(names, from, this.typeahead.text)
+    if (hit < 0) return
+    e.preventDefault()
+    this.moveCursor(rows[hit])
+  }
+
   // ---------- P3-1 拖拽移动 ----------
 
   /**
@@ -456,6 +659,9 @@ export class Sidebar {
    */
   private onRowMouseDown(down: MouseEvent): void {
     if (down.button !== 0) return
+    // 点过之后方向键就该能接着走。**放在最前面**：点的是文件时，稍后 `openFile`
+    // 会把焦点交给编辑器（时间上在后，它赢），所以这一下只对点目录/空白真正生效
+    this.treeEl.focus()
     const row = (down.target as HTMLElement).closest<HTMLElement>('.sb-row')
     const src = row?.dataset['path']
     if (!row || !src || !this.root) return

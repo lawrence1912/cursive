@@ -16,6 +16,8 @@ import {
   type HeightStore
 } from './height-store'
 import type { Heading } from '../headings'
+import { FOOTNOTE_DEF, withImageSize } from '../markdown-lang'
+import { parsedTree } from '../syntax'
 
 /**
  * 每个 widget 都必须实现 eq()：CodeMirror 靠它判断能否复用 DOM。
@@ -160,7 +162,7 @@ export class MathWidget extends WidgetType {
   }
   override get estimatedHeight(): number {
     // 只有块级（$$…$$）需要报：行内公式不进高度图
-    return this.display ? heightMemo.get(`math:${this.tex}`) ?? 64 : -1
+    return this.display ? heightMemo.get(`math:${this.tex}`) ?? 84 : -1
   }
   override destroy(dom: HTMLElement): void {
     unwatchHeight(dom)
@@ -421,7 +423,7 @@ export class MermaidWidget extends WidgetType {
     cancelRender.delete(dom)
   }
   override get estimatedHeight(): number {
-    return heightMemo.get(cacheKey(this.src, this.theme)) ?? 240
+    return heightMemo.get(cacheKey(this.src, this.theme)) ?? 260
   }
   toDOM(view: EditorView): HTMLElement {
     const el = document.createElement('div')
@@ -499,6 +501,30 @@ export function findFootnoteDef(state: EditorState, label: string): { pos: numbe
   return null
 }
 
+/**
+ * 全文定义过的脚注标签（形状走 `markdown-lang.ts` 那份 `FOOTNOTE_DEF`）——
+ * 一次性知道「哪些引用是悬空的」，一条条 `findFootnoteDef` 是 O(引用×行数)。
+ *
+ * **按 state 记一次**：装饰层是每次按键、每次挪光标都要重算的，而视口里每一个脚注
+ * 引用都要问一次「这条有定义吗」。不记的话就是**每个引用各扫一遍全文** ——
+ * 12040 行、定义摆在文末的那种长文实测：`findFootnoteDef` 一次 1.49ms，视口里
+ * 12 个引用就是 18ms/次重算，正好吃掉一整帧；而整张表建出来只要 1.61ms。
+ * state 不可变，所以记一次就够；**别改返回的 Set**，它是共享的。
+ */
+const footnoteCache = new WeakMap<EditorState, Set<string>>()
+
+export function footnoteLabels(state: EditorState): Set<string> {
+  const hit = footnoteCache.get(state)
+  if (hit) return hit
+  const out = new Set<string>()
+  for (let i = 1; i <= state.doc.lines; i++) {
+    const m = FOOTNOTE_DEF.exec(state.doc.line(i).text)
+    if (m) out.add(m[1]!)
+  }
+  footnoteCache.set(state, out)
+  return out
+}
+
 /** 脚注引用 [^label] → 上标角标，悬停显示定义、点击跳到定义处 */
 export class FootnoteRefWidget extends WidgetType {
   constructor(readonly label: string) {
@@ -542,15 +568,21 @@ export class FootnoteDefWidget extends WidgetType {
     return other.label === this.label && other.text === this.text
   }
   toDOM(view: EditorView): HTMLElement {
+    // 根节点只负责上下留白（CM 量的就是它，margin 量不到 —— 见 themes/live-preview.css
+    // 开头「块级 widget 的上下留白」），灰底那只盒子是里层
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-lp-blockgap is-tight'
     const el = document.createElement('div')
     el.className = 'cm-lp-footnote-def'
-    sourceControl(view, el)
+    wrap.appendChild(el)
+    // 落点认的是根节点（`posAtDOM`），留白那一圈点了也算进源码 —— 它本来就是这条脚注的地盘
+    sourceControl(view, wrap)
     const label = document.createElement('span')
     label.className = 'cm-lp-footnote-def-label'
     label.textContent = `^${this.label}`
     el.appendChild(label)
     el.appendChild(document.createTextNode(this.text.split('\n')[0] ?? ''))
-    return el
+    return wrap
   }
 }
 
@@ -585,13 +617,19 @@ export class TocWidget extends WidgetType {
     return false
   }
   override get estimatedHeight(): number {
-    // 未渲染时按条数估算；实测缓存区分完整目录内容。
-    return heightMemo.get(`toc:${JSON.stringify(this.entries)}`) ?? 44 + this.entries.length * 28
+    // 未渲染时按条数估算（44 = 标题 + 盒子内边距，20 = 外壳那圈留白）；
+    // 实测缓存区分完整目录内容。
+    return heightMemo.get(`toc:${JSON.stringify(this.entries)}`) ?? 64 + this.entries.length * 28
   }
   toDOM(view: EditorView): HTMLElement {
+    // 同脚注定义：有边框有底色的那只盒子留在里层，根节点只负责上下留白 ——
+    // **量的也必须是根节点**（`destroy` 拿到的就是它），不然记进盘里的高度少一圈留白
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-lp-blockgap'
+    watchHeight(view, wrap, `toc:${JSON.stringify(this.entries)}`)
     const nav = document.createElement('nav')
     nav.className = 'cm-lp-toc'
-    watchHeight(view, nav, `toc:${JSON.stringify(this.entries)}`)
+    wrap.appendChild(nav)
     const head = document.createElement('div')
     head.className = 'cm-lp-toc-title'
     head.textContent = t('w.toc')
@@ -609,7 +647,7 @@ export class TocWidget extends WidgetType {
       })
       list.appendChild(li)
     }
-    return nav
+    return wrap
   }
 }
 
@@ -772,6 +810,100 @@ export function copyText(text: string): void {
 }
 
 /** `![alt](src)` → 真图片：点击编辑，独立按钮放大；支持 `=宽x高` 尺寸语法。 */
+/** 拖不动到比这更小 —— 再小就点不中手柄自己了 */
+const MIN_IMG = 48
+
+/**
+ * 右下角那只拖尺寸的手柄（0.2.x）。
+ *
+ * 尺寸语法 `![图](a.png =600x400)` 在 P1 就通了，但此前**只能手写数字** ——
+ * 在一个所见即所得的编辑器里，改图片大小于是成了最后一件还得回源码去做的常见操作。
+ *
+ * 三个决定：
+ * - **松手才写文档**：拖的过程只改 DOM 上的宽高（不碰文档 = 不触发解析、不进撤销栈），
+ *   松手一次写回，于是整段拖拽在历史里是**一步** —— ⌘Z 一下回到原来的尺寸。
+ * - **锁纵横比**：图片被拉变形几乎从来不是本意；真要变形的人可以去源码里写死两个数。
+ *   比例取 `naturalWidth/Height`（拿不到就用当下这个盒子），于是拖完还是原来那张图。
+ * - **拖的是屏幕上那个宽度**：`.cm-lp-image img` 上有 `max-width:100%` 与 `max-height:60vh`
+ *   压着，量渲染后的盒子才是所见即所得；写回文档的也正是这个数。
+ */
+function sizeHandle(
+  view: EditorView,
+  wrap: HTMLElement,
+  img: HTMLImageElement
+): { handle: HTMLElement; tip: HTMLElement } {
+  const handle = document.createElement('span')
+  handle.className = 'cm-lp-img-handle'
+  handle.title = t('w.imgResize')
+  const tip = document.createElement('span')
+  tip.className = 'cm-lp-img-tip'
+  tip.hidden = true
+
+  handle.addEventListener('mousedown', (down) => {
+    if (down.button !== 0) return
+    // 不挡的话按下这一下会先被当成一次正文选区（widget 外面还有 CM 的 mousedown）
+    down.preventDefault()
+    down.stopPropagation()
+    const box = img.getBoundingClientRect()
+    const ratio =
+      img.naturalWidth && img.naturalHeight
+        ? img.naturalWidth / img.naturalHeight
+        : box.width / Math.max(box.height, 1)
+    // 上界是正文宽：再宽也会被 `max-width:100%` 压回来，写进文档只会是个对不上的数
+    const max = Math.max(MIN_IMG, view.contentDOM.clientWidth)
+    let w = Math.round(box.width)
+    let h = Math.round(box.height)
+
+    const move = (e: MouseEvent): void => {
+      w = Math.round(Math.min(Math.max(box.width + (e.clientX - down.clientX), MIN_IMG), max))
+      h = Math.max(1, Math.round(w / (ratio || 1)))
+      img.style.width = `${w}px`
+      img.style.height = `${h}px`
+      tip.textContent = `${w} × ${h}`
+      tip.hidden = false
+    }
+    const up = (): void => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      tip.hidden = true
+      writeImageSize(view, wrap, w, h)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  })
+  // **两件都交回去让 toDOM 按顺序挂**：这个盒子的第 0 个孩子必须一直是正文那层
+  // （量高、裂图替换、`test/widget-height.test.ts` 都按这个位置找），
+  // 在这儿顺手 append 会把 tip 插到它前面
+  return { handle, tip }
+}
+
+/**
+ * 把拖出来的尺寸写回源码。**一次普通编辑**（与表格就地编辑、告示块折叠同一条路）：
+ * 撤销、装饰重算、自动保存全都白拿。
+ *
+ * 位置现查（`posAtDOM` + 树上找回那个 `Image` 节点）而不是记在 widget 里：
+ * widget 是可复用的，它的位置随时在漂 —— 同 `CheckboxWidget` / `toggleCalloutAt` 那条。
+ */
+function writeImageSize(view: EditorView, dom: HTMLElement, width: number, height: number): void {
+  const doc = view.state.doc
+  const from = view.posAtDOM(dom)
+  let node: SyntaxNode | null = parsedTree(view.state).resolveInner(
+    Math.min(from + 1, doc.length),
+    1
+  )
+  while (node && node.name !== 'Image') node = node.parent
+  if (!node) return
+  const text = view.state.sliceDoc(node.from, node.to)
+  const next = withImageSize(text, width, height)
+  // null = 这条源码不接受尺寸（带标题那种，见 withImageSize）：什么都不做，
+  // 下一次重画会把图恢复成文档里写的样子
+  if (!next || next === text) return
+  view.dispatch({
+    changes: { from: node.from, to: node.to, insert: next },
+    userEvent: 'input.resize'
+  })
+}
+
 export class ImageWidget extends WidgetType {
   override destroy(dom: HTMLElement): void {
     unwatchHeight(dom)
@@ -813,9 +945,13 @@ export class ImageWidget extends WidgetType {
     // 图片的高度要等解码完才知道（没写死 width/height 的话）。CM 量高是在插进 DOM
     // 的那一帧，那会儿 <img> 还是 0 高 —— 不补这一次 requestMeasure，整篇的行坐标
     // 就一直按「图片没有高度」算：点一下光标落在别处，滚动位置也会自己漂
+    const { handle, tip } = sizeHandle(view, wrap, img)
+    handle.hidden = true
     img.addEventListener('load', () => {
       if (!wrap.isConnected) return
       zoom.hidden = false
+      // 手柄要等解码完才露面：在那之前既没有纵横比、也没有可拖的盒子
+      handle.hidden = false
       view.requestMeasure()
     })
     img.alt = this.alt
@@ -842,10 +978,11 @@ export class ImageWidget extends WidgetType {
       unwatchHeight(wrap)
       content.textContent = `${path}\n(${this.alt || t('w.imgBroken')})`
       zoom.hidden = true
+      handle.hidden = true
       view.requestMeasure()
     })
     content.appendChild(img)
-    wrap.append(content, zoom)
+    wrap.append(content, zoom, handle, tip)
     watchHeight(view, wrap, this.heightKey, img)
     img.src = this.src
     return wrap

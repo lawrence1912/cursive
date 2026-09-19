@@ -20,7 +20,11 @@ export interface HeightStore {
 }
 
 export const HEIGHT_STORE_KEY = 'cursive.widgetHeights'
-export const HEIGHT_STORE_VERSION = 1
+/**
+ * 2：块级 widget 的上下留白从 margin 改成 padding（`themes/live-preview.css` 开头那段），
+ * 同一个 key 量到的高度整体变高了十几 px —— 旧值不是「旧格式」而是**错的**，直接弃掉
+ */
+export const HEIGHT_STORE_VERSION = 2
 /** 与内存里那份同一个上限，避免编辑久了存储无限长大 */
 export const HEIGHT_STORE_MAX = 256
 

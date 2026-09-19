@@ -72,6 +72,22 @@ describe('块级装饰（blockField 的纯函数，不依赖 DOM）', () => {
     expect(decos(doc, 10)).toEqual([])
   })
 
+  it('连着摞的脚注定义逐条出 widget（中间不空行也一样）', () => {
+    // 修好之前：解析器只认空行收尾，两条合成一个节点，而 widget 只画第一行，
+    // `[^2]` 整条在编辑器里看不见 —— test/fixtures/dialect.md 自己就是这个形状
+    expect(decos('前文\n\n[^1]: 一\n[^2]: 二\n')).toEqual([
+      '4-11:FootnoteDefWidget',
+      '12-19:FootnoteDefWidget'
+    ])
+    // 空行分隔的写法本来就是对的，守住它没被改坏
+    expect(decos('前文\n\n[^1]: 一\n\n[^2]: 二\n')).toHaveLength(2)
+  })
+
+  it('脚注定义的续行仍并进同一条（折叠语义不变）', () => {
+    const doc = '前文\n\n[^1]: 一\n  续行\n'
+    expect(decos(doc)).toEqual([`4-${doc.trimEnd().length}:FootnoteDefWidget`])
+  })
+
   it('TocBlock → TocWidget，收集全文标题', () => {
     const doc = '目录：\n\n[TOC]\n\n# 一\n\n## 二\n'
     // TocBlock 只盖 [TOC] 那一行

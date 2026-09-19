@@ -288,17 +288,37 @@ function makeLineStartParser(test: (content: string) => boolean, node: string) {
 const TocParser = makeLineStartParser((c) => /^\[\s*toc\s*\]$/i.test(c.trim()), 'TocBlock')
 
 /**
+ * 脚注定义行 `[^label]: 正文` 的形状 —— **全仓库唯一一份**。
+ *
+ * 标签行首起算、**不含空白**（`[^a b]:` 不是定义），冒号后的空格并进 `m[0]`，
+ * 于是 `m[0].length` 就是正文起点、`m[1]` 是标签。用它的四处：
+ * 本文件的块解析、`live-preview/widgets.ts` 的 `footnoteLabels`、
+ * `export/render.ts` 的定义切分、`complete.ts` 的 `[^` 补全源。
+ *
+ * 四处口径必须是同一条，否则会漏出「补全列出来的定义解析器不认」这种缝：
+ * 补全那份原来写的是 `[^\]]+`（标签里允许空格），列出来的 `[^a b]` 插进正文
+ * 既没有定义可跳，也换不出角标。
+ */
+export const FOOTNOTE_DEF = /^\[\^([^\s\]]+)\]:[ \t]*/
+
+/**
  * 脚注定义 [^label]: 内容。
  * 必须用 eager parse 抢在 LinkReference 之前 —— 「[^1]: 文字」同时是合法的
- * 链接引用定义形状，等段落累积完再认领就来不及了。定义内容到空行为止
- * （多行续行是 GitHub 规则的简化版）。
+ * 链接引用定义形状，等段落累积完再认领就来不及了。定义内容到**空行或下一条定义**
+ * 为止（多行续行是 GitHub 规则的简化版）。
+ *
+ * 「下一条定义也收尾」是补出来的：人写脚注的常态是几条连着摞在文末、中间不空行，
+ * 只认空行的话它们会合成**一个**节点，而装饰层一个节点只画一行
+ * （`FootnoteDefWidget` 的折叠语义），后面那几条在编辑器里整条看不见 ——
+ * `test/fixtures/dialect.md` 自己就是这个形状。逐条出节点之后，
+ * 编辑器、导出、`findFootnoteDef` 三处看到的定义数目才是同一个。
  */
 function parseFootnoteDef(cx: BlockContext, line: Line): BlockResult {
-  if (!/^\[\^[^\s\]]+\]:/.test(line.text.slice(line.pos))) return false
+  if (!FOOTNOTE_DEF.test(line.text.slice(line.pos))) return false
   const from = cx.lineStart + line.pos
   for (;;) {
     const peeked = cx.peekLine()
-    if (!peeked || !peeked.trim()) break
+    if (!peeked || !peeked.trim() || FOOTNOTE_DEF.test(peeked)) break
     cx.nextLine()
   }
   const end = cx.lineStart + line.text.length
@@ -339,6 +359,29 @@ function parseCalloutMark(cx: InlineContext, next: number, pos: number): number 
  * 表格格内（cellTokens）都不必为它各加一条分支 —— 它们看到的仍然是一张图片。
  * 尺寸段单独叫 `SizeMark`，是为了让「只取人看的文字」的那几处把它一起藏掉。
  */
+/**
+ * 把一条图片源码的尺寸改写成 `=宽x高`（原来没有就插在目的地后面）。0.2.x 拖角改尺寸用。
+ *
+ * **认不出就回 null，调用方原样不动。** 挡掉的主要是**带标题**的那种
+ * （`![图](a.png "说明")`）：`SIZED_IMAGE` 不接受尺寸后面还跟标题，内置解析器又不接受
+ * 目的地后面跟 `=600x400`，硬写进去的结果是两边都不认、整条退回裸源码。
+ * 宁可这一下拖不动，也不能把一张好好的图写坏。
+ *
+ * 除了尺寸那一段，其余字节一个都不碰 —— 尖括号目的地、`![]` 空 alt、多余空格
+ * 都按用户写的样子留着（保存零损耗那条红线的同一个分寸）。
+ */
+export function withImageSize(text: string, width: number, height: number): string | null {
+  const m = IMAGE_FOR_SIZE.exec(text)
+  if (!m) return null
+  const w = Math.max(1, Math.round(width))
+  const h = Math.max(1, Math.round(height))
+  return `${m[1]} =${w}x${h})`
+}
+
+/** 与 `SIZED_IMAGE` 同一个形状，只是尺寸那段可有可无、且锚住整条 */
+const IMAGE_FOR_SIZE =
+  /^(!\[[^\]\n]*\]\([ \t]*(?:<[^<>\n]*>|[^\s()]+))(?:[ \t]+=[ \t]*\d+[xX]\d*)?[ \t]*\)$/
+
 function parseSizedImage(cx: InlineContext, next: number, pos: number): number {
   if (next !== BANG) return -1
   // 切一段有上界的出来（同 `parseCalloutMark`）：`cx.end` 是整个块的末尾，

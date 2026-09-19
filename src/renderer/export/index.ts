@@ -1,10 +1,11 @@
 import type { EditorState } from '@codemirror/state'
 import { loadKatex, loadMermaid, renderMermaid } from '../editor/live-preview/widgets'
 import { collectCodeLangs, escapeHtml, loadCodeLangs, renderBody, type ExportOpts } from './render'
-import { EXPORT_CSS } from './style'
+import { EXPORT_CSS, typographyCss, type Typography } from './style'
+import { primeTree } from '../editor/syntax'
 
 export { collectCodeLangs, escapeHtml, renderBody, type ExportOpts } from './render'
-export { EXPORT_CSS } from './style'
+export { EXPORT_CSS, typographyCss, TYPOGRAPHY_DEFAULT, type Typography } from './style'
 
 /**
  * P4-1 导出 HTML —— 单文件组装。
@@ -29,11 +30,21 @@ export interface HtmlExport {
 
 export async function exportHtmlDocument(
   state: EditorState,
-  opts: ExportOpts = {}
+  opts: ExportOpts = {},
+  /**
+   * 正文排版（0.2.x）。**分开一个参数而不是塞进 `opts`**：`opts` 是交给 `renderBody`
+   * 的那份，正文渲染一个字段都不该为排版改；排版只影响外壳那段 CSS。
+   * 不传 = 用 EXPORT_CSS 里的默认值，产出与从前逐字节相同
+   */
+  type?: Typography
 ): Promise<HtmlExport> {
   // katex 与语言包都是按需加载的，`renderBody` 是同步的一整棵递归 —— 两样都得先到手，
   // 否则公式退化成 `<code>`、代码块整块没有颜色
   await Promise.all([loadCodeLangs(collectCodeLangs(state)), loadKatex()])
+  // **整棵树必须先确保出来**（0.2.x）：`parsedTree` 的默认预算是 50ms，超了就退回
+  // 手上那棵半截快照 —— 屏幕上那是「先画一部分」，在这儿却是**导出物里少了一半内容**，
+  // 而且产物看着完好。见 `editor/syntax.ts` 的 `primeTree`
+  primeTree(state)
   const body = renderBody(state, opts)
   let html = body.html
   for (const block of body.mermaid) {
@@ -43,7 +54,7 @@ export async function exportHtmlDocument(
     // 替换模式展开，图就当场碎掉
     if (svg) html = html.replace(block.placeholder, () => svg)
   }
-  return { html: wrapDocument(html, body.title), title: body.title }
+  return { html: wrapDocument(html, body.title, type), title: body.title }
 }
 
 /** 一张图。失败返回 null —— 一张画不出来不该带走整份导出 */
@@ -67,7 +78,7 @@ async function renderMermaidSvg(src: string): Promise<string | null> {
 /**
  * 外壳。样式**内联**、没有一个外部引用：导出的是一个文件，拷到哪儿都得是这个样子。
  */
-export function wrapDocument(body: string, title: string): string {
+export function wrapDocument(body: string, title: string, type?: Typography): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -75,7 +86,7 @@ export function wrapDocument(body: string, title: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="Cursive">
 <title>${escapeHtml(title)}</title>
-<style>${EXPORT_CSS}</style>
+<style>${EXPORT_CSS}${typographyCss(type)}</style>
 </head>
 <body>
 <article class="cursive-doc">

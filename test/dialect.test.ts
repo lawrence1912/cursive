@@ -3,6 +3,7 @@ import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
+import { footnoteLabels } from '../src/renderer/editor/live-preview/widgets'
 
 function nodes(doc: string): Set<string> {
   const state = EditorState.create({ doc, extensions: [cursiveMarkdown()] })
@@ -103,6 +104,8 @@ describe('cursive 的 markdown 方言', () => {
     expect(nodes('波浪 ~ 号\n')).not.toContain('Subscript')
     // 引用无定义 → 不产出定义节点
     expect(nodes('引用 [^1] 无定义\n')).not.toContain('FootnoteDefinition')
+    // 标签里有空格不是脚注定义（`[^a b]:` 同时是合法的链接引用形状，归 LinkReference）
+    expect(nodes('[^a b]: 内容\n')).not.toContain('FootnoteDefinition')
   })
 
   it('P1-6 告示块：`> [!danger]` 归 CalloutMark，不再被 Link 认领', () => {
@@ -160,5 +163,33 @@ describe('cursive 的 markdown 方言', () => {
     const n = nodes('# 标题\n\n> 引用\n\n- 项\n\n```ts\nconst a = 1\n```\n\n---\n')
     for (const name of ['ATXHeading1', 'Blockquote', 'BulletList', 'FencedCode', 'HorizontalRule'])
       expect(n, name).toContain(name)
+  })
+})
+
+/**
+ * 「这条引用有没有定义」这件事，装饰层是**每次按键、每次挪光标**都要问的，
+ * 而视口里可能摆着十几个引用。一条条 `findFootnoteDef` 就是每个引用各扫一遍全文：
+ * 12040 行、定义摆在文末的长文实测 16.7ms/次重算（一帧的预算是 16ms）；
+ * 换成整张表之后是 2.0ms（每个 state 建一次，一次重算里所有引用共用）。
+ * 所以这张表**必须按 state 记**，`decorate.ts` 也必须查表而不是一条条找。
+ */
+describe('脚注定义表按 state 记一次', () => {
+  const mk = (doc: string): EditorState =>
+    EditorState.create({ doc, extensions: [cursiveMarkdown()] })
+
+  it('同一个 state 问两遍拿到的是同一份', () => {
+    const state = mk('正文[^a]。\n\n[^a]: 定义\n')
+    expect(footnoteLabels(state)).toBe(footnoteLabels(state))
+  })
+
+  it('认的是解析器那份形状：标签里带空格的不算定义', () => {
+    expect([...footnoteLabels(mk('[^a]: 行\n[^b c]: 不是定义\n'))]).toEqual(['a'])
+  })
+
+  it('改了文档就是另一份', () => {
+    const state = mk('正文[^a]。\n\n[^a]: 定义\n')
+    const next = state.update({ changes: { from: state.doc.length, insert: '[^b]: 又一条\n' } }).state
+    expect(footnoteLabels(next)).not.toBe(footnoteLabels(state))
+    expect([...footnoteLabels(next)].sort()).toEqual(['a', 'b'])
   })
 })

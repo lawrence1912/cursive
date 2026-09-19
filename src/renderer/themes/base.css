@@ -449,6 +449,27 @@ body {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* 查找命中的刻度（0.2.x，`editor/scroll-marks.ts`）。压在滚动条那条槽上 ——
+   槽本来就是透明的，而滑块只有 6px 宽、居中，刻度从右边起 8px，两者叠不满。
+   `pointer-events:none` 是必须的：这根条盖在滚动条上，吃了指针就拖不动滑块了 */
+.cm-scroll-marks {
+  position: absolute;
+  right: 0;
+  width: 10px;
+  pointer-events: none;
+  z-index: 3;
+}
+.cm-scroll-marks[hidden] { display: none; }
+.cm-scroll-mark {
+  position: absolute;
+  right: 1px;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  /* 与正文里那片命中底色同宗，但要浓得多：2px 的一条线按 32% 画出来等于没画 */
+  background: var(--match-on);
+}
+
 ::-webkit-scrollbar-thumb {
   /* 2px 透明边 + background-clip: content-box：可见滑块 6px，两侧留呼吸 */
   background-color: color-mix(in srgb, var(--fg) 20%, transparent);
@@ -702,13 +723,30 @@ body {
 /* 一次性反馈（见 main.ts 的 note()）。跟在文件名后面，用 --warn 与周围那些常驻读数分开；
    没话说时整条 display:none —— 状态栏是 flex + gap，留一个空 span 就是白占 16px */
 #status-note {
-  color: var(--warn);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* **只有「刚才那一下没成」才上黄**（0.2.x）：这条通道现在也用来发「办成了」的回执
+   （已复制 / 图片存好了 / 已移到废纸篓），一条黄色的「已复制」会让人以为出了事 */
+#status-note.is-warn { color: var(--warn); }
 #status-note:empty { display: none; }
+/* 回执右边那颗动作（撤销 / 在 Finder 中显示）。长得像链接而不像按钮 ——
+   状态栏只有一行高，一颗带框带底色的按钮会把整条撑起来，而它一闪就没了 */
+.note-act {
+  appearance: none;
+  border: 0;
+  background: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.note-act:hover { opacity: 0.75; }
 #status-saved { font-variant-numeric: tabular-nums; }
 #status-file { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status-mode { font-variant-numeric: tabular-nums; }
@@ -889,6 +927,13 @@ body.is-resizing {
   background: var(--accent-wash);
 }
 .sb-row.is-dir .sb-name { font-weight: 550; }
+/* 键盘光标（0.2.x）。**只在树自己有焦点时画** —— 它说的是「方向键此刻会作用在哪一行」，
+   焦点一走这件事就不成立了，留着会和「当前正在编辑的那份」抢着被读成「选中」。
+   只描一圈边、不填底色，同 `.sb-row.is-context` 的分寸 */
+.sb-tree:focus { outline: none; }
+.sb-tree:focus .sb-row.is-cursor .sb-item {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 
 .sb-name {
   min-width: 0;
@@ -1247,7 +1292,22 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
   overflow-x: auto;
   user-select: none;
   -webkit-user-select: none;
+  /* 拖拽重排的落点线要按这根轴定位（它是绝对定位、出流，不参与标签等分） */
+  position: relative;
 }
+/* 落点线：与大纲的 `.ol-drop` 同一套长相，只是转了 90° */
+.tab-drop {
+  position: absolute;
+  top: 6px;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+/* 被拖着的那个压暗（同 `.ol-row.is-dragging`）—— 手上带着的是它，原位那份只是影子 */
+.tab-item.is-dragging { opacity: 0.45; }
 .tab-item {
   display: flex;
   align-items: center;

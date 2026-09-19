@@ -105,6 +105,18 @@ describe('脚注引用', () => {
   it('一条定义都没有就不弹', () => {
     expect(complete('正文[^|')).toBeNull()
   })
+
+  it('标签里带空格的不是定义，不列出来', () => {
+    // 这里本来自带一份比解析器松的正则（`[^\]]+`），列出来的 `[^注 二]` 插进正文
+    // 既没定义可跳、也换不出角标。四处共用 markdown-lang.ts 的 FOOTNOTE_DEF
+    const doc = ['正文[^|', '', '[^注一]: 第一条', '[^注 二]: 标签里有空格'].join('\n')
+    expect(labels(complete(doc))).toEqual(['[^注一]'])
+  })
+
+  it('detail 是定义正文，冒号后的空格不算进去', () => {
+    const r = complete(['正文[^|', '', '[^注一]:   第一条'].join('\n'))
+    expect(r?.options[0]?.detail).toBe('第一条')
+  })
 })
 
 describe('标题锚点', () => {

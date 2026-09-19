@@ -4,6 +4,8 @@ import type TurndownService from 'turndown'
 import { configureTurndown } from './paste-rules'
 import { destLiteral } from './link'
 import { docDir } from './live-preview'
+import { t } from '../i18n'
+import { note } from '../ui/note'
 
 /**
  * P2-4 智能粘贴。
@@ -91,6 +93,8 @@ async function pasteClipboardImage(view: EditorView): Promise<void> {
   const dir = view.state.facet(docDir)
   const res = await window.api.pasteImage(dir)
   if (!res) return
+  // 同 Finder 拖进来那条路：截图是被**写进了 assets/**，落到哪儿要说一句
+  note(t('note.imageSaved', { path: res.relPath }))
   const alt = res.relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
   // 带空格的文件名括进 <…>（见 link.ts 的 destLiteral）：写出去的链接要在别处也成立
   insertText(view, `![${alt}](${destLiteral(res.relPath)})`)

@@ -49,6 +49,8 @@ const GENERAL: Entry[] = [
   { action: 'file:save', labelKey: 'cmd.save', hint: '⌘S' },
   { action: 'file:save-as', labelKey: 'cmd.saveAs', hint: '⇧⌘S' },
   { action: 'file:close-tab', labelKey: 'cmd.closeTab', hint: '⌘W' },
+  { action: 'file:next-tab', labelKey: 'cmd.nextTab', hint: '⌃⇥' },
+  { action: 'file:prev-tab', labelKey: 'cmd.prevTab', hint: '⌃⇧⇥' },
   { action: 'file:history', labelKey: 'cmd.history' },
   { action: 'file:export-html', labelKey: 'cmd.exportHtml', hint: '⇧⌘E' },
 

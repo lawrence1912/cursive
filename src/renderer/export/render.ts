@@ -8,9 +8,9 @@ import { INLINE_MARKS } from '../editor/inline-text'
 import { autolinkUrl, collectRefs, linkDest, refKey, safeUrl } from '../editor/link'
 import { fenceParts, langLabel } from '../editor/live-preview/code'
 import { calloutAt, parseImage } from '../editor/live-preview/decorate'
-import { katexNow } from '../editor/live-preview/widgets'
+import { footnoteLabels, katexNow } from '../editor/live-preview/widgets'
 import { type CellToken, type TableData, tableDataAt } from '../editor/live-preview/table'
-import { resolveCodeLang } from '../editor/markdown-lang'
+import { FOOTNOTE_DEF, resolveCodeLang } from '../editor/markdown-lang'
 import { parsedTree } from '../editor/syntax'
 import { t } from '../i18n'
 import { icon } from '../ui/icons'
@@ -68,6 +68,8 @@ interface Ctx {
   refs: Map<string, string>
   /** 已经发过号的脚注引用：同一个 label 只有第一处带 id，回跳才有唯一落点 */
   seenRefs: Set<string>
+  /** 全文定义过的脚注标签：没在里面的引用是悬空的，不发链接 */
+  fnDefs: Set<string>
   mermaid: MermaidBlock[]
 }
 
@@ -324,6 +326,9 @@ function absPath(ctx: Ctx, src: string): string | null {
 function renderFootnoteRef(ctx: Ctx, node: SyntaxNode): string {
   const label = /^\[\^([^\s\]]+)\]$/.exec(ctx.doc.sliceString(node.from, node.to))?.[1]
   if (!label) return text(ctx, node.from, node.to)
+  // 没有对应定义就原样输出字面量：发出去的 `#fn-label` 是个死锚点，点了停在原地。
+  // 编辑器同款（decorate.ts 也不把它换成角标），两边说的是同一句话
+  if (!ctx.fnDefs.has(label)) return text(ctx, node.from, node.to)
   // 同一个 label 引用多次时只有第一处带 id：回跳链接需要唯一落点
   const first = !ctx.seenRefs.has(label)
   ctx.seenRefs.add(label)
@@ -338,6 +343,21 @@ function blocks(ctx: Ctx, parent: SyntaxNode, from = parent.from, to = parent.to
   for (let child = parent.firstChild; child; child = child.nextSibling) {
     if (child.to <= from) continue
     if (child.from >= to) break
+    // 连着摞的脚注定义并进同一个脚注区。解析器按定义逐条出节点（见 markdown-lang.ts），
+    // 而 `.footnotes` 自带 2em 上边距和一道上边框 —— 一条一个容器，文末就摞出好几道分隔线
+    if (child.name === 'FootnoteDefinition') {
+      const run: SyntaxNode[] = [child]
+      for (
+        let next = child.nextSibling;
+        next && next.name === 'FootnoteDefinition' && next.from < to;
+        next = next.nextSibling
+      ) {
+        run.push(next)
+        child = next
+      }
+      out += renderFootnoteDefs(ctx, run)
+      continue
+    }
     out += block(ctx, child)
   }
   return out
@@ -407,7 +427,8 @@ function block(ctx: Ctx, node: SyntaxNode): string {
     }
 
     case 'FootnoteDefinition':
-      return renderFootnoteDefs(ctx, node)
+      // 正常路径上 blocks() 已经把连着的几条并成一段了，这里只兜底单节点
+      return renderFootnoteDefs(ctx, [node])
 
     case 'TocBlock':
       return renderToc(ctx)
@@ -571,29 +592,37 @@ function tokenHtml(tok: CellToken): string {
 }
 
 /**
- * 脚注定义。一个 `FootnoteDefinition` 节点可能装着**连续几条**定义
- * （解析器按空行收尾，中间不断行），所以这里按 `[^label]:` 切开。
+ * 一段脚注定义（`blocks()` 攒好的一串相邻节点）渲染成**一个**脚注区。
+ *
+ * 每个节点内部仍按 `FOOTNOTE_DEF` 切一遍：解析器如今逐条出节点，但续行要并进上一条，
+ * 而且这样对着老文档（合成一个节点的那种树）也仍然切得开。
  */
-function renderFootnoteDefs(ctx: Ctx, node: SyntaxNode): string {
-  const start = node.from
-  const raw = ctx.doc.sliceString(node.from, node.to)
-  const items: { label: string; from: number; to: number }[] = []
-  let offset = 0
-  for (const line of raw.split('\n')) {
-    const m = /^\[\^([^\s\]]+)\]:[ \t]*/.exec(line)
-    if (m) {
-      items.push({ label: m[1]!, from: start + offset + m[0].length, to: start + offset + line.length })
-    } else if (items.length) {
-      // 续行并进上一条
-      items[items.length - 1]!.to = start + offset + line.length
+function renderFootnoteDefs(ctx: Ctx, nodes: SyntaxNode[]): string {
+  const items: { label: string; node: SyntaxNode; from: number; to: number }[] = []
+  for (const node of nodes) {
+    const start = node.from
+    let offset = 0
+    for (const line of ctx.doc.sliceString(node.from, node.to).split('\n')) {
+      const m = FOOTNOTE_DEF.exec(line)
+      if (m) {
+        items.push({
+          label: m[1]!,
+          node,
+          from: start + offset + m[0].length,
+          to: start + offset + line.length
+        })
+      } else if (items.length && items[items.length - 1]!.node === node) {
+        // 续行并进上一条（只在同一个节点内并，跨节点那是下一条定义的事）
+        items[items.length - 1]!.to = start + offset + line.length
+      }
+      offset += line.length + 1
     }
-    offset += line.length + 1
   }
-  if (!items.length) return `<p>${inline(ctx, node)}</p>\n`
+  if (!items.length) return nodes.map((n) => `<p>${inline(ctx, n)}</p>\n`).join('')
 
   let out = '<div class="footnotes">\n<ol>\n'
   for (const item of items) {
-    const body = inline(ctx, node, item.from, item.to).trim()
+    const body = inline(ctx, item.node, item.from, item.to).trim()
     out +=
       `<li id="fn-${attr(item.label)}"><span class="footnote-label">${escapeHtml(item.label)}</span> ` +
       `${body} <a class="footnote-back" href="#fnref-${attr(item.label)}">&#8617;</a></li>\n`
@@ -632,6 +661,7 @@ export function renderBody(state: EditorState, opts: ExportOpts = {}): RenderRes
     slugOf,
     refs: collectRefs(state),
     seenRefs: new Set(),
+    fnDefs: footnoteLabels(state),
     mermaid: []
   }
 

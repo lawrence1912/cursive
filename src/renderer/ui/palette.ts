@@ -31,7 +31,29 @@ export interface PaletteItem {
   labelAt?: number
   /** 按路径打分（文件名权重高于目录，见 fuzzy.ts） */
   path?: boolean
-  run: () => void | Promise<void>
+  /**
+   * 选中它时执行。`query` 是**选中那一刻输入框里的原串** —— 0.2.x 的「跳到行」
+   * 要读它末尾那截 `:120`（那截不参与匹配，见 `PaletteQuery`）。
+   * 不需要的条目忽略它即可，这也是原来那批一个字都不用改的原因
+   */
+  run: (query: string) => void | Promise<void>
+}
+
+/**
+ * 查询预处理的结果（0.2.x「跳到行」）。
+ *
+ * 面板自己只会做一件事：拿输入框里的串去模糊匹配。而 `readme:120` 里的 `:120`
+ * **不该参与匹配**（没有哪个文件名里有它，一打冒号整排结果就空了），
+ * 光写 `:120` 时想要的更不是一份文件清单。于是把「这次查询到底是什么意思」
+ * 交给开面板的人说，面板只认这三个字段。
+ */
+export interface PaletteQuery {
+  /** 真正拿去模糊匹配的那一串（尾巴已经摘掉） */
+  query: string
+  /** 排在最前面的现成条目。**不参与匹配** —— 它们本来就是照着这次查询造出来的 */
+  items?: PaletteItem[]
+  /** 只列上面那几条：光写 `:120` 时，底下再跟一整排文件只会碍事 */
+  only?: boolean
 }
 
 /** 最多画这么多行。4000 条文件全画出来只会让第一次按键卡住 —— 没人会翻到第 51 条 */
@@ -80,6 +102,8 @@ export class Palette {
   private lastFocus: HTMLElement | null = null
   /** 开着时挂在 window 上的那颗 Esc（见 `bindEscape`），关掉时要摘干净 */
   private unbindEscape: (() => void) | null = null
+  /** 查询预处理（0.2.x 跳到行）。null = 输入什么就匹配什么 */
+  private prepare: ((raw: string) => PaletteQuery) | null = null
 
   constructor() {
     this.el = document.createElement('div')
@@ -121,9 +145,16 @@ export class Palette {
   }
 
   /** 开面板。文案在开的那一刻现取 —— 面板是临时的，不需要跟着 langchange 重刷 */
-  open(items: PaletteItem[], placeholder: string, emptyKey: Key): void {
+  open(
+    items: PaletteItem[],
+    placeholder: string,
+    emptyKey: Key,
+    /** 查询预处理（0.2.x）。不给 = 输入什么就拿什么去匹配，与从前完全一样 */
+    prepare?: (raw: string) => PaletteQuery
+  ): void {
     this.items = items
     this.emptyKey = emptyKey
+    this.prepare = prepare ?? null
     this.lastFocus = document.activeElement as HTMLElement | null
     this.input.value = ''
     this.input.placeholder = placeholder
@@ -161,6 +192,7 @@ export class Palette {
     this.unbindEscape = null
     this.items = []
     this.shown = []
+    this.prepare = null
     this.listEl.textContent = ''
     this.lastFocus?.focus()
   }
@@ -192,21 +224,35 @@ export class Palette {
     if (!pick) return
     // 先关再跑：`run` 多半要把焦点放进编辑器，关面板会把焦点抢回 lastFocus，
     // 顺序反了的话光标最后落在面板刚消失的位置上
+    // 原串要在 `close()` 之前取：关面板会清空输入框
+    const raw = this.input.value
     this.close()
-    void pick.item.run()
+    void pick.item.run(raw)
   }
 
   private refilter(): void {
-    const q = this.input.value.trim()
-    const scored: Scored[] = []
-    for (const item of this.items) {
+    const raw = this.input.value.trim()
+    const prepared = this.prepare?.(raw)
+    const q = prepared ? prepared.query : raw
+    // 现成条目排在最前面，且不参与打分：`hit` 给一份空的（没有要加粗的字）
+    const scored: Scored[] = (prepared?.items ?? []).map((item) => ({
+      item,
+      hit: { score: 0, positions: [] }
+    }))
+    for (const item of prepared?.only ? [] : this.items) {
       const key = item.key ?? item.label
       const hit = item.path ? fuzzyPath(q, key) : fuzzy(q, key)
       if (hit) scored.push({ item, hit })
     }
     // 空查询保持原序（命令面板按菜单顺序、文件按路径序），有查询才按分排。
-    // `sort` 在 V8 上是稳定的，同分的条目于是仍按原序
-    if (q) scored.sort((a, b) => b.hit.score - a.hit.score)
+    // `sort` 在 V8 上是稳定的，同分的条目于是仍按原序。
+    // **现成条目要留在最前面**：它们的分是 0，所以只排匹配出来的那一段
+    const fixed = prepared?.items?.length ?? 0
+    if (q) {
+      const rest = scored.slice(fixed).sort((a, b) => b.hit.score - a.hit.score)
+      scored.length = fixed
+      scored.push(...rest)
+    }
     this.shown = scored.slice(0, RENDER_LIMIT)
     this.cursor = 0
     this.paint()

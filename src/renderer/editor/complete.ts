@@ -10,6 +10,7 @@ import { calloutTypes } from './callout'
 import { EMOJI } from './emoji'
 import { collectHeadings, slugs } from './headings'
 import { langOptions } from './live-preview/code'
+import { FOOTNOTE_DEF } from './markdown-lang'
 import { slashIcon, slashSource } from './slash'
 
 /**
@@ -110,19 +111,23 @@ const calloutSource: CompletionSource = (cx) => {
 
 // ---------------------------------------------------------------- 脚注
 
-const FOOTNOTE_DEF = /^\[\^([^\]]+)\]:\s*(.*)$/
-
-/** 文档里已有的脚注定义。补全列的是「已经定义过的」—— 现编一个 id 不需要补全帮忙 */
+/**
+ * 文档里已有的脚注定义。补全列的是「已经定义过的」—— 现编一个 id 不需要补全帮忙。
+ * 定义的形状走 `markdown-lang.ts` 那份 `FOOTNOTE_DEF`：这里本来自带一份
+ * `[^\]]+`（标签里允许空格），比解析器松，列出来的 `[^a b]` 插进正文既没定义可跳、
+ * 也换不出角标 —— 补全只该列解析器认的东西。
+ */
 function footnotes(cx: CompletionContext): Completion[] {
   const out: Completion[] = []
   const seen = new Set<string>()
   for (let i = 1; i <= cx.state.doc.lines; i++) {
-    const m = FOOTNOTE_DEF.exec(cx.state.doc.line(i).text)
+    const text = cx.state.doc.line(i).text
+    const m = FOOTNOTE_DEF.exec(text)
     if (!m || seen.has(m[1]!)) continue
     seen.add(m[1]!)
     out.push({
       label: `[^${m[1]!}]`,
-      detail: m[2]!.slice(0, 40),
+      detail: text.slice(m[0].length, m[0].length + 40),
       type: 'variable',
       apply: applyWith(`[^${m[1]!}]`, ']', 'consume')
     })

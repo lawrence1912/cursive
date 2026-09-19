@@ -145,6 +145,8 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.window":      ["窗口", "Window"],
     "win.minimize":     ["最小化", "Minimize"],
     "win.zoom":         ["缩放", "Zoom"],
+    "win.nextTab":      ["下一个标签", "Next Tab"],
+    "win.prevTab":      ["上一个标签", "Previous Tab"],
     // ---- 最近文件 ----
     "recent.none":  ["（暂无）", "(None)"],
     "recent.clear": ["清除最近", "Clear Recent"],
@@ -248,6 +250,16 @@ func applyStartupAppearance() {
 let ZOOM_MIN: CGFloat = 0.5
 let ZOOM_MAX: CGFloat = 3.0
 
+/// 夹住 + 记住的页面缩放。**菜单那三条（⌘+ / ⌘− / ⌘0）与触控板捏合共用这一条** ——
+/// 各写一遍的话迟早有一边忘了夹（连按十下能把界面缩到点不中任何东西）或者忘了记。
+func applyPageZoom(_ webView: WKWebView, _ z: CGFloat) {
+    let clamped = min(max(z, ZOOM_MIN), ZOOM_MAX)
+    // 捏合每秒来几十个事件，值没变就别写 UserDefaults
+    guard abs(webView.pageZoom - clamped) > 0.0001 else { return }
+    webView.pageZoom = clamped
+    UserDefaults.standard.set(Double(clamped), forKey: "pageZoom")
+}
+
 let BRIDGE_JS = """
 (() => {
   // 把渲染进程的报错转发给原生（定位初始化失败用）
@@ -290,6 +302,7 @@ let BRIDGE_JS = """
     createFile: (dir) => call('createFile', [dir]),
     createFolder: (dir) => call('createFolder', [dir]),
     trashItem: (path) => call('trashItem', [path]),
+    restoreItem: (trashed, to) => call('restoreItem', [trashed, to]),
     renameItem: (path) => call('renameItem', [path]),
     moveItem: (src, destDir) => call('moveItem', [src, destDir]),
     revealInFinder: (path) => call('revealInFinder', [path]),
@@ -523,6 +536,26 @@ final class MainWebView: WKWebView {
         if smokeAuto { return true }
         if event.modifierFlags.contains(.command) { return false }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /**
+     * 触控板捏合缩放（0.2.x）。
+     *
+     * ⌘+ / ⌘− / ⌘0 早就有了（而且会记住、会夹住），可在 macOS 上「两指一捏」才是
+     * 最自然的那一下 —— Safari、预览、地图、Finder 全是这个手势，缺了它就会一直
+     * 有人对着屏幕捏一下然后发现没反应。
+     *
+     * 走 `pageZoom` 而不是 WKWebView 的 `allowsMagnification`：后者是**视觉放大**
+     * （像举个放大镜，正文不重新折行，还会多出一条横向滚动条），而这个应用要的是
+     * 「字变大、版心跟着重排」，与 ⌘+ 完全同一件事。
+     *
+     * `magnification` 是这一小段手势的**增量**，所以乘上去而不是加上去 ——
+     * 缩放是比例的事，用加法的话在 0.5 和 3.0 两头的手感差得离谱。
+     * 自检下不接：探针里有一批按像素来的断言。
+     */
+    override func magnify(with event: NSEvent) {
+        if smokeAuto { return }
+        applyPageZoom(self, pageZoom * (1 + event.magnification))
     }
 
     /// 注册文件 URL 拖入（判断 3：渲染层拿不到真实路径，拖拽由壳接管）
@@ -1228,6 +1261,40 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
         return nil
     }
 
+    /**
+     * NFKC **折不回来**的那一批（0.2.x 补）。
+     *
+     * 上面那条注释说的是康熙部首区（U+2F00–U+2FD5），它有兼容分解，NFKC 能折回去。
+     * 但 PingFang 印出来的 PDF 里还有一批字落在**「CJK 部首补充」区**
+     * （U+2E80–U+2EF3，简体部首形），而**那个区没有任何兼容分解** ——
+     * `⻓`(U+2ED3) 折完还是 `⻓`，与文档里的 `长`(U+957F) 永远对不上，
+     * 于是标题里只要有「长 / 页 / 见 / 车 / 门 / 马」这类字，那一条书签就定位不到。
+     *
+     * **这是导出跟随字体设置之后才浮出来的**：衬线那套（Georgia + Songti SC）不走这条路，
+     * 换成无衬线（PingFang SC）才会。顺带说清楚代价：这类 PDF 在**任何**阅读器里
+     * 搜「长文档」也搜不到 —— 那是 WebKit 给 PingFang 写 ToUnicode 时的老毛病，
+     * 不在这个应用能改的范围里；这里能做到的是**我们自己的书签照样定位得准**。
+     *
+     * 表是**量出来的**，不是猜的：把本仓库全部中文里的 1340 个不同汉字排成一篇印成 PDF，
+     * 再把抽出来的文本逐字与原字比对。要重新生成就照这个办法再跑一遍。
+     * 每条都是 1 个字 → 1 个字，长度不变 —— `foldCompat` 的下标必须原样对得上。
+     */
+    private static let GLYPH_FIX: [UInt32: UInt32] = [
+        0x2E8E: 0x5140, 0x2EC4: 0x897F, 0x2EC5: 0x89C1, 0x2EC6: 0x89D2, 0x2EC9: 0x8D1D,
+        0x2ECB: 0x8F66, 0x2ED3: 0x957F, 0x2ED4: 0x95E8, 0x2EDA: 0x9875, 0x2EDB: 0x98CE,
+        0x2EDC: 0x98DE, 0x2EDD: 0x98DF, 0x2EE2: 0x9A6C, 0x2EE3: 0x9AA8, 0x2EE5: 0x9C7C,
+        0x2EE9: 0x9EC4, 0x2EEC: 0x9F50, 0x2EF0: 0x9F99,
+        // 部首之外还有一个：PingFang 把「胶」的字形映到了 CJK 扩展 A 区的 㬵
+        0x3B35: 0x80F6
+    ]
+
+    /// 表里有就换过来（1:1，长度不变）；没有原样返回
+    private static func fixGlyph(_ s: String) -> String {
+        guard s.unicodeScalars.count == 1, let from = s.unicodeScalars.first?.value,
+              let to = GLYPH_FIX[from], let scalar = Unicode.Scalar(to) else { return s }
+        return String(Character(scalar))
+    }
+
     /// 逐字兼容分解（NFKC）。保证输出与输入的 UTF-16 长度逐字相等 ——
     /// 折出来长度变了的那个字就原样留着，宁可它匹配不上，也不能让整串的下标错位
     static func foldCompat(_ s: String) -> NSString {
@@ -1237,7 +1304,7 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
         while i < ns.length {
             let r = ns.rangeOfComposedCharacterSequence(at: i)
             let piece = ns.substring(with: r)
-            let folded = piece.precomposedStringWithCompatibilityMapping
+            let folded = fixGlyph(piece.precomposedStringWithCompatibilityMapping)
             out.append((folded as NSString).length == r.length ? folded : piece)
             i = r.location + r.length
         }
@@ -1267,9 +1334,9 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
 // 走 Operation 是为了可取消 —— 边打字边搜时，上一次搜索要能在半路停下，
 // 否则一个大目录的结果会追着新查询往回喷。
 // 结果**按文件成批**回推（一个文件的命中一起发）：既是天然的批次，也正好是 UI 的分组单位。
-/// 「哪些目录不进、哪些后缀算文档」—— 跨文件搜索（P3-2）与快速打开的文件索引（0.2.0）
-/// 用的是同一套判断。各写一份的话，两处迟早在某次加后缀时分道扬镳：
-/// 搜得到的文件在快速打开里找不着，是最难自查的那种不一致。
+/// 「哪些目录不进、哪些后缀算文档」—— 跨文件搜索（P3-2）、快速打开的文件索引（0.2.0）
+/// 与文件树（readDir 的后缀过滤）用的是同一套判断。各写一份的话，两处迟早在某次
+/// 加后缀时分道扬镳：搜得到的文件在树里看不见、快速打开里找不着，是最难自查的那种不一致。
 enum DocScan {
     /// 目录名黑名单：这些目录里的 .md 是依赖或产物，不是用户的文档
     static let skipDirs: Set<String> = ["node_modules", "dist", "out", "build", "vendor", "Pods", ".git"]
@@ -2162,6 +2229,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                     var isDir: ObjCBool = false
                     let p = "\(path)/\(name)"
                     _ = fm.fileExists(atPath: p, isDirectory: &isDir)
+                    // 文件树只放「能打开的文档」（与 DocScan.exts 同一套白名单）和目录：
+                    // 本编辑器打不开的文件进了树，点了也只是白报一次错
+                    if !isDir.boolValue,
+                       !DocScan.exts.contains((name as NSString).pathExtension.lowercased()) {
+                        continue
+                    }
                     entries.append(["name": name, "path": p, "isDir": isDir.boolValue])
                 }
             }
@@ -2194,7 +2267,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         case "trashItem":
             // 一律进废纸篓，不用 removeItem —— 误删能在 Finder 里找回
             guard let victim = safeTarget(args[0] as? String ?? ""),
-                  FileManager.default.fileExists(atPath: victim) else { respond(id, false); break }
+                  FileManager.default.fileExists(atPath: victim) else { respond(id, NSNull()); break }
             if !smokeAuto {
                 let alert = NSAlert()
                 let name = (victim as NSString).lastPathComponent
@@ -2202,11 +2275,34 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 alert.informativeText = isDirectory(victim) ? L("dlg.trash.folder") : L("dlg.trash.body")
                 alert.addButton(withTitle: L("dlg.trash.ok"))
                 alert.addButton(withTitle: L("dlg.cancel"))
-                guard alert.runModal() == .alertFirstButtonReturn else { respond(id, false); break }
+                guard alert.runModal() == .alertFirstButtonReturn else { respond(id, NSNull()); break }
             }
             do {
+                // 契约 v25：把**落点**带回去。只有这儿知道它被放到了废纸篓的哪个名字下
+                // （同名冲突时系统会改名），而那是状态栏那颗「撤销」唯一的线索
+                var landed: NSURL?
                 try FileManager.default.trashItem(
-                    at: URL(fileURLWithPath: victim), resultingItemURL: nil)
+                    at: URL(fileURLWithPath: victim), resultingItemURL: &landed)
+                respond(id, ["trashed": (landed as URL?)?.path ?? ""])
+            } catch {
+                alertError(L("err.trash"), error.localizedDescription)
+                respond(id, NSNull())
+            }
+
+        case "restoreItem":
+            // 契约 v25 撤销删除。**两道闸，方向相反**：
+            //   · 源头必须真的在废纸篓里 —— `safeTarget` 在这儿用不上（废纸篓本来就不在
+            //     树根底下），换成「路径里有 .Trash 那一节」这条。两种形状都要认：
+            //     主盘是 `~/.Trash/…`，外置盘是 `/Volumes/X/.Trashes/<uid>/…`；
+            //   · 落点照旧过 `safeTarget`，而且**此刻必须不存在** —— 删掉之后又新建了
+            //     同名文件时宁可撤不回来，也不能悄悄盖掉那个新文件。
+            let from = ((args[0] as? String ?? "") as NSString).standardizingPath
+            guard from.contains("/.Trash/") || from.contains("/.Trashes/") else { respond(id, false); break }
+            guard FileManager.default.fileExists(atPath: from),
+                  let back = safeTarget(args[1] as? String ?? ""),
+                  !FileManager.default.fileExists(atPath: back) else { respond(id, false); break }
+            do {
+                try FileManager.default.moveItem(atPath: from, toPath: back)
                 respond(id, true)
             } catch {
                 alertError(L("err.trash"), error.localizedDescription)
@@ -3216,15 +3312,17 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 搬进目录里 = 缩进变深了；顺带证明目标目录被自动展开
             moved = dropShown && !!landed && parseFloat(landed.style.paddingLeft || '0') > 4
           }
+          // 顺手过一遍懒加载展开：目录行读得出子项，子项缩进比父级深。
+          // 得在删除之前数 —— 搬进 assets 的那份是当时唯一的子行；树里只放
+          // 能打开的文档之后，assets 里的 png 不再进树，删完就数不到东西了
+          const nested = [...document.querySelectorAll('.sb-row')]
+            .some((r) => parseFloat(r.style.paddingLeft || '0') > 4)
           const gone = rowNamed('e2e-改名')
           if (gone) {
             await rowContext(gone)
             await clickItem('删除文件')
             deleted = !rowNamed('e2e-改名')
           }
-          // 顺手过一遍懒加载展开：目录行读得出子项，子项缩进比父级深
-          const nested = [...document.querySelectorAll('.sb-row')]
-            .some((r) => parseFloat(r.style.paddingLeft || '0') > 4)
           // P2-9 完全折叠：先确保真有展开的目录，再点工具栏那颗 —— 深缩进的行该一次全收
           const deep = () => [...document.querySelectorAll('.sb-row')]
             .filter((r) => parseFloat(r.style.paddingLeft || '0') > 4).length
@@ -3374,6 +3472,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const texts = () => rows().map(r => r.querySelector('.ol-text').textContent)
           const wait = (ms) => new Promise(r => setTimeout(r, ms))
           const twistOf = (pos) => document.querySelector('.ol-row[data-pos="' + pos + '"] .ol-twist')
+          // **先把层级档位摆回「全部」**：它是 localStorage 记着的（`cursive.outlineLevel`），
+          // 上一轮探针要是在中途抛了异常，就会停在「只看一级」上 —— 下一轮里
+          // 「降一级」把唯一那个标题变成二级，大纲当场空掉，`rows()[0]` 直接炸
+          // （真摔过：table.md 连着三轮同一个 TypeError）。自检要一个确定的起点，同契约 v24
+          document.querySelector('.ol-levels button[data-level="6"]').click()
+          await wait(80)
           const all = rows().length
           const words = [...document.querySelectorAll('.ol-words')].map(e => Number(e.textContent))
 
@@ -3746,7 +3850,20 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         if (path.indexOf('links.md') >= 0) {
           try {
             const modClick = (el) => {
-              const b = el.getBoundingClientRect()
+              /*
+               * **先滚进视口再点。** 探针按元素的 rect 派事件，而链接处理器是**按坐标
+               * 反查文档位置**的（`editor/link.ts` 走 `posAtCoords`）—— 元素在视口外时，
+               * 那个坐标落在渲染范围之外，CM 只能把它夹到文末：实测「别的文档」这一下
+               * 解析到了 `external-append-marker` 那一行，于是「点了没反应」，
+               * 看着像链接不通，其实是点在了别处。真人也只能点看得见的东西。
+               * 居中还顺带躲开底部那条悬浮格式栏。
+               */
+              el.scrollIntoView({ block: 'center' })
+              // **取第一个 client rect，不是包围盒**：一行里摞着好几条链接时，长的那条
+              // 会折到下一行，而包围盒是所有折行的并集 —— 它的中点落在第二行上，
+              // 甚至落到底部悬浮格式栏后面（实测 h=48、命中 `.fb-pick`，于是这一下
+              // 点了什么也没发生，看着像「链接不通」，其实是探针点歪了）
+              const b = el.getClientRects()[0] || el.getBoundingClientRect()
               // 点在链接文字的**左端**：光标恰好停在这一行时地址会回显成源码，
               // 中点就落到 `](…)` 那半边去了（仍是同一个 Link 节点，但离得远不如左端稳）
               el.dispatchEvent(new MouseEvent('mousedown', {
@@ -3765,6 +3882,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
               if (tab) tab.click()
               await new Promise((r) => setTimeout(r, 300))
             }
+            // **先把状态栏那句话清空**：这一节里有三条断言的内容是「这一下不该报错」
+            // （angNote / pctNote / bareNote 必须是空的），而上一节刚跑完的复制为富文本
+            // 会在状态栏留一句 4 秒的回执 —— 不清的话那句话会被当成这一下的抱怨。
+            // 自检要一个确定的起点，同大纲层级档位那条
+            document.getElementById('status-note').textContent = ''
             // 悬停提示：预览里地址是藏着的，title 是「这条链接通向哪儿」的唯一线索
             const title = linkBy('跳到小节').getAttribute('title')
             // ① 本文锚点 → 光标落到那一节的标题上
@@ -3898,7 +4020,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                         // 目检开关：截图前把跨文件搜索面板留在开着的状态
                         "shotSearch": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_SEARCH"] != nil,
                         // 崩溃恢复那一轮（种了草稿 + 拖慢应答）末尾也开第二个窗口
-                        "secondWindow": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SCRATCH_DELAY"] != nil],
+                        "secondWindow": ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SCRATCH_DELAY"] != nil,
+],
             in: nil, in: .page
         ) { [weak self] result in
             guard let self else { return }
@@ -4329,6 +4452,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.addItem(NSMenuItem(title: L("win.minimize"), action: Selector(("performMiniaturize:")), keyEquivalent: "m"))
         win.addItem(NSMenuItem(title: L("win.zoom"), action: Selector(("performZoom:")), keyEquivalent: ""))
         win.addItem(.separator())
+        // 标签循环（0.2.x）。**必须是菜单项**：⌃Tab 落进 WKWebView 首先是 CodeMirror
+        // 的事，而菜单的 performKeyEquivalent 排在所有键盘处理之前（判断 1 的同一条）。
+        // 摆在「窗口」里也是与 Safari / Finder 同一个位置，顺带让这两条键看得见。
+        // keyEquivalent 的 "\t" 就是 Tab —— AppKit 自己会把它画成 ⌃⇥ / ⌃⇧⇥
+        win.addItem(item(L("win.nextTab"), "file:next-tab", key: "\t", modifiers: .control))
+        win.addItem(item(L("win.prevTab"), "file:prev-tab", key: "\t", modifiers: [.control, .shift]))
+        win.addItem(.separator())
         winItem.submenu = win
         // 交给 AppKit 自动维护窗口列表（标题来自 window.title，setDocState 每次都在刷）
         NSApp.windowsMenu = win
@@ -4419,9 +4549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func resetZoom(_ sender: Any?) { key.map { setZoom($0, 1.0) } }
 
     private func setZoom(_ wc: WindowController, _ z: CGFloat) {
-        let clamped = min(max(z, ZOOM_MIN), ZOOM_MAX)
-        wc.webView.pageZoom = clamped
-        UserDefaults.standard.set(Double(clamped), forKey: "pageZoom")
+        applyPageZoom(wc.webView, z)
     }
 
 }

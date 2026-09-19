@@ -53,6 +53,31 @@ export function rememberTree(state: EditorState, tree: Tree, upto: number): void
   if (!hit || hit.upto < upto) treeCache.set(state, { upto, tree })
 }
 
+/**
+ * **导出专用：不接受半截树**（0.2.x）。
+ *
+ * `parsedTree` 的最后一句是「ensure 超预算就退回快照」—— 对屏幕上的消费者这是对的：
+ * 有多少画多少，后台 parse 推进到了自然会补上。可**导出这条路只有一次机会**，
+ * 少的那一截不是暂时没画出来，而是**交出去的那份文件里没有的内容**，而且没人会发现
+ * （产物看着完好，只是短了一半）。真摔过：探针里偶发地只导出文档的前三分之一
+ * （kitchen-sink 1005 字的文档，正文停在代码围栏之前）。
+ *
+ * 默认那 50ms 是给**每一次按键**定的预算；一次导出是一次性动作，给它 5 秒不心疼
+ * （`ensureSyntaxTree` 的 timeout 单位是毫秒，同 `code.ts` 那处）。
+ * 确保到手之后记进同一份缓存，随后 `renderBody` 里的每一次 `parsedTree` 都直接命中。
+ *
+ * 仍然可能拿不到全长（真的超大文档 + 真的 5 秒不够）—— 那时返回手上最长的那棵，
+ * 与从前一样，但那已经是另一个数量级的问题。
+ */
+export function primeTree(state: EditorState, timeout = 5000): Tree {
+  const want = state.doc.length
+  const hit = treeCache.get(state)
+  if (hit && hit.upto >= want) return hit.tree
+  const tree = ensureSyntaxTree(state, want, timeout) ?? syntaxTree(state)
+  rememberTree(state, tree, Math.min(tree.length, want))
+  return tree
+}
+
 export function parsedTree(state: EditorState, upto = state.doc.length): Tree {
   const hit = treeCache.get(state)
   if (hit && hit.upto >= upto) return hit.tree

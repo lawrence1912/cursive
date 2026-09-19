@@ -63,6 +63,41 @@ describe('BRIDGE_JS', () => {
     expect(seen, '退订之后不该再收到').toHaveLength(1)
   })
 
+  /**
+   * 契约对账（0.2.x 补）。`CursiveApi` 是一份**宣称**，`BRIDGE_JS` 是嵌在 Swift 字符串里的
+   * 实现，壳侧那个 switch 是第三处 —— 三处各写一遍，漏一处的后果各不相同：
+   * 桥里漏 = `window.api.x is not a function`；壳里漏 = promise 永远不 resolve（最难查的一种）。
+   * 于是把三份名单摆在一起比。加一条新通道（这一轮的 `restoreItem` 就是）时，
+   * 少写任何一处，这两条测试当场变红。
+   */
+  it('契约里宣称的每个方法，桥上都真的有', () => {
+    const { api } = loadBridge()
+    const src = readFileSync(new URL('../src/shared/types.ts', import.meta.url), 'utf8')
+    const body = src.slice(src.indexOf('export interface CursiveApi'))
+    const declared = [...body.matchAll(/^ {2}([a-zA-Z]\w*)\s*\(/gm)].map((m) => m[1]!)
+    expect(declared.length, '解析没抠到东西？锚点要跟着改').toBeGreaterThan(30)
+    expect(declared.filter((name) => typeof api[name] !== 'function')).toEqual([])
+    // 反过来也要：桥上多出来的方法没人在契约里写，类型层就看不见它
+    const extra = Object.keys(api).filter((k) => !k.startsWith('_') && !declared.includes(k))
+    expect(extra).toEqual([])
+  })
+
+  it('桥上每个 call() 在壳侧都有对应的 case —— 少一条就是「promise 永远不 resolve」', () => {
+    const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+    const head = swift.indexOf('let BRIDGE_JS = """')
+    const from = swift.indexOf('\n', head) + 1
+    const js = swift.slice(from, swift.indexOf('\n"""', from))
+    const called = [...new Set([...js.matchAll(/call\('([^']+)'/g)].map((m) => m[1]!))]
+    expect(called.length).toBeGreaterThan(30)
+    // `case "save", "saveAs":` 这种一行两个的也要认，所以按行抠引号里的名字
+    const handled = new Set<string>()
+    for (const line of swift.split('\n')) {
+      if (!line.trim().startsWith('case "')) continue
+      for (const m of line.matchAll(/"([A-Za-z]\w*)"/g)) handled.add(m[1]!)
+    }
+    expect(called.filter((name) => !handled.has(name))).toEqual([])
+  })
+
   it('事件表里没登记的事件名会当场炸 —— 加事件时别只加订阅口', () => {
     const { emit } = loadBridge()
     // listeners 是张写死的表，`_emit` 直接 `listeners[event]`：漏登记就是 undefined。

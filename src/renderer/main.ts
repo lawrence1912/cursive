@@ -52,13 +52,15 @@ import {
   saveSession,
   type SessionTab
 } from './ui/session'
-import { TabBar } from './ui/tabbar'
+import { parseGoto } from './ui/goto'
+import { note } from './ui/note'
+import { reorderIds, TabBar } from './ui/tabbar'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
 import { commandItems } from './ui/commands'
 import { openMenu, type MenuItem } from './ui/menu'
-import { Palette, type PaletteItem } from './ui/palette'
+import { Palette, type PaletteItem, type PaletteQuery } from './ui/palette'
 import { Prefs } from './ui/prefs'
 import { cursorLabel, measure, selectedText, StatsPanel, type Stat } from './ui/stats'
 
@@ -90,7 +92,6 @@ const elPos = document.getElementById('status-pos')!
 const elMode = document.getElementById('status-mode')!
 const elSaved = document.getElementById('status-saved')!
 const elMatch = document.getElementById('status-match')!
-const elNote = document.getElementById('status-note')!
 
 let sourceMode = false
 
@@ -173,8 +174,15 @@ prefs.apply()
 const sidebar = new Sidebar({
   openFile: (path) => void openPath(path),
   // 文件进了废纸篓：它开着的标签也得关掉，否则标签指着一个不存在的文件
-  trashed: (path) => {
-    for (const t of tabs.filter((x) => x.path === path)) void closeTab(t.id, true)
+  trashed: (path, trashed) => {
+    for (const tab of tabs.filter((x) => x.path === path)) void closeTab(tab.id, true)
+    // 0.2.x：删除是这个应用里唯一「点一下就没了」的动作，而它此前唯一的反悔路径
+    // 是自己去废纸篓里翻。状态栏给一条 8 秒的回执，带一颗撤销（契约 v25）
+    note(t('note.trashed', { name: basename(path) }), {
+      action: trashed
+        ? { label: t('note.undo'), run: () => void undoTrash(trashed, path) }
+        : undefined
+    })
   },
   // P3-1 收尾：重命名 / 拖走之后路径变了。开着的标签要跟着改，否则下一次保存
   // 会按旧路径写回去 —— 等于凭空复活一个已经不在那儿的文件
@@ -443,8 +451,53 @@ const tabbar = new TabBar(
     if (id !== activeId) activate(id)
   },
   (id) => void closeTab(id),
-  (id, e) => openTabMenu(id, e)
+  (id, e) => openTabMenu(id, e),
+  (id, before) => reorderTab(id, before)
 )
+
+/**
+ * 撤销删除（0.2.x，契约 v25）。
+ *
+ * 失败就**明说**，不假装成功：位置被新建的同名文件占了、废纸篓被清空了，都是真的
+ * 撤不回来 —— 而这时候用户还有一条路（自己去废纸篓里翻），前提是他知道这一下没成。
+ */
+async function undoTrash(trashed: string, back: string): Promise<void> {
+  if (await window.api.restoreItem(trashed, back)) {
+    await sidebar.refresh(back)
+    note(t('note.restored', { name: basename(back) }))
+  } else {
+    note(t('note.restoreFailed'), { warn: true })
+  }
+}
+
+/**
+ * ⌃Tab / ⌃⇧Tab 循环（0.2.x）。**按 `tabs` 的顺序走**，也就是眼睛看到的那个顺序
+ * （拖拽重排之后同样成立）。到头折回：最后一个的下一个是第一个 —— 循环里
+ * 「到头就不动了」比折回更让人困惑，而这两个键本来就是用来快速来回翻的。
+ */
+function cycleTab(step: 1 | -1): void {
+  if (tabs.length < 2) return
+  const at = tabs.findIndex((x) => x.id === activeId)
+  if (at < 0) return
+  const next = tabs[(at + step + tabs.length) % tabs.length]!
+  activate(next.id)
+}
+
+/**
+ * 拖拽重排（0.2.x）。
+ *
+ * **挪的是 `tabs` 数组本身**，标签栏只是照着重画一遍 —— 顺序在别处也有意义：
+ * 会话按它记（`currentSession`）、「关闭左边/右边」按它算（`closeTabs`）、
+ * ⌃Tab 循环按它走。只在标签栏里挪 DOM 的话，那三处会立刻和眼睛看到的对不上。
+ */
+function reorderTab(id: number, before: number | null): void {
+  const now = tabs.map((x) => x.id)
+  const next = reorderIds(now, id, before)
+  if (next.join() === now.join()) return
+  tabs = next.map((x) => tabs.find((tab) => tab.id === x)!)
+  syncStatus()
+  scheduleSession()
+}
 center.prepend(tabbar.el)
 
 function newUntitledTab(): void {
@@ -675,23 +728,6 @@ function syncStatus(force = false): void {
   window.api.openTabs(tabs.map((x) => x.path).filter((p): p is string => p !== null))
 }
 
-/**
- * 状态栏左边那句**一次性反馈**：链接打不开、没有这个锚点这类「点了之后没能如愿」。
- * 4 秒后自己消失，不需要任何人去关它。
- *
- * 为什么不弹原生对话框：点错一条链接是小事，拦下整个界面要人按一下「好」是大事。
- * 为什么也不能什么都不说：「点了没反应」是最糟的失败方式 —— 用户分不清是
- * 链接写错了、文件没了，还是这个编辑器压根不支持跳转。
- */
-let noteTimer: number | undefined
-function note(message: string): void {
-  elNote.textContent = message
-  clearTimeout(noteTimer)
-  noteTimer = window.setTimeout(() => {
-    elNote.textContent = ''
-  }, 4000)
-}
-
 // ---------- P3-8 字数 / 光标位置 / 详细统计 ----------
 
 const stats = new StatsPanel()
@@ -870,11 +906,32 @@ async function openHit(hit: SearchHit): Promise<void> {
   view.focus()
 }
 
-/** 从侧边栏点开一个文件（开新标签，不碰现有标签） */
-async function openPath(path: string): Promise<void> {
-  if (path === docPath) return
+/**
+ * 从侧边栏点开一个文件（开新标签，不碰现有标签）。
+ * `line` 是 0.2.x「跳到行」那条路带进来的：`⌘T` 里打 `readme:120`
+ */
+async function openPath(path: string, line?: number): Promise<void> {
+  if (path === docPath) {
+    // 已经是当前这份：标签一个字都不用动，但行还是要跳
+    if (line) gotoLine(line)
+    return
+  }
   const doc = await window.api.read(path)
   openTab(doc.content, doc.path, doc.fingerprint)
+  if (line) gotoLine(line)
+}
+
+/**
+ * 跳到第 `n` 行（1 起，越界夹到首尾）。
+ *
+ * 走 `jumpTo` 而不是自己 dispatch —— 大纲 / `[TOC]` / ⌘+点击锚点走的都是它，
+ * 于是「落点那一行先亮 550ms」这件事白拿，四条路的手感也不会各是各的
+ */
+function gotoLine(n: number): void {
+  const doc = view.state.doc
+  const line = doc.line(Math.min(Math.max(Math.trunc(n), 1), doc.lines))
+  jumpTo(view, line.from)
+  view.focus()
 }
 
 /**
@@ -894,7 +951,7 @@ async function openDocLink(path: string, slug: string | null): Promise<void> {
       doc = await window.api.read(path)
     } catch {
       // 链接写错、文件被挪走、大小写对不上都落在这儿
-      note(t('link.missing', { name: basename(path) }))
+      note(t('link.missing', { name: basename(path) }), { warn: true })
       return
     }
     openTab(doc.content, doc.path, doc.fingerprint)
@@ -903,7 +960,7 @@ async function openDocLink(path: string, slug: string | null): Promise<void> {
   // 锚点要在**目标文档**里找，所以必须等标签切过去之后再算
   const pos = anchorPos(view.state, slug)
   if (pos === null) {
-    note(t('link.noAnchor', { slug }))
+    note(t('link.noAnchor', { slug }), { warn: true })
     return
   }
   jumpTo(view, pos)
@@ -1128,10 +1185,18 @@ window.addEventListener('blur', () => {
  */
 async function exportHtmlSource(): Promise<string> {
   const t = activeTab()
-  const doc = await exportHtmlDocument(view.state, {
-    dir: t?.path ? dirname(t.path) : null,
-    title: exportStem()
-  })
+  const doc = await exportHtmlDocument(
+    view.state,
+    {
+      dir: t?.path ? dirname(t.path) : null,
+      title: exportStem()
+    },
+    // 排版跟随此刻的设置（0.2.x）。在这之前设置面板里的字号/行距/字族/栏宽只写进
+    // 编辑器的 `--body-*`，导出这条路一直用钉死的默认值 —— 屏幕上 18px 无衬线、
+    // 导出物 16px 衬线，是「所见即所得」最后漏掉的一处。
+    // **只有导出 HTML / PDF 两条路跟**，复制为富文本不跟（见 `copyAsHtml`）
+    prefs.values
+  )
   return doc.html
 }
 
@@ -1153,6 +1218,10 @@ async function exportHtml(): Promise<{ path: string } | null> {
  * 没有第二套局部渲染逻辑（P4-1 那条「根本不写第二个解析器」的原则在这里同样成立）。
  *
  * 剪贴板上放两种风味：`.html` 给邮件 / 飞书 / Notion，纯文本给终端 / 代码框。
+ *
+ * **排版有意不跟当前设置**（导出 HTML / PDF 那两条路跟，见 `exportHtmlSource`）：
+ * 粘贴的目的地有它自己的正文样式，带一个 20px 过去，粘进邮件正文里就是一段
+ * 比周围都大的字。字族/字号这种「我这台机器上看着舒服」的设定不该跟着剪贴板走。
  */
 async function copyAsHtml(): Promise<void> {
   const sel = view.state.selection.main
@@ -1164,6 +1233,9 @@ async function copyAsHtml(): Promise<void> {
     : EditorState.create({ doc: md, extensions: [cursiveMarkdown()] })
   const doc = await exportHtmlDocument(state, { dir, title: exportStem() })
   await window.api.copyHtml(doc.html, md)
+  // 剪贴板这条路**看不见任何变化**：不说一句的话，「刚才那下到底复制上了没有」
+  // 只能靠去别处粘一下才知道
+  note(t('note.copiedHtml'))
 }
 
 /** 0.2.0 命令面板 / 快速打开（同一个组件，见 ui/palette.ts） */
@@ -1188,6 +1260,9 @@ async function openHistory(): Promise<void> {
       userEvent: 'input.restore'
     })
     view.focus()
+    // 整份文档刚被换掉，而这是一次**普通编辑** —— 把「⌘Z 能撤回」这件事说出来，
+    // 否则回滚看起来像一条单行道
+    note(t('note.rolledBack'))
   })
   await historyPanel.open(activeTab()?.path ?? null, view.state.doc.toString())
 }
@@ -1222,10 +1297,36 @@ async function openQuickOpen(): Promise<void> {
       key: rel,
       path: true,
       labelAt: cut + 1,
-      run: () => void openPath(path)
+      // `query` 是选中那一刻输入框里的原串：`readme:120` 的 `:120` 在这儿兑现
+      run: (query) => void openPath(path, parseGoto(query)?.line)
     }
   })
-  palette.open(items, t('pl.filePlaceholder'), 'pl.noFile')
+  palette.open(items, t('pl.filePlaceholder'), 'pl.noFile', quickOpenQuery)
+}
+
+/**
+ * ⌘T 的查询预处理（0.2.x「跳到行」）。
+ *
+ * - `readme:120` —— `:120` 摘掉不参与匹配（没有哪个文件名里有它，一打冒号整排结果就空），
+ *   行号由被选中的那条文件条目自己从原串里取；
+ * - `:120` —— 没写文件名 = 在**当前文档**里跳，于是只列这一条：底下再跟一整排文件只会碍事。
+ */
+function quickOpenQuery(raw: string): PaletteQuery {
+  const goto = parseGoto(raw)
+  if (!goto) return { query: raw }
+  if (goto.name) return { query: goto.name }
+  const here = activeTab()
+  return {
+    query: '',
+    only: true,
+    items: [
+      {
+        label: t('pl.gotoLine', { n: goto.line }),
+        hint: here?.path ? basename(here.path) : t('app.untitled'),
+        run: () => gotoLine(goto.line)
+      }
+    ]
+  }
 }
 
 async function handleMenu(action: MenuAction): Promise<void> {
@@ -1247,6 +1348,12 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'file:close-tab':
       await closeTab(activeId)
       break
+    case 'file:next-tab':
+      cycleTab(1)
+      break
+    case 'file:prev-tab':
+      cycleTab(-1)
+      break
     case 'file:save-and-close': {
       // 关窗语义：所有脏标签都落盘；任何一个被取消就中止关闭
       const cur = activeTab()
@@ -1262,9 +1369,18 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'file:open-folder':
       await openFolder()
       break
-    case 'file:export-html':
-      await exportHtml()
+    case 'file:export-html': {
+      const out = await exportHtml()
+      // 0.2.x：导出完只有保存面板关掉那一下，此前看不出到底写成功了没有。
+      // PDF 那条路是 NSAlert（模态），这条给状态栏一句 + 一颗「在 Finder 中显示」——
+      // 导出的东西十有八九是要马上发给别人的
+      if (out) {
+        note(t('note.exported', { name: basename(out.path) }), {
+          action: { label: t('note.reveal'), run: () => window.api.revealInFinder(out.path) }
+        })
+      }
       break
+    }
     case 'edit:find':
       openSearchPanel(view)
       break
@@ -1363,6 +1479,9 @@ window.api.onMenu((action) => void handleMenu(action))
 
 // P2-5：Finder 拖图片进窗口 → 壳落盘后推相对路径 → 光标处插链接
 window.api.onImageDropped((relPath) => {
+  // 落盘位置要说一句：图片是**被复制进了 assets/**，而不是链到原处 —— 不说的话，
+  // 用户会以为文档引的还是 Finder 里那张，把原图删了才发现不是
+  note(t('note.imageSaved', { path: relPath }))
   const alt = relPath.replace(/^assets\//, '').replace(/\.[^.]+$/, '')
   // 文件名带空格时括进 <…>：Cursive 自己认得裸空格（方言放宽），但写出去的文档
   // 还要在别处打开 —— app 生成的东西必须是标准形状（destLiteral）

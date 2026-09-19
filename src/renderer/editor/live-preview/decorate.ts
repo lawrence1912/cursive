@@ -16,7 +16,8 @@ import {
   FootnoteRefWidget,
   ImageWidget,
   MathWidget,
-  RuleWidget
+  RuleWidget,
+  footnoteLabels
 } from './widgets'
 
 const HIDE = Decoration.replace({})
@@ -268,6 +269,11 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       if (revealed) return
       const label = /^\[\^([^\s\]]+)\]$/.exec(doc.sliceString(node.from, node.to))?.[1]
       if (!label) return
+      // 没有对应定义就留着源码：换成角标的话，那是一个点了没反应、悬停也没内容的
+      // 假脚注 —— 看得见的 `[^label]` 才说得清「这条还没定义」。导出同款（render.ts）。
+      // **查的是整张表而不是一条条找**：这里每次按键都要跑，而视口里可能有十几个引用
+      // —— 一条 `findFootnoteDef` 就是一遍全文扫描（见 `footnoteLabels` 上的实测）
+      if (!footnoteLabels(ctx.state).has(label)) return
       out.push(
         Decoration.replace({ widget: new FootnoteRefWidget(label) }).range(node.from, node.to)
       )

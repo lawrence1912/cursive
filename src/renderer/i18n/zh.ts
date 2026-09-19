@@ -48,6 +48,7 @@ const zh = {
   'sb.collapseAll': '完全折叠',
   'sb.search': '在文件夹中搜索',
   'sb.openFolder': '打开其他文件夹',
+  'sb.tree': '文件树',
   'sb.openFolderBtn': '打开文件夹',
   'sb.orOpen': '或按 ⌘⇧O',
   'sb.resize': '拖动调整宽度',
@@ -148,7 +149,8 @@ const zh = {
 
   // ---------- 命令面板 / 快速打开（palette.ts · commands.ts）----------
   'pl.cmdPlaceholder': '输入命令名或快捷键…',
-  'pl.filePlaceholder': '输入文件名…',
+  'pl.filePlaceholder': '输入文件名，或 :行号…',
+  'pl.gotoLine': '跳到第 {n} 行',
   'pl.noMatch': '没有匹配的命令',
   'pl.noFile': '没有匹配的文件',
   'pl.noFolder': '先打开一个文件夹（⇧⌘O）',
@@ -159,6 +161,8 @@ const zh = {
   'cmd.save': '保存',
   'cmd.saveAs': '另存为…',
   'cmd.closeTab': '关闭标签',
+  'cmd.nextTab': '下一个标签',
+  'cmd.prevTab': '上一个标签',
   'cmd.history': '版本历史…',
   'cmd.exportHtml': '导出为 HTML…',
   'cmd.find': '查找…',
@@ -248,6 +252,7 @@ const zh = {
   'w.closePreview': '关闭预览',
   'w.toc': '目录',
   'w.imgBroken': '图片加载失败',
+  'w.imgResize': '拖动改尺寸',
   'w.calloutExpand': '展开告示块',
   'w.calloutCollapse': '折叠告示块',
 
@@ -256,6 +261,18 @@ const zh = {
   'link.failed': '打不开：{target}',
   'link.missing': '找不到文件：{name}',
   'link.noAnchor': '本文里没有这个锚点：#{slug}',
+
+  // 0.2.x 状态栏回执（`ui/note.ts`）。「没能如愿」之外，办成了的那几件也说一句 ——
+  // 图片落到了哪儿、复制成了什么、删掉的那份还能不能回来
+  'note.undo': '撤销',
+  'note.reveal': '在 Finder 中显示',
+  'note.trashed': '「{name}」已移到废纸篓',
+  'note.restored': '「{name}」已还原',
+  'note.restoreFailed': '还原不了：那个位置已经被占用，或者废纸篓里已经没有它了',
+  'note.copiedHtml': '已复制为富文本',
+  'note.imageSaved': '图片已存到 {path}',
+  'note.exported': '已导出「{name}」',
+  'note.rolledBack': '已回到这个版本（⌘Z 可撤回）',
   'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
   'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
 

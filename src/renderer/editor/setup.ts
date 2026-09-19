@@ -12,6 +12,7 @@ import {
   keymap,
   rectangularSelection
 } from '@codemirror/view'
+import { moveBlock } from './block-move'
 import { cursiveCompletion } from './complete'
 import { landingFlash, stableNavigation } from './navigation'
 import { expandOnEnter } from './input-rules'
@@ -19,6 +20,7 @@ import { t } from '../i18n'
 import { changeListIndent } from './list-ops'
 import { smartPaste } from './paste'
 import { cursiveSearchPanel } from './search-panel'
+import { scrollMarks } from './scroll-marks'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
 import { cursiveMarkdown } from './markdown-lang'
 import { cursiveTheme } from './theme'
@@ -138,6 +140,8 @@ export function createState(
       docDir.of(options.dir ?? null),
       revealScope.of(options.reveal ?? 'line'),
       cursiveTheme,
+      // 0.2.x：查找命中画在滚动条上（见 editor/scroll-marks.ts）
+      scrollMarks,
       livePreviewConf.of(options.sourceMode ? [] : livePreview()),
       writingConf.of(writingModes(writingNow)),
       spellConf.of(spellcheckExt(spellNow.on)),
@@ -157,6 +161,27 @@ export function createState(
         },
         // 必须排在 defaultKeymap 之前：回车续列表、退格删标记
         ...markdownKeymap,
+        // 0.2.x：⌥↑/⌥↓ 搬**块**而不是搬行（见 editor/block-move.ts 的顶注）。
+        // 同样必须排在 defaultKeymap 之前 —— 那边这两个键绑着 `moveLineUp/Down`。
+        // 认不出块（多光标、选区跨出块外）时返回 false，照旧退回按行搬
+        {
+          key: 'Alt-ArrowUp',
+          run: (view) => {
+            const spec = moveBlock(view.state, -1)
+            if (!spec) return false
+            view.dispatch(spec)
+            return true
+          }
+        },
+        {
+          key: 'Alt-ArrowDown',
+          run: (view) => {
+            const spec = moveBlock(view.state, 1)
+            if (!spec) return false
+            view.dispatch(spec)
+            return true
+          }
+        },
         ...defaultKeymap,
         // P2-3：列表里 Tab/⇧Tab 升降级（先于 indentWithTab 接管）；不在列表则回退
         {

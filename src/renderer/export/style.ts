@@ -1,3 +1,5 @@
+import type { BodyFont } from '../../shared/types'
+
 /**
  * 导出用样式表（P4-1）。
  *
@@ -43,6 +45,21 @@ export const EXPORT_CSS = `
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "JetBrains Mono",
     "Sarasa Mono SC", monospace;
+
+  /* 正文排版的四个 —— 名字与 \`themes/base.css\` 那四个**一模一样**（那边是
+     设置面板写的目标，这边是导出物的默认值）。默认值也与那边相同，于是
+     「没改过设置」的导出物与从前逐字节相同；改过的那份由 \`typographyCss()\`
+     追加一段 :root 覆盖它们（见文件末尾）。 */
+  --body-font: var(--serif);
+  --body-size: 16px;
+  --body-leading: 1.75;
+  --column: 42rem;
+
+  /* 纸上另有两个。**不是屏幕那两个原样搬过去**：px 与 pt 不是一回事，
+     16px 原样写成 16pt 一页就少放三分之一的字；五号（10.5pt）才是中文
+     文档的常规。设置里的字号/行距按**比例**作用到这两个默认值上。 */
+  --print-size: 10.5pt;
+  --print-leading: 1.7;
 }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -50,13 +67,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--serif);
-  font-size: 16px;
-  line-height: 1.75;
+  font-family: var(--body-font);
+  font-size: var(--body-size);
+  line-height: var(--body-leading);
 }
 .cursive-doc {
   box-sizing: border-box;
-  max-width: 42rem;
+  max-width: var(--column);
   margin: 0 auto;
   padding: 48px 32px 30vh;
   overflow-wrap: break-word;
@@ -299,7 +316,9 @@ body {
    CSS 只管排版与断页规则。 */
 @media print {
   /* 五号字（10.5pt）是中文文档的常规；正文以下全是 em，跟着一起缩 */
-  body { font-size: 10.5pt; line-height: 1.7; }
+  body { font-size: var(--print-size); line-height: var(--print-leading); }
+  /* **栏宽只管屏幕**：纸的宽度已经由 NSPrintInfo 的纸张 + 页边距说了算，
+     再让 42rem（或者设置里那个更窄的值）压一道，右边就是一大片空白 */
   .cursive-doc { max-width: none; padding: 0; }
   /* 标题不许落在页脚上 —— 下面一行内容都没有的标题是最刺眼的分页事故 */
   .cursive-doc h1, .cursive-doc h2, .cursive-doc h3,
@@ -319,3 +338,73 @@ body {
   .cursive-doc .table-wrap { overflow: visible; }
 }
 `
+
+/**
+ * 导出物的正文排版（0.2.x）。
+ *
+ * 屏幕上看到的是什么样，导出的 HTML 与 PDF 就该是什么样 —— 在这之前设置面板里的
+ * 字号 / 行距 / 字族 / 栏宽只写进编辑器的 `--body-*`（`ui/prefs.ts` 的 `apply()`），
+ * 导出这条路一直用着上面那份钉死的默认值，于是「屏幕上 18px 无衬线、导出物 16px 衬线」。
+ *
+ * 只跟**排版**，不跟配色：导出恒为浅色那条红线见本文件顶注。
+ */
+export interface Typography {
+  font: BodyFont
+  size: number
+  leading: number
+  /** rem。**只作用于屏幕** —— 纸上是 `max-width: none`，见 @media print 那段 */
+  column: number
+}
+
+/** 与 `themes/base.css` 的默认值同一套；EXPORT_CSS 里那四个 token 写的就是它 */
+export const TYPOGRAPHY_DEFAULT: Typography = { font: 'serif', size: 16, leading: 1.75, column: 42 }
+
+/** 纸上那两个默认值（`--print-size` / `--print-leading`）。设置按比例作用到它们上 */
+const PRINT_BASE = { size: 10.5, leading: 1.7 }
+
+/**
+ * 生成盖在 `EXPORT_CSS` 后面的那一小段 `:root`。
+ *
+ * **与默认值全等时返回空串** —— 没改过设置的人，导出物与从前逐字节相同
+ * （golden 快照因此不用跟着这条改动重录，`test/export.test.ts` 有断言）。
+ */
+export function typographyCss(v?: Typography): string {
+  if (!v) return ''
+  const font = v.font === 'sans' ? 'sans' : 'serif'
+  const size = num(v.size, TYPOGRAPHY_DEFAULT.size)
+  const leading = num(v.leading, TYPOGRAPHY_DEFAULT.leading)
+  const column = num(v.column, TYPOGRAPHY_DEFAULT.column)
+  if (
+    font === TYPOGRAPHY_DEFAULT.font &&
+    size === TYPOGRAPHY_DEFAULT.size &&
+    leading === TYPOGRAPHY_DEFAULT.leading &&
+    column === TYPOGRAPHY_DEFAULT.column
+  ) {
+    return ''
+  }
+  // 纸上按比例缩：16px→10.5pt（五号）是基准，调到 20px 就是 13.13pt。
+  // 原样搬 px 的话一页少放三分之一的字，见 `--print-size` 那条注释
+  const printSize = round2((PRINT_BASE.size * size) / TYPOGRAPHY_DEFAULT.size)
+  const printLeading = round2((PRINT_BASE.leading * leading) / TYPOGRAPHY_DEFAULT.leading)
+  return (
+    `\n/* 排版跟随导出时的设置（Cursive ⌘,） */\n` +
+    `:root {\n` +
+    `  --body-font: var(--${font});\n` +
+    `  --body-size: ${size}px;\n` +
+    `  --body-leading: ${leading};\n` +
+    `  --column: ${column}rem;\n` +
+    `  --print-size: ${printSize}pt;\n` +
+    `  --print-leading: ${printLeading};\n` +
+    `}\n`
+  )
+}
+
+/** 数值兜底：偏好那份已经钳过位（`normalizePrefs`），这里只挡住 NaN / 0 / 负数 */
+function num(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+/** 两位小数，且不留 `13.10` 这种尾巴 */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
