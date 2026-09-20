@@ -2,11 +2,17 @@ import {
   autocompletion,
   type Completion,
   type CompletionContext,
+  type CompletionResult,
   type CompletionSource
 } from '@codemirror/autocomplete'
 import type { Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
+import { basename, relativeLink } from '../../shared/path'
 import { calloutTypes } from './callout'
+import { docDir } from './doc-dir'
+import { LATEX_COMMANDS, latexCaret, latexInsert } from './latex'
+import { parsedTree } from './syntax'
 import { EMOJI } from './emoji'
 import { collectHeadings, slugs } from './headings'
 import { langOptions } from './live-preview/code'
@@ -196,6 +202,103 @@ const fenceLangSource: CompletionSource = (cx) => {
   }
 }
 
+// ---------------------------------------------------------------- 链接目的地（0.4.0 F3）
+
+/** 目的地里有空格就写成 `<…>` —— 与拖图 / 粘贴截图插进来的那条路同一个形状 */
+function linkDest(rel: string): string {
+  return /\s/.test(rel) ? `<${rel}>` : rel
+}
+
+/**
+ * `](` → **工作区里的文件名**（0.4.0 F3 的第六个源）。
+ *
+ * 「⌘+点击本地 `.md` 开标签」0.2.0 就在那儿了，而「链接得先写对才点得动」这条路上
+ * **写的那一半一直没人管** —— 靠人自己记住文件名怎么拼，而中文笔记的文件名十个有九个
+ * 带空格（当初放宽 `SpacedLink` 是为了**读**，没帮上写）。
+ *
+ * 索引与快速打开共用（契约 v21 的 `listFiles`），**不新增任何一张表、任何一条通道**；
+ * 也不缓存 —— 同 ⌘T 那条的理由：缓存要跟着新建/改名/拖动/删除/外部变更一起失效，
+ * 换来的只是省掉几十毫秒。`validFor` 让这一趟每次触发只走一次，之后是 CM 在本地过滤。
+ */
+const linkFileSource: CompletionSource = (cx) => {
+  if (blocked(cx)) return null
+  const m = cx.matchBefore(/\]\([^)\s]*/)
+  if (!m) return null
+  const typed = m.text.slice(2)
+  if (typed.startsWith('#')) return null // 本文锚点归 anchorSource
+  if (/^[a-z][a-z0-9+.-]*:/i.test(typed)) return null // 已经在写 http: / mailto:
+  // **不认领的那几条都要同步回 null**：写成 async 的话，「不该弹」也会回一个
+  // Promise，而调用方（与 test/complete.test.ts）分不清「不弹」和「等着」
+  return linkFiles(cx, m.from)
+}
+
+async function linkFiles(cx: CompletionContext, at: number): Promise<CompletionResult | null> {
+  const root = await window.api.workspaceRoot()
+  if (!root) return null
+  const files = await window.api.listFiles(root)
+  const dir = cx.state.facet(docDir) ?? root
+  if (!files.length) return null
+  // **不把当前文档排掉**：state 上只有目录（`docDir`），没有自己的路径 ——
+  // 为了少列一条候选去给七处 `createState` 加一个 facet 不划算，而「链到自己」
+  // 顶多是一条没用的候选，不是错
+  const options: Completion[] = files.map((p) => {
+    const rel = relativeLink(dir, p)
+    return {
+      label: rel,
+      detail: basename(p),
+      type: 'text',
+      // 同一个目录里的排前面：写链接时十有八九指的是手边这几份
+      boost: rel.includes('/') ? 0 : 1,
+      apply: applyWith(linkDest(rel), ')', 'skip')
+    }
+  })
+  return { from: at + 2, options, validFor: /^[^)\s]*$/ }
+}
+
+// ---------------------------------------------------------------- 公式命令（0.4.0 F3）
+
+/** 光标是不是落在公式里。`$` 不是命令、`\` 才是 —— 但只在公式节点里认 */
+function inMath(cx: CompletionContext): boolean {
+  // **`parsedTree` 而不是 `syntaxTree`**：刚打出来的 `$x + \al` 那一行，
+  // `syntaxTree` 的快照多半还没跟上（CM 的 parse 是异步分块的），
+  // 于是「光标在不在公式里」当场答错 —— 表现是「公式里打反斜杠不弹」
+  for (
+    let n: SyntaxNode | null = parsedTree(cx.state).resolveInner(cx.pos, -1);
+    n;
+    n = n.parent
+  ) {
+    if (n.name === 'InlineMath' || n.name === 'DisplayMath') return true
+  }
+  return false
+}
+
+/**
+ * `\alpha` → 公式命令（0.4.0 F3 的第七个源）。
+ *
+ * **只在公式节点里触发**：正文里的 `\` 多半是转义（`\*`、`\_`），弹一张希腊字母表
+ * 纯属打扰。候选表在 `editor/latex.ts`（KaTeX 不对外暴露它自己那张，理由写在那儿），
+ * 而这里**一个 katex 实例都不碰** —— 补全不该把 261 KB 拽回主 chunk。
+ */
+const latexSource: CompletionSource = (cx) => {
+  if (blocked(cx)) return null
+  const m = cx.matchBefore(/\\[a-zA-Z]*/)
+  if (!m || !inMath(cx)) return null
+  const options: Completion[] = LATEX_COMMANDS.map((c) => ({
+    label: c.cmd,
+    detail: c.hint,
+    type: 'text',
+    // 带占位大括号的（`\frac{}{}`）插完把光标放进第一对里 —— 不然还得自己按两下左键
+    apply: (view: EditorView, _c: Completion, from: number, to: number) => {
+      view.dispatch({
+        changes: { from, to, insert: latexInsert(c) },
+        selection: { anchor: from + latexCaret(c) },
+        userEvent: 'input.complete'
+      })
+    }
+  }))
+  return { from: m.from, options, validFor: /^\\[a-zA-Z]*$/ }
+}
+
 /**
  * 六个源，按注册顺序。导出是为了让 `test/complete.test.ts` 能直接喂
  * `CompletionContext` 断言候选 —— 不导出的话只能去点面板，那就不是单测了。
@@ -208,6 +311,8 @@ export const COMPLETION_SOURCES: CompletionSource[] = [
   calloutSource,
   footnoteSource,
   anchorSource,
+  linkFileSource,
+  latexSource,
   fenceLangSource,
   slashSource
 ]

@@ -253,6 +253,14 @@ ok = ok and len(ch) == 2 and ch[1] > 0 and ch[0] > ch[1]
 # 点开它要能读回正文并算出差异（hiLines 为 0 = 要么没读回、要么 diff 空转）
 ok = ok and v.get('hiRows', 0) >= 1 and v.get('hiLines', 0) >= 1
 ok = ok and v.get('hiStat', '').startswith('+') and v.get('hiClosed') is True
+# 0.4.0 F3 的两个新源。**公式那条的要害是「正文里不许弹」**：那儿的反斜杠是转义，
+# 弹一张希腊字母表纯属打扰 —— 一正一反两条一起断言，只测「弹得出来」是测不到分寸的
+ok = ok and any('alpha' in it for it in (v.get('mathItems') or []))
+ok = ok and (v.get('plainItems') or []) == []
+# 链接目的地：列的是**相对当前文档**的写法（绝对路径 = 那条 /private 软链没抹平）
+li = v.get('linkItems') or []
+ok = ok and len(li) >= 2 and not any(it.startswith('/') for it in li)
+ok = ok and v.get('completeRestored') is True
 
 # ---- 0.2.0 标签右键菜单（只在 dialect.md 这条用例上跑）----
 if sys.argv[1] == 'dialect.md':

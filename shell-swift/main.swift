@@ -4221,6 +4221,38 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           v.dispatch({ changes: { from: end, to: v.state.doc.length } })
           const restored = v.state.doc.toString() === sampled
 
+          // ①b 0.4.0 F3 的两个新源：公式命令与链接目的地。
+          //     公式那条在**正文里不许弹**（那儿的反斜杠是转义），只在 `$…$` 里认
+          // **先摆好上下文，再「打」出触发的那几个字**：CM 的 activateOnTyping 只在
+          // 光标落在这一次插入的末尾时才弹，一次性把整行连光标位置塞进去是弹不出来的
+          const probeSource = async (setup, caretBack, typed) => {
+            const at = v.state.doc.length
+            v.dispatch({ changes: { from: at, insert: '\\n' + setup }, userEvent: 'input.type' })
+            const caret = v.state.doc.length - caretBack
+            v.dispatch({ selection: { anchor: caret } })
+            await sleep(80)
+            v.dispatch({
+              changes: { from: caret, insert: typed },
+              selection: { anchor: caret + typed.length },
+              userEvent: 'input.type'
+            })
+            await sleep(450)   // 链接那条要等壳侧 listFiles 走一趟目录
+            const box = document.querySelector('.cm-tooltip-autocomplete')
+            const items = box ? [...box.querySelectorAll('li')].map((li) => li.textContent) : []
+            v.dispatch({ changes: { from: at, to: v.state.doc.length } })
+            await sleep(80)
+            return items
+          }
+          // 公式里打反斜杠 al 会弹；正文里同样两个字符**不许**弹（那儿的反斜杠是转义）
+          const mathItems = await probeSource('$x + $', 1, '\\\\al')
+          const plainItems = await probeSource('正文 ', 0, '\\\\al')
+          const linkItems = await probeSource('[看]', 0, '(')
+          // **再收一次干净**：上面三发前后插了一秒多的临时文字，而自动保存的防抖是 2s ——
+          // 它完全可能正好在中间落一次盘，把临时文字写进夹具（`bytesEqual` 于是偶发变红，
+          // 而且失败点离真因很远）。显式写回取样时那份，此后再自动保存也是同一内容
+          await window.api.save(path, sampled, doc.fingerprint)
+          const completeRestored = v.state.doc.toString() === sampled
+
           // ② 命令面板：列的应当是 MenuAction 全表，筛一个词只剩少数几条
           emit('view:command-palette')
           await sleep(80)
@@ -4274,7 +4306,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const hiClosed = hi.hidden
 
           v020 = { rows, first, restored, cmdAll, cmdHit, cmdClosed, files, fileFirst, fileClosed,
-                   hiRows, hiLines, hiStat, hiClosed }
+                   hiRows, hiLines, hiStat, hiClosed,
+                   // 0.4.0 F3 的两个新源
+                   mathItems, plainItems, linkItems, completeRestored }
         } catch (e) {
           v020 = { err: String(e) }
         }

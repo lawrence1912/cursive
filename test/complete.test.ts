@@ -151,3 +151,57 @@ describe('围栏语言', () => {
     expect(complete('正文 ```|')).toBeNull()
   })
 })
+
+/**
+ * 0.4.0 F3 的第七个源：公式命令。
+ *
+ * 两条要守：**只在公式里认**（正文里的 `\` 多半是转义，弹一张希腊字母表纯属打扰）、
+ * 带占位大括号的插完光标要落进第一对里（否则还得自己按两下左键）。
+ */
+describe('公式命令（0.4.0 F3）', () => {
+  it('`$…\\al|` 弹，候选里有 \\alpha', () => {
+    const r = complete('行内公式 $x + \\al|$')
+    expect(labels(r)).toContain('\\alpha')
+  })
+
+  it('块级公式里同样弹', () => {
+    expect(labels(complete('$$\n\\fr|\n$$'))).toContain('\\frac')
+  })
+
+  it('**正文里的反斜杠不弹** —— 那是转义，不是命令', () => {
+    expect(complete('正文里 \\al|')).toBeNull()
+  })
+
+  it('`\\frac{}{}` 这种带占位的，插完光标落在第一对大括号里', () => {
+    const r = complete('$\\fr|$')
+    const frac = r!.options.find((o) => o.label === '\\frac')!
+    let changes: { from: number; to: number; insert: string } | undefined
+    let selection: { anchor: number } | undefined
+    const view = {
+      dispatch: (spec: { changes: typeof changes; selection: typeof selection }) => {
+        changes = spec.changes
+        selection = spec.selection
+      }
+    } as unknown as EditorView
+    ;(frac.apply as (v: EditorView, c: unknown, f: number, t: number) => void)(view, frac, 1, 4)
+    expect(changes!.insert).toBe('\\frac{}{}')
+    // `\frac{` 是 6 个字符，光标落在它后面 = 第一对大括号中间
+    expect(selection!.anchor).toBe(1 + 6)
+  })
+})
+
+describe('链接目的地（0.4.0 F3）', () => {
+  it('`](#` 仍然归锚点那个源 —— 两个源不许同时认领', () => {
+    const r = complete('# 小节\n\n[看这儿](#|')
+    // 锚点源认领了（候选是 #小节），文件源必须让开
+    expect(labels(r)).toEqual(['#小节'])
+  })
+
+  it('已经在写 http: 的不弹（那是外链，不是工作区里的文件）', () => {
+    expect(complete('[外链](https:|')).toBeNull()
+  })
+
+  it('不在 `](` 后面的括号不弹', () => {
+    expect(complete('（中文括号里 写点什么|')).toBeNull()
+  })
+})
