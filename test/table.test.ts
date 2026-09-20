@@ -20,7 +20,10 @@ import {
   TableWidget,
   tidyTable,
   writeCell,
-  cellPasteText
+  cellPasteText,
+  setTableEdit,
+  tableEditAt,
+  tableEditField
 } from '../src/renderer/editor/live-preview/table'
 
 describe('parseTable：GFM 管道表格', () => {
@@ -488,5 +491,46 @@ describe('格内粘贴的文本', () => {
 
   it('整段是空白 → 空串（调用方据此什么都不插）', () => {
     expect(cellPasteText('  \n\n \t ')).toEqual({ text: '', lines: 0 })
+  })
+})
+
+/**
+ * 「`/table` 插出来的表格显示源码」那条（0.4.0 修）。
+ *
+ * 新表是靠 `setTableEdit` 才以渲染态出现的（光标就在第一格里）。从前编辑态
+ * 「文档一变或选区一动就清」—— 而插完之后必然还有别的事务（滚动、聚焦、按一下键），
+ * 编辑态当场没了，光标却还在表里，于是整张表回落成源码。
+ */
+describe('表格编辑态什么时候退出', () => {
+  const doc = '正文\n\n| a | b |\n| --- | --- |\n| c | d |\n'
+  const from = doc.indexOf('| a')
+  const make = () =>
+    EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] }).update({
+      selection: { anchor: from + 2 },
+      effects: setTableEdit.of(from)
+    }).state
+
+  it('光标还在表里 —— 随便来一个带选区的事务也留着', () => {
+    const state = make()
+    expect(tableEditAt(state)).toBe(from)
+    const next = state.update({ selection: { anchor: from + 3 } }).state
+    expect(tableEditAt(next), '撑不过下一个事务的话，新插的表当场变回源码').toBe(from)
+  })
+
+  it('光标离开这张表 —— 退出编辑态（这条是原本就对的，别改坏）', () => {
+    const next = make().update({ selection: { anchor: 1 } }).state
+    expect(tableEditAt(next)).toBeNull()
+  })
+
+  it('表被整段删掉 —— 编辑态跟着没（不留悬空的位置）', () => {
+    const next = make().update({ changes: { from: 2, to: doc.length }, selection: { anchor: 2 } })
+      .state
+    expect(tableEditAt(next)).toBeNull()
+  })
+
+  it('在格子里改字（writeCell 那条路）照旧留在编辑态', () => {
+    const state = make()
+    const next = state.update(writeCell(state, from, 0, 0, 'aa', 2)!).state
+    expect(tableEditAt(next)).toBe(from)
   })
 })

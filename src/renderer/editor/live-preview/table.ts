@@ -188,10 +188,35 @@ export const tableEditField = StateField.define<number | null>({
     for (const e of tr.effects) if (e.is(setTableEdit)) return e.value
     if (value == null) return null
     if (isHistory(tr)) return tr.changes.mapPos(value)
-    if (tr.docChanged || tr.selection) return null
-    return value
+    if (!tr.docChanged && !tr.selection) return value
+    // **光标还在这张表里就留着编辑态**（0.4.0 修）。
+    //
+    // 从前这儿是「文档变了或选区动了一律清掉」，于是 `/table` 插完的那张新表
+    // （靠 `setTableEdit` 才以渲染态出现、焦点就在第一格里）**撑不过下一个事务**：
+    // 滚动、聚焦、随便按一下键都带着选区，编辑态当场没了，而光标还在表里 ——
+    // 表格于是回落成源码。症状就是「/table 输出的表格显示源码」。
+    //
+    // 现在只在**光标真的离开这张表**时才退出。格间移动、插完那一下、
+    // 在格子里打字（`writeCell` 本来就会再发一次效应）全都留在渲染态。
+    const at = tr.docChanged ? tr.changes.mapPos(value, 1) : value
+    return editStillLive(tr.state, at) ? at : null
   }
 })
+
+/** 那张表还在原地、而且光标还落在它里面 */
+function editStillLive(state: EditorState, from: number): boolean {
+  if (from < 0 || from >= state.doc.length) return false
+  const head = state.selection.main.head
+  for (
+    let n: SyntaxNode | null = parsedTree(state).resolveInner(Math.min(from + 1, state.doc.length), 1);
+    n;
+    n = n.parent
+  ) {
+    if (n.name !== 'Table') continue
+    return n.from === from && head >= n.from && head <= n.to
+  }
+  return false
+}
 
 /** 取字段必须允许缺失：源代码模式撤掉了整套扩展，单测也只装了 markdown 语言包 */
 export function tableEditAt(state: EditorState): number | null {
