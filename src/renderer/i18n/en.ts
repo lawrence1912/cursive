@@ -167,6 +167,8 @@ const en: Record<Key, string> = {
   'cmd.history': 'Version History…',
   'cmd.exportHtml': 'Export as HTML…',
   'cmd.exportPng': 'Export as Image…',
+  'cmd.undo': 'Undo',
+  'cmd.redo': 'Redo',
   'cmd.find': 'Find…',
   'cmd.replace': 'Find and Replace…',
   'cmd.findNext': 'Find Next',

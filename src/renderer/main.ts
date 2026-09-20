@@ -2,6 +2,7 @@ import './themes/base.css'
 import './themes/live-preview.css'
 // katex 的 CSS 不在这里 —— 它跟着 JS 一起躺在懒加载的 editor/live-preview/katex.ts 里（P4-6②）
 
+import { redo, undo } from '@codemirror/commands'
 import { findNext, findPrevious, openSearchPanel, selectNextOccurrence } from '@codemirror/search'
 import { EditorView } from '@codemirror/view'
 import { EditorState, type Text, type TransactionSpec } from '@codemirror/state'
@@ -1497,6 +1498,23 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'file:export-png':
       await exportPng()
       break
+    case 'edit:undo':
+    case 'edit:redo': {
+      // 为什么撤销也得走菜单这条路，见 `MenuAction` 里 'edit:undo' 那段。
+      // 壳自己的输入框（搜索、重命名、设置…）里该撤的是那一行字，不是文档 ——
+      // 下放给浏览器，它撤自己那个 <input> 的编辑栈
+      const el = document.activeElement
+      const tag = el?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        document.execCommand(action === 'edit:undo' ? 'undo' : 'redo')
+        break
+      }
+      // **不 view.focus()**：光标可能正在表格格子里（那是一座 contenteditable 孤岛），
+      // 抢焦点会把整块表当场换回管道符源码。撤销本来也不需要焦点，
+      // 事务自带 scrollIntoView，改到哪儿看得见
+      ;(action === 'edit:undo' ? undo : redo)(view)
+      break
+    }
     case 'edit:find':
       openSearchPanel(view)
       break

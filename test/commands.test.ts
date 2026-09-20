@@ -88,3 +88,41 @@ describe('splitLabel', () => {
     expect(splitLabel('Toggle File Tree')).toEqual({ label: 'Toggle File Tree' })
   })
 })
+
+/**
+ * 撤销这条键盘入口（0.4.0 修）。
+ *
+ * 判断 1 说「带 ⌘ 的键全归菜单系统」——「编辑」菜单里那条撤销原先挂的是 AppKit 的
+ * `undo:`，沿响应链落进 WKWebView，撤的是 **WebKit 自己那套 DOM 编辑撤销栈**，
+ * 而文档的真历史在 CodeMirror 里。表格一改结构（回车加行、删行、增删列、整理）
+ * 整张表的格子都会重建，WebKit 栈顶那条记录指着的元素当场没了 —— 它既不派
+ * `beforeinput` 也不做事，可 `canUndo` 还是真：菜单项照亮、照吃 ⌘Z，一按下去
+ * 一点反应都没有。症状是「在格子里打过字之后回车加一行，⌘Z 失灵」，
+ * **偶发**取决于 WebKit 栈里那一刻是不是恰好压着死记录。
+ *
+ * 所以这两条键必须与 ⌘D 同款：菜单 → `MenuAction` → 渲染层调 CM 的 undo/redo。
+ * Swift 那边没有单测，这里直接扫源码把关。
+ */
+describe('撤销这条键盘入口', () => {
+  const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+
+  it('菜单项走 MenuAction，不再是 AppKit 的 undo:/redo:', () => {
+    expect(swift).toContain('item(L("menu.edit.undo"), "edit:undo", key: "z")')
+    expect(swift).toContain('item(L("menu.edit.redo"), "edit:redo"')
+    expect(swift).not.toContain('Selector(("undo:"))')
+    expect(swift).not.toContain('Selector(("redo:"))')
+  })
+
+  it('剪切 / 拷贝 / 粘贴仍旧归 WebKit（那三条本来就该是原生选择器）', () => {
+    for (const sel of ['cut:', 'copy:', 'paste:']) {
+      expect(swift, `${sel} 不该被一起改掉`).toContain(`Selector(("${sel}"))`)
+    }
+  })
+
+  it('两条都在契约里，也都在面板里（漏一条 = 键是死的）', () => {
+    expect(contractActions()).toEqual(expect.arrayContaining(['edit:undo', 'edit:redo']))
+    const listed = new Set<string>()
+    commandItems((a) => listed.add(a)).forEach((item) => void item.run())
+    expect(listed.has('edit:undo') && listed.has('edit:redo')).toBe(true)
+  })
+})

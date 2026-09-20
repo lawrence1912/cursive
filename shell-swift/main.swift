@@ -3698,6 +3698,50 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           for (let n = 3; n <= doc2.lines && doc2.line(n).text.indexOf('|') === 0; n++) {
             tidyLines.push(doc2.line(n).text)
           }
+          // 0.4.0 修：**⌘Z 的去路**。撤销原先挂 AppKit 的 `undo:`，撤的是 WebKit 自己
+          // 那套 DOM 编辑撤销栈；表格一改结构整张表的格子都会重建，栈顶那条记录当场
+          // 变成死记录 —— 不派 `beforeinput` 也不做事，而 `canUndo` 还是真，菜单项
+          // 照亮照吃 ⌘Z。于是「在格子里打过字之后回车加一行，⌘Z 一点反应都没有」。
+          // 这一段复刻的就是那个现场：**先打一个字**（往 WebKit 栈里压一条真记录，
+          // 这是「偶发」的另一半），再回车加行，然后走菜单那条真路径撤销/重做。
+          let undoRound = null
+          {
+            // **末行**那一格：回车在中间行只是走到下一行，只有末行才新建
+            const bodyRows = document.querySelectorAll('.cm-lp-tableview tbody tr')
+            const c0 = bodyRows.length ? bodyRows[bodyRows.length - 1].cells[0] : null
+            if (c0) {
+              c0.focus()
+              await new Promise(r => setTimeout(r, 80))
+              const clean = window.__cursive.view.state.doc.toString()
+              document.execCommand('insertText', false, 'u')
+              await new Promise(r => setTimeout(r, 140))
+              const typed = window.__cursive.view.state.doc.toString()
+              document.activeElement.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+              await new Promise(r => setTimeout(r, 170))
+              const added = window.__cursive.view.state.doc.toString()
+              // WebKit 那边照旧说「可以撤销」—— 骗过菜单项的正是这一下
+              const webkitCanUndo = document.queryCommandEnabled('undo')
+              const fire = async (a) => {
+                window.__shellEmit('menu', a)
+                await new Promise(r => setTimeout(r, 170))
+                return window.__cursive.view.state.doc.toString()
+              }
+              const undone = await fire('edit:undo')
+              const redone = await fire('edit:redo')
+              await fire('edit:undo')
+              undoRound = {
+                typedIn: typed !== clean,
+                addedRow: added !== typed,
+                webkitCanUndo,
+                // 撤销要**逐字节**回到加行之前，而且只撤那一行（打的字还在）
+                undone: undone === typed,
+                redone: redone === added,
+                // 撤销不许把表格掀回管道符源码（事务不带 setTableEdit，靠 isHistory 那条分支）
+                stillRendered: !!document.querySelector('.cm-lp-tableview')
+              }
+            }
+          }
           tableEdit = {
             rendered: enter.rendered && !!document.querySelector('.cm-lp-tableview'),
             focused: enter.cell,
@@ -3706,6 +3750,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             addedRow,
             delim,
             tidyLines,
+            undoRound,
             // 格内行内语法：`**粗体**` 在渲染态里就是 <strong>，不再是一串星号
             strong: document.querySelectorAll('.cm-lp-tableview td strong').length
           }
@@ -5250,8 +5295,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: L("menu.edit"))
         // ⚠️ WKWebView 里 ⌘C/⌘V 生效的前提：存在接线的「编辑」菜单
-        edit.addItem(NSMenuItem(title: L("menu.edit.undo"), action: Selector(("undo:")), keyEquivalent: "z"))
-        edit.addItem(NSMenuItem(title: L("menu.edit.redo"), action: Selector(("redo:")), keyEquivalent: "Z"))
+        // 撤销 / 重做走渲染层（0.4.0 修）。**不能是 AppKit 的 `undo:`/`redo:`** ——
+        // 那两个选择器沿响应链落进 WKWebView，撤的是 WebKit 自己那套 DOM 编辑撤销栈，
+        // 而文档的真历史在 CodeMirror 里。表格改结构时整张表的格子都会重建，
+        // WebKit 栈里的记录当场变成死记录：`canUndo` 还是真（菜单项照亮、照吃 ⌘Z），
+        // 可它既不派 `beforeinput` 也不做事 —— ⌘Z 落进死路。理由全文见
+        // `src/shared/types.ts` 里 `MenuAction` 的 'edit:undo'。
+        // 剪切/拷贝/粘贴仍用原生选择器：那三条本来就该归 WebKit（见上面那行 ⚠️）
+        edit.addItem(item(L("menu.edit.undo"), "edit:undo", key: "z"))
+        edit.addItem(item(L("menu.edit.redo"), "edit:redo", key: "z", modifiers: [.command, .shift]))
         edit.addItem(.separator())
         edit.addItem(NSMenuItem(title: L("menu.edit.cut"), action: Selector(("cut:")), keyEquivalent: "x"))
         edit.addItem(NSMenuItem(title: L("menu.edit.copy"), action: Selector(("copy:")), keyEquivalent: "c"))

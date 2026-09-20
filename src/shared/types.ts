@@ -27,6 +27,22 @@ export type MenuAction =
    * （与「复制为富文本」同一条判断）。契约 v28
    */
   | 'file:export-png'
+  /**
+   * 撤销 / 重做（0.4.0 修）。**必须走这条通道，不能再挂 AppKit 的 `undo:`/`redo:`。**
+   *
+   * `undo:` 沿响应链落进 WKWebView，撤的是 **WebKit 自己那套 DOM 编辑撤销栈**，
+   * 而文档的真历史在 CodeMirror 里 —— 从前只是碰巧能用：WebKit 撤一步 DOM，
+   * 顺手派一发 `beforeinput/historyUndo`，表格格子那边接住它再转发给 CM。
+   * 一旦那条 WebKit 记录指着的元素没了（表格改结构时整张表的格子都会重建），
+   * 它就**既不派事件也不做事**，而菜单项的 `canUndo` 还是真 —— 于是 ⌘Z
+   * 被菜单吃掉，落进一条死路，一点反应都没有。症状：在格子里打过字之后，
+   * 回车加一行，⌘Z 失灵（偶发 —— 取决于 WebKit 栈里那一刻是不是恰好压着死记录）。
+   *
+   * 现在 ⌘Z 与 ⌘D 同款（判断 1）：菜单 → 这个 action → CM 的 `undo`/`redo`。
+   * 焦点在壳自己的输入框（搜索、重命名…）里时下放给浏览器，那儿该撤的是那一行字。
+   */
+  | 'edit:undo'
+  | 'edit:redo'
   | 'edit:find'
   | 'edit:replace'
   | 'edit:find-next'

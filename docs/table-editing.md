@@ -85,10 +85,17 @@ cursive 有「**保存零损耗**（字节不变，E2E 有断言）」这条硬�
 | ↑ / ↓ | 同列换行；出界则退出表格，光标落到表格前/后一行并 `view.focus()` |
 | ← / → | 只在格首 / 格尾时跨格，其余交给浏览器原生移动光标 |
 | Esc | 清空 `tableEditField` → 整块回显管道符源码，光标停在刚才那一格（**保留的逃生口**） |
-| ⌘Z / ⇧⌘Z | 显式转发 CM 的 `undo` / `redo`（keydown 和 `beforeinput` 的 historyUndo 两条路都拦） |
+| ⌘Z / ⇧⌘Z | **归菜单**：`edit:undo`/`edit:redo` → 渲染层调 CM 的 `undo`/`redo`。widget 里那两条转发（keydown、`beforeinput` 的 historyUndo）留着当兜底，见下 |
 
 从表格**外面**用方向键走进来（↓/→ 撞上块首、↑/← 撞上块尾）也进单元格，判定直接查
 `blockField` 里那个位置的 widget 是不是 `TableWidget`。
+
+> **⌘Z 为什么不能由格子自己接**（0.4.0 修）：判断 1 说带 ⌘ 的键全归菜单系统，
+> 而「编辑」菜单里那条撤销原先挂 AppKit 的 `undo:` —— 撤的是 **WebKit 自己那套 DOM 编辑撤销栈**。
+> 表格一改结构，`updateDOM` 会把整张表的格子重建（`buildRows`），WebKit 栈顶那条记录指着的
+> 元素当场没了：它**既不派 `beforeinput` 也不做事**，而 `canUndo` 还是真 —— 菜单项照亮、
+> 照吃 ⌘Z，一按下去一点反应都没有（「在格子里打过字之后回车加一行，⌘Z 失灵」，偶发）。
+> 现在撤销走 `MenuAction`，格子里那两条转发退成兜底。E2E 的 `tableEdit.undoRound` 复刻整个现场。
 
 > **不用 `EditorView.atomicRanges`**：那是全体块级 widget 的总开关，会顺带让数学块 / mermaid /
 > 脚注定义再也用方向键进不去。表格只需要 4 个键的拦截，套 `Prec.high()` 排在 `defaultKeymap` 前面即可。
@@ -198,6 +205,12 @@ E2E（`shell-swift/main.swift` 的 `tableEdit` / `handles` 探针）断言的是
 一字不动**（这一条就是这套方案相对 nomo 的全部意义）；工具栏露面、「下插行」真加了一行、
 「整列居中」写进了分隔行、「整理」之后每一行的**显示宽度一致**（壳外用 Python 的
 `east_asian_width` 核）、`**粗体**` 渲染成了 `<strong>`、悬停之后两颗药丸都在。
+
+`tableEdit.undoRound` 单守撤销那条路（0.4.0 修）：在**末行**那一格里打一个字（WebKit 的编辑
+撤销栈因此压着一条真记录 —— 这是「偶发」的另一半）→ 回车加一行（整张表的格子重建，那条记录
+当场作废）→ 走菜单 `edit:undo` / `edit:redo`。断言是「撤销逐字节回到加行之前、**只撤那一行**
+（打的字还在）、重做拿得回来、表格还留在渲染态」。单测那一半在 `test/table.test.ts` 的
+「表格里的撤销」（八个动作逐个：改了 → 一步撤回原样）。
 
 `CURSIVE_SMOKE_SHOT=<路径>` 截的图里能直接看到工具栏与手柄（探针最后会把光标放回第一格
 并补一次 mouseover，就是为了目检这两样）。

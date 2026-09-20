@@ -229,6 +229,14 @@ if sys.argv[1] == 'table.md':
     ok = ok and len(tidy) >= 4 and len({dw(t) for t in tidy}) == 1
     # 格内行内语法：**粗体** 渲染成 <strong>
     ok = ok and te.get('strong', 0) >= 1
+    # 0.4.0 修：⌘Z 的去路。在格子里打过字（WebKit 撤销栈里压着一条真记录）之后
+    # 回车加一行 —— 整张表的格子重建，那条记录当场作废。撤销必须照样把那一行撤掉，
+    # **而且只撤那一行**（打的字还在），重做拿得回来，表格还留在渲染态。
+    # 从前这里什么都不会发生：菜单项照亮、⌘Z 被它吃掉，落进 WebKit 的死路
+    ur = te.get('undoRound') or {}
+    ok = ok and ur.get('typedIn') is True and ur.get('addedRow') is True
+    ok = ok and ur.get('undone') is True
+    ok = ok and ur.get('redone') is True and ur.get('stillRendered') is True
     hd = r.get('handles') or {}   # 悬停 +/− 手柄：行/列各一颗药丸
     ok = ok and hd.get('on') is True and hd.get('pills') == 2
 # ---- 0.2.0：自动补全 / 命令面板 / 快速打开 / 复制为富文本 ----

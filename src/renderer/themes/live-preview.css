@@ -322,9 +322,16 @@ body.cursive-em-italic .cm-md-em {
   caret-color: var(--fg);
   outline: none;
 }
+/* 强调色环走 outline，**不能用 inset box-shadow**（0.4.0 修）。
+   `border-collapse: collapse` 下，合并出来的那条横线归**表格**画，而且排在
+   「格子背景 + 内阴影」之后 —— 于是环的上边被上一行那条边框整条盖掉，
+   左/右/下都在，只有上边没有（截图逐像素核过：上沿两个物理像素是 --border，
+   一点强调色都没有）。outline 排在更后面的绘制阶段，压得住那条线；
+   offset −1px 把它放回内阴影原来占的位置，观感一个像素都不挪。 */
 .cm-lp-tableview th:focus,
 .cm-lp-tableview td:focus {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 /* CM 的 hideNativeSelection 把 .cm-content 里聚焦元素的选区底色顶成系统 Highlight
    （Prec.highest + !important），不覆盖回来会和主题脱节 */

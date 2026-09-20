@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { history, redo, undo } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState, type TransactionSpec } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
@@ -532,5 +534,175 @@ describe('表格编辑态什么时候退出', () => {
     const state = make()
     const next = state.update(writeCell(state, from, 0, 0, 'aa', 2)!).state
     expect(tableEditAt(next)).toBe(from)
+  })
+})
+
+/**
+ * 「回车加一行之后 ⌘Z 没反应」那条（0.4.0 修）。
+ *
+ * 真正的病根在 ⌘Z 的**去路**（见 `test/commands.test.ts` 的「撤销这条键盘入口」）：
+ * 从前它落进 WebKit 自己那套 DOM 编辑撤销栈，而表格一改结构就把整张表的格子重建了 ——
+ * 栈顶那条记录指着的元素当场没了，它既不派事件也不做事。
+ *
+ * 这一组守的是另一半：**表格这边每个动作都得是「一次 dispatch = 一步撤销」**，
+ * 而且撤完要逐字节回到原样。撤销的去路修好之后，这一半才有意义。
+ */
+describe('表格里的撤销：一个动作一步，撤完逐字节回到原样', () => {
+  const withHistory = (doc = DOC): EditorState =>
+    EditorState.create({ doc, extensions: [cursiveMarkdown(), history(), tableEditField] })
+
+  /** 跑一次改写 → ⌘Z，返回三份文本给调用方对账 */
+  function round(
+    run: (s: EditorState) => TransactionSpec | null,
+    doc = DOC
+  ): { before: string; after: string; undone: string } {
+    let state = withHistory(doc)
+    const before = state.doc.toString()
+    const spec = run(state)
+    expect(spec, '这个动作压根没发出事务').not.toBeNull()
+    state = state.update(spec!).state
+    const after = state.doc.toString()
+    expect(undo({ state, dispatch: (tr) => void (state = tr.state) }), '撤销命令自己就没跑').toBe(
+      true
+    )
+    return { before, after, undone: state.doc.toString() }
+  }
+
+  const ops: [string, (s: EditorState) => TransactionSpec | null][] = [
+    ['下插行', (s) => insertRowAfter(s, TF, 1)],
+    ['删行', (s) => deleteRow(s, TF, 1)],
+    ['插列', (s) => insertColAt(s, TF, 1, 1)],
+    ['删列', (s) => deleteCol(s, TF, 1)],
+    ['整列对齐', (s) => setAlign(s, TF, 0, 'right')],
+    ['整理对齐', (s) => tidyTable(s, TF)],
+    ['删整张表', (s) => deleteTable(s, TF)],
+    ['改一格', (s) => writeCell(s, TF, 1, 0, 'a2')]
+  ]
+
+  for (const [name, run] of ops) {
+    it(`${name}：改了 → 一步撤回原样`, () => {
+      const { before, after, undone } = round(run)
+      expect(after, '这个动作什么都没改，后面那条断言就是空的').not.toBe(before)
+      expect(undone).toBe(before)
+    })
+  }
+
+  it('撤销之后还留在编辑态 —— 否则 ⌘Z 一按表格就回落源码', () => {
+    let state = withHistory().update({ effects: setTableEdit.of(TF) }).state
+    state = state.update(insertRowAfter(state, TF, 1)!).state
+    expect(tableEditAt(state)).toBe(TF)
+    undo({ state, dispatch: (tr) => void (state = tr.state) })
+    expect(tableEditAt(state), '撤销事务不带 setTableEdit，靠的是 isHistory 那条分支').toBe(TF)
+  })
+
+  it('连打归并成一步（一个字符一步的话撤销栈没法用）', () => {
+    let state = withHistory()
+    for (const text of ['a2', 'a23']) state = state.update(writeCell(state, TF, 1, 0, text)!).state
+    expect(state.doc.toString()).toContain('| a23 ')
+    undo({ state, dispatch: (tr) => void (state = tr.state) })
+    expect(state.doc.toString()).toBe(DOC)
+  })
+
+  it('⌘Z 只撤掉刚加的那一行，不把前面打的字一起吞掉', () => {
+    let state = withHistory()
+    state = state.update(writeCell(state, TF, 1, 0, 'a2')!).state
+    const typed = state.doc.toString()
+    state = state.update(insertRowAfter(state, TF, 1)!).state
+    expect(state.doc.toString()).not.toBe(typed)
+    undo({ state, dispatch: (tr) => void (state = tr.state) })
+    expect(state.doc.toString(), '两笔并成一步的话，这里会一路退回打字之前').toBe(typed)
+  })
+
+  it('重做把撤掉的那一行拿回来', () => {
+    let state = withHistory()
+    state = state.update(insertRowAfter(state, TF, 1)!).state
+    const added = state.doc.toString()
+    undo({ state, dispatch: (tr) => void (state = tr.state) })
+    expect(state.doc.toString()).toBe(DOC)
+    redo({ state, dispatch: (tr) => void (state = tr.state) })
+    expect(state.doc.toString()).toBe(added)
+  })
+})
+
+/**
+ * 表格是文档**最后一行**（结尾没有换行）时的增删 —— 这条路上所有「连着换行一起删」
+ * 的写法都得换个方向，越界一个字符就是把正文的最后一个字吃掉。
+ */
+describe('表格贴着文档末尾（没有结尾换行）', () => {
+  const doc = ['| a | b |', '| --- | --- |', '| 1 | 2 |'].join('\n')
+  const tail = (): EditorState => EditorState.create({ doc })
+
+  it('删最后一行：连它前面那个换行一起走，不留空行', () => {
+    const s = tail()
+    expect(applied(s, deleteRow(s, 0, 1))).toBe('| a | b |\n| --- | --- |')
+  })
+
+  it('在最后一行后面加一行', () => {
+    const s = tail()
+    expect(applied(s, insertRowAfter(s, 0, 1))).toBe(`${doc}\n|   |   |`)
+  })
+
+  it('删整张表：文档空了，也没有多余的换行', () => {
+    const s = tail()
+    expect(applied(s, deleteTable(s, 0))).toBe('')
+  })
+})
+
+/** 破行（GFM 允许某一行的格子数与表头对不上）—— 增删列不许把它当成规整的表来算 */
+describe('破行的表', () => {
+  const doc = ['| a | b | c |', '| --- | --- | --- |', '| 1 |', '| x | y | z |'].join('\n')
+  const ragged = (): EditorState => EditorState.create({ doc })
+
+  it('删中间那一列：格子不够的那一行原样放过', () => {
+    const out = lines(applied(ragged(), deleteCol(ragged(), 0, 1)))
+    expect(out[2]).toBe('| 1 |')
+    expect(out[3]).toBe('| x | z |')
+  })
+
+  it('追加一列：短行也补得出那一格（否则新列在这行根本不可表达）', () => {
+    const s = ragged()
+    const out = lines(applied(s, insertColAt(s, 0, 3, 0)))
+    expect(parseTable(out.join('\n'))!.header).toHaveLength(4)
+    expect(out[2]).toBe('| 1 |   |')
+  })
+
+  it('往破行里写超出它列数的那一格 → 先把竖线补够', () => {
+    const s = ragged()
+    expect(lines(applied(s, writeCell(s, 0, 1, 2, 'z')))[2]).toBe('| 1 |  | z |')
+  })
+})
+
+/**
+ * 格子的焦点环：**必须是 outline，不能是 inset box-shadow**（0.4.0 修）。
+ *
+ * `border-collapse: collapse` 下，合并出来的那条横线归**表格**画，排在
+ * 「格子背景 + 内阴影」之后 —— 环的上边被上一行那条边框整条盖掉，
+ * 左/右/下都在，只有上边没有（同一帧两格对照量过：内阴影写法上沿 0/58 个强调色
+ * 像素，outline 写法 58/58）。CSS 里没法为这件事写运行时断言，所以按规则扫源码。
+ */
+describe('单元格焦点环', () => {
+  // 注释里正说着「不能用 inset box-shadow」，先剥掉，否则扫的是说明而不是规则
+  const css = readFileSync(
+    new URL('../src/renderer/themes/live-preview.css', import.meta.url),
+    'utf8'
+  ).replace(/\/\*[\s\S]*?\*\//g, '')
+  const rule =
+    css
+      .split('}')
+      .map((block) => `${block}}`)
+      .find((block) => /\.cm-lp-tableview t[hd]:focus\s*[,{]/.test(block) && !block.includes('::')) ??
+    ''
+
+  it('确实找得到那条规则（改了选择器就得回来改这条测试）', () => {
+    expect(rule).not.toBe('')
+  })
+
+  it('用 outline 画，并且 offset 收进格子里', () => {
+    expect(rule).toMatch(/outline:\s*1px solid var\(--accent\)/)
+    expect(rule).toMatch(/outline-offset:\s*-1px/)
+  })
+
+  it('不许退回 inset box-shadow（上边会被合并边框整条盖掉）', () => {
+    expect(rule).not.toMatch(/box-shadow/)
   })
 })

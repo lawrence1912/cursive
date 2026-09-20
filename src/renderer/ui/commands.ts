@@ -55,6 +55,8 @@ const GENERAL: Entry[] = [
   { action: 'file:export-html', labelKey: 'cmd.exportHtml', hint: '⇧⌘E' },
   { action: 'file:export-png', labelKey: 'cmd.exportPng' },
 
+  { action: 'edit:undo', labelKey: 'cmd.undo', hint: '⌘Z' },
+  { action: 'edit:redo', labelKey: 'cmd.redo', hint: '⇧⌘Z' },
   { action: 'edit:find', labelKey: 'cmd.find', hint: '⌘F' },
   { action: 'edit:replace', labelKey: 'cmd.replace', hint: '⌥⌘R' },
   { action: 'edit:find-next', labelKey: 'cmd.findNext', hint: '⌘G' },
