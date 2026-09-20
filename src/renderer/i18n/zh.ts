@@ -278,6 +278,10 @@ const zh = {
   'note.exportedPng': '长图已导出「{name}」（{w}×{h}）',
   'note.pngClipped': '文档太长：「{name}」只出了前 {h} 像素',
   'note.rolledBack': '已回到这个版本（⌘Z 可撤回）',
+  'note.customOff': '自定义皮肤已停用（视图菜单里可以再启用）',
+  'note.customOn': '自定义皮肤已启用',
+  'note.customUnreadable': '读不到自定义皮肤，暂时用内置主题',
+  'note.customEmpty': '皮肤「{name}」里没有一条生效的规则 —— CSS 可能写坏了',
   'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
   'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
 

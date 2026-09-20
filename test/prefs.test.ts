@@ -24,6 +24,13 @@ describe('normalizePrefs', () => {
     expect(normalizePrefs({ leading: NaN }).leading).toBe(1.4)
   })
 
+  it('老偏好里没有 customOff（0.3.0 T4 新增）→ 不停用，一切照旧', () => {
+    expect(normalizePrefs({}).customOff).toBe(false)
+    expect(normalizePrefs({ customOff: true }).customOff).toBe(true)
+    // 非布尔值一律当 false：这个开关只该由那条菜单项拨动，坏数据不许把皮肤停掉
+    expect(normalizePrefs({ customOff: 'yes' as unknown as boolean }).customOff).toBe(false)
+  })
+
   it('返回的是新对象 —— adopt() 之后还要往 this.v 上写，不能与来源共用一份', () => {
     const src = { size: 18 }
     const out = normalizePrefs(src)
@@ -118,5 +125,30 @@ describe('Prefs.adopt（契约 v17）', () => {
     const { prefs } = harness()
     prefs.adopt({ ...prefs.values, size: 999 })
     expect(prefs.values.size).toBe(24)
+  })
+
+  /**
+   * 0.3.0 T4 的安全出口。要守的是**「停用」这件事本身要活过重开**：
+   * 皮肤把界面弄花之后，人要的是「先让它别花着」，而不是「这次别花、下次重开再花一遍」。
+   */
+  it('停用皮肤：落盘 + 广播，再按一次回到启用', () => {
+    const { prefs, calls } = harness()
+    const before = { ...calls }
+    expect(prefs.values.customOff).toBe(false)
+
+    expect(prefs.toggleCustomOff(), '返回的是新状态').toBe(true)
+    expect(prefs.values.customOff).toBe(true)
+    expect(calls.writes, '进偏好，不是会话级').toBe(before.writes + 1)
+    expect(calls.syncPrefs, '别的窗口也花着，得跟着摘').toBe(before.syncPrefs + 1)
+
+    expect(prefs.toggleCustomOff()).toBe(false)
+    expect(prefs.values.customOff).toBe(false)
+  })
+
+  it('选的是哪一张皮肤不会被「停用」忘掉 —— 改好 CSS 之后要回得去', () => {
+    const { prefs } = harness()
+    prefs.setCustom('my-skin')
+    prefs.toggleCustomOff()
+    expect(prefs.values.custom, '停用只管叠不叠，不管选的是谁').toBe('my-skin')
   })
 })

@@ -1,6 +1,7 @@
 import type { AppearanceMode, BodyFont, PrefValues, UserTheme } from '../../shared/types'
 import { applyI18n, setLang as setI18nLang, systemLang, t, type Key, type Lang } from '../i18n'
 import { icon } from './icons'
+import { note } from './note'
 
 // 形状定义在 `shared/types`（契约 v17 要把整份偏好当 IPC 载荷转发），这里原地再导出
 export type { BodyFont, PrefValues }
@@ -13,7 +14,7 @@ const KEY = 'cursive.prefs'
  */
 const DEFAULTS: PrefValues = {
   theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null,
-  lang: systemLang(), spellcheck: false
+  customOff: false, lang: systemLang(), spellcheck: false
 }
 export const COLUMN_RANGE = { min: 30, max: 60 }
 
@@ -30,6 +31,8 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
     leading: clamp(parsed.leading ?? DEFAULTS.leading, 1.4, 2.4),
     column: clamp(parsed.column ?? DEFAULTS.column, COLUMN_RANGE.min, COLUMN_RANGE.max),
     custom: parsed.custom ?? null,
+    // 0.3.0 T4，老偏好里没有 —— 默认不停用（没停用过的人升上来一切照旧）
+    customOff: parsed.customOff === true,
     // 有偏好但没记过 lang = 老用户，一直看的是中文，别在某次升级后突然给人翻成英文。
     // 与 i18n 的 `detectLang()` 同一条规则（那边靠 raw 非空走到同一个结果）
     lang: parsed.lang ?? 'zh',
@@ -99,6 +102,9 @@ export class Prefs {
       this.themes = await window.api.userThemes()
     } catch {
       this.themes = []
+      // 0.3.0 T4 顺带补的：读不到也要说一句。选着一张皮肤却读不到它时，
+      // 界面会**悄悄**退回内置主题 —— 那和「皮肤没写对」长得一模一样
+      if (this.v.custom) note(t('note.customUnreadable'), { warn: true })
     }
     this.applyCustom()
     this.buildCustomRow()
@@ -112,12 +118,39 @@ export class Prefs {
   private applyCustom(): void {
     const id = 'user-theme'
     document.getElementById(id)?.remove()
+    // 0.3.0 T4 的安全出口：停用中就到此为止（选的是哪一张仍然记着）
+    if (this.v.customOff) return
     const hit = this.themes.find((t) => t.name === this.v.custom)
     if (!hit) return
     const style = document.createElement('style')
     style.id = id
     style.textContent = hit.css
     document.head.appendChild(style)
+    // 0.3.0 T4 顺带补的：**挂上去了却一条规则都没生效**要说一句。
+    // 在这之前整条路是彻底静默的 —— CSS 里少一个括号、整份文件被浏览器丢掉，
+    // 表现与「这张皮肤本来就没改什么」一模一样，而人只会觉得「选了没反应」
+    if ((style.sheet?.cssRules.length ?? 0) === 0) {
+      note(t('note.customEmpty', { name: hit.name }), { warn: true })
+    }
+  }
+
+  /**
+   * 0.3.0 T4：停用 / 启用自定义皮肤，返回**新的**状态（true = 停着）。
+   *
+   * 走偏好（`commit()`）而不是会话级变量：皮肤把界面弄花之后，人要的是
+   * 「先让它别花着」，而不是「这次别花、下次重开再花一遍」。
+   */
+  toggleCustomOff(): boolean {
+    this.v.customOff = !this.v.customOff
+    this.commit()
+    this.applyCustom()
+    this.sync()
+    return this.v.customOff
+  }
+
+  /** 眼下有没有一张皮肤在叠着（菜单回执要分清「停用了一张」与「本来就没有」） */
+  get hasCustom(): boolean {
+    return this.themes.some((t) => t.name === this.v.custom)
   }
 
   get values(): PrefValues {
@@ -238,12 +271,15 @@ export class Prefs {
    */
   adopt(values: PrefValues): void {
     const prevCustom = this.v.custom
+    const prevOff = this.v.customOff
     this.v = normalizePrefs(values)
     this.paint()
     // 皮肤**只在真的换了**才重贴：拖字号滑杆时广播是连发的（每个 input 事件一条），
     // 而 applyCustom 是「拆掉 <style> 再塞一份整 CSS 回去」—— 那是整页样式重算，
     // 一次拖动重算三十遍，另一个窗口当场卡给你看
-    if (prevCustom !== this.v.custom) this.applyCustom()
+    // 0.3.0 T4：停用/启用也要重贴 —— 另一个窗口按下那颗安全出口时，
+    // 这个窗口不跟着摘掉的话，一个窗口好了、另一个还花着
+    if (prevCustom !== this.v.custom || prevOff !== this.v.customOff) this.applyCustom()
     this.onApply()
     // setLang 内部去重：语言没变就是空操作，不会白重建一遍装饰
     setI18nLang(this.v.lang)

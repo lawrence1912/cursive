@@ -20,6 +20,12 @@ mkdir -p "$SCRATCH"
 # 0.2.0 版本历史：整轮开始前清一次。每份夹具各有自己的目录，不清也不会串，
 # 但清了之后「这一轮留下了几份快照」才是确定的数（同上面清 scratch 的道理）
 rm -rf "$HOME/Library/Application Support/cursive/history"
+# 0.3.0 T4：给「停用自定义皮肤」放一张认得出来的皮肤（.cm-content 染成 rgb(1,2,3)）。
+# **它落在开发机真实的 themes/ 目录里**（皮肤就是从那儿扫的，没有第二条路），
+# 所以整轮末尾要收走；名字带 e2e- 前缀，谁也不会手写这么一个
+THEMES="$HOME/Library/Application Support/cursive/themes"
+mkdir -p "$THEMES"
+printf '.cm-content { background: rgb(1, 2, 3); }\n' > "$THEMES/e2e-skin.css"
 rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md \
    test/fixtures/dialect.md test/fixtures/callout.md "$FIX/"
@@ -243,6 +249,22 @@ if sys.argv[1] == 'dialect.md':
     # **最要紧的一条**：批量关闭撞上脏标签、用户点了取消 → 整批停下，一个都不许少
     ok = ok and tp.get('beforeCancel') == 2 and tp.get('afterCancel') == 2
 
+if sys.argv[1] == 'table.md':
+    # 0.3.0 T4 停用自定义皮肤（安全出口）：面板里选上 → 生效 → 菜单停用 → 摘掉 → 再启用
+    sk = r.get('skinProbe') or {}
+    ok = ok and not sk.get('err')
+    ok = ok and 'e2e-skin' in (sk.get('listed') or [])
+    # 真的叠上去了（看计算样式，不看那个 <style> 元素在不在 ——
+    # 「挂上了但一条没生效」正是这一轮顺带补的那种静默失败）
+    ok = ok and sk.get('onBg') == 'rgb(1, 2, 3)'
+    # 停用之后必须真的不见了，而且状态栏说清楚是哪一头
+    ok = ok and sk.get('offBg') != 'rgb(1, 2, 3)'
+    ok = ok and '已停用' in (sk.get('offNote') or '')
+    # 再按一次回得去 —— 皮肤改好之后，人手边只有这条菜单
+    ok = ok and sk.get('backBg') == 'rgb(1, 2, 3)'
+    ok = ok and '已启用' in (sk.get('backNote') or '')
+    # 探针自己收干净了（皮肤退选），否则它会跟着 localStorage 留给后面的用例
+    ok = ok and sk.get('cleaned') != 'rgb(1, 2, 3)'
 if sys.argv[1] == 'kitchen-sink.md':
     # P4-1：一份「什么都有」的文档导出后该有的东西（标题锚点 / 表格 / 代码上色 / 公式）
     ok = ok and '<h1 id=' in page and '<table>' in page
@@ -536,6 +558,10 @@ print(('PASS ' if ok else 'FAIL ') + '崩溃恢复不抢焦点 ' + str(tabs)
 sys.exit(0 if ok else 1)
 RECOVERY
 rm -f "$SCRATCH"/*.json
+
+# 0.3.0 T4 的那张探针皮肤收走：它落在开发机真实的 themes/ 目录里，
+# 留着的话这台机器的 Cursive 下次启动就多一张来路不明的皮肤
+rm -f "$THEMES/e2e-skin.css"
 
 echo "==> [4/4] 打包"
 ./shell-swift/make-app.sh

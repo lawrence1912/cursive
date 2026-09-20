@@ -135,6 +135,7 @@ let SHELL_TEXT: [String: [String]] = [
     "view.source":      ["源代码模式", "Source Mode"],
     "view.focus":       ["专注模式", "Focus Mode"],
     "view.typewriter":  ["打字机模式", "Typewriter Mode"],
+    "view.customOff":  ["停用自定义皮肤", "Disable Custom Theme"],
     "view.theme":       ["主题", "Theme"],
     "theme.system":     ["跟随系统", "System"],
     "theme.light":      ["浅色", "Light"],
@@ -4305,6 +4306,58 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             linkProbe = { err: String(e) }
           }
         }
+        // 0.3.0 T4 停用自定义皮肤（安全出口）。release.sh 在 themes/ 里放了一张
+        // 认得出来的皮肤（把 .cm-content 染成 rgb(1,2,3)），这一段走完整条路：
+        // 面板里选上 → 真的生效 → 菜单停用 → 真的摘掉 → 再启用 → 又回来。
+        // **断言看的是计算样式而不是那个 <style> 元素在不在** —— 「挂上了但一条没生效」
+        // 正是这一轮顺带要补的那种静默失败，拿元素当证据等于没测
+        let skinProbe = null
+        if (path.indexOf('table.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const bg = () => getComputedStyle(document.querySelector('.cm-content')).backgroundColor
+            const noteEl = document.getElementById('status-note')
+            window.__shellEmit('menu', 'app:preferences')
+            await wait(400)
+            const sel = document.querySelector('#pf-custom')
+            const listed = sel ? [...sel.options].map(o => o.value) : []
+            if (sel) {
+              sel.value = 'e2e-skin'
+              sel.dispatchEvent(new Event('change', { bubbles: true }))
+              await wait(300)
+            }
+            const onBg = bg()
+            window.__shellEmit('menu', 'app:preferences')   // 关面板
+            await wait(200)
+            noteEl.textContent = ''
+            // 停用：这条菜单项是皮肤把界面画花时唯一还按得到的东西
+            window.__shellEmit('menu', 'view:disable-custom-theme')
+            await wait(300)
+            const offBg = bg()
+            const offNote = noteEl.textContent
+            // 再按一次要回得去（皮肤改好之后人手边只有这条菜单）
+            window.__shellEmit('menu', 'view:disable-custom-theme')
+            await wait(300)
+            const backBg = bg()
+            const backNote = noteEl.textContent
+            // 收干净：把皮肤退选，别让它跟着 localStorage 留给后面的用例和开发机
+            window.__shellEmit('menu', 'app:preferences')
+            await wait(300)
+            const sel2 = document.querySelector('#pf-custom')
+            if (sel2) {
+              sel2.value = ''
+              sel2.dispatchEvent(new Event('change', { bubbles: true }))
+              await wait(200)
+            }
+            window.__shellEmit('menu', 'app:preferences')
+            await wait(150)
+            skinProbe = { listed, onBg, offBg, backBg, offNote, backNote, cleaned: bg() }
+          } catch (e) {
+            skinProbe = { err: String(e) }
+          }
+        }
+        // 0.3.0 T3 导出为长图：与导出 HTML 同一份 HTML，壳侧离屏渲染 + 快门。
+        // 自检下壳绕过保存面板，落到 CURSIVE_SMOKE_PNG 指的路径（没设就整段不跑）
         let pngProbe = null
         if (pngOut) {
           try {
@@ -4394,6 +4447,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           treeProbe,
           findProbe,
           linkProbe,
+          skinProbe,
           pngProbe,
           updateProbe,
           htmlProbe,
@@ -4816,6 +4870,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // P2-8 底部悬浮格式栏；不给快捷键 —— 视图菜单里这几个键位已经很挤了
             "formatBar": item(L("view.formatBar"), "view:toggle-format-bar", key: ""),
             "source": item(L("view.source"), "view:toggle-source", key: "/"),
+            // 0.3.0 T4：勾上 = 皮肤停着。不给快捷键 —— 它是个「出事那次才用」的开关
+            "customOff": item(L("view.customOff"), "view:disable-custom-theme", key: ""),
             // P3-3 写作模式。⌥⌘F / ⌥⌘T：⌘ 组合一律走菜单（判断 1），
             // 且避开 ⌘⇧F（留给 P3-2 跨文件搜索）
             "focus": item(L("view.focus"), "view:toggle-focus", key: "f", modifiers: [.command, .option]),
@@ -4847,6 +4903,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         themeMenu.addItem(item(L("theme.toggleDark"), "view:toggle-dark", key: "d", modifiers: [.command, .control]))
         themeRoot.submenu = themeMenu
         view.addItem(themeRoot)
+        // 0.3.0 T4 安全出口：紧跟主题子菜单（它就是主题那一类）。**带勾的开关**，
+        // 而不是一次性的「停用」—— 皮肤改好之后要回得去，而那会儿人手边只有这条菜单。
+        // 摆在原生菜单里是全部要点：页面被皮肤画成一片空白时，它照样在
+        view.addItem(viewFlagItems["customOff"]!)
         view.addItem(.separator())
         view.addItem(NSMenuItem(title: L("view.actualSize"), action: #selector(resetZoom(_:)), keyEquivalent: "0"))
         view.addItem(NSMenuItem(title: L("view.zoomIn"), action: #selector(zoomIn(_:)), keyEquivalent: "+"))

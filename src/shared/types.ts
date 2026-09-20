@@ -122,6 +122,9 @@ export interface ViewFlags {
   source: boolean
   focus: boolean
   typewriter: boolean
+  /** 契约 v29（0.3.0 T4）：自定义皮肤**停着**（勾上 = 停用）。与上面几条一样，
+   *  真相在渲染层，壳只负责把那个勾画出来 */
+  customOff: boolean
 }
 
 /**
@@ -208,6 +211,13 @@ export interface PrefValues {
   column: number
   /** 用户自定义皮肤文件名（themes/<name>.css），null = 不叠 */
   custom: string | null
+  /**
+   * 自定义皮肤**停用中**（0.3.0 T4 的安全出口）。
+   *
+   * 为什么不是把 `custom` 置空：那会**忘掉选的是哪一张**。皮肤写坏了先停用、
+   * 回头改好 CSS 再启用，是同一件事的两头；置空之后第二头要人自己去面板里再找一次。
+   */
+  customOff: boolean
   /** 界面语言（契约 v16：切换时推 setLanguage 给壳重建菜单/对话框） */
   lang: UiLang
   /**

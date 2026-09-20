@@ -437,7 +437,8 @@ function syncViewFlags(): void {
     formatBar: formatBar.visible,
     source: sourceMode,
     focus: writingNow.focus,
-    typewriter: writingNow.typewriter
+    typewriter: writingNow.typewriter,
+    customOff: prefs.values.customOff
   })
 }
 
@@ -1547,6 +1548,15 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'app:preferences':
       prefs.toggle()
       break
+    case 'view:disable-custom-theme': {
+      // 0.3.0 T4 安全出口。**回执必须说清楚现在是哪一头** —— 这条菜单项是
+      // 「皮肤把界面弄花了」时唯一还按得到的东西，按完什么都不说的话，
+      // 人分不清是「停用了」还是「这一下也没反应」
+      const off = prefs.toggleCustomOff()
+      syncViewFlags()
+      note(t(off ? 'note.customOff' : 'note.customOn'), { warn: off && !prefs.hasCustom })
+      break
+    }
     case 'app:check-update':
       // 0.3.0 T2：联网的是壳（页面的 CSP 出不去），这一侧只管比版本与说那句话
       await checkForUpdate()

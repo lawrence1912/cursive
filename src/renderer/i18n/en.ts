@@ -269,6 +269,10 @@ const en: Record<Key, string> = {
   'note.exportedPng': 'Image exported: “{name}” ({w}×{h})',
   'note.pngClipped': 'Document too long: “{name}” only got the first {h} pixels',
   'note.rolledBack': 'Rolled back to this version (⌘Z to undo)',
+  'note.customOff': 'Custom theme disabled (re-enable it from the View menu)',
+  'note.customOn': 'Custom theme enabled',
+  'note.customUnreadable': 'Could not read the custom theme — using a built-in one for now',
+  'note.customEmpty': 'Theme “{name}” has no rules that took effect — the CSS may be broken',
   'link.unsaved': 'Unsaved document — the relative link {path} has no starting point',
   'link.spaced': 'Spaces in this destination and no file to be seen: write it as <{dest}> or replace the spaces with %20',
 
