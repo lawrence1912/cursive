@@ -57,6 +57,7 @@ import { parseGoto } from './ui/goto'
 import { note } from './ui/note'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
+import { toggleFoldAt } from './editor/fold'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
@@ -1547,6 +1548,11 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'app:preferences':
       prefs.toggle()
+      break
+    case 'view:toggle-fold':
+      // 0.4.0 F1。源代码模式下这套装饰整个撤掉了，说清楚是哪一种「没反应」
+      if (sourceMode) note(t('note.foldSource'))
+      else if (!toggleFoldAt(view, view.state.selection.main.head)) note(t('note.foldNone'))
       break
     case 'view:disable-custom-theme': {
       // 0.3.0 T4 安全出口。**回执必须说清楚现在是哪一头** —— 这条菜单项是

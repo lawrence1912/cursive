@@ -1,4 +1,5 @@
 import { syntaxTree } from '@codemirror/language'
+import { toggleFoldAt } from '../fold'
 import type { EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
@@ -1052,6 +1053,64 @@ export class CalloutHeadWidget extends WidgetType {
       })
       el.appendChild(fold)
     }
+    return el
+  }
+}
+
+/**
+ * 标题行右边那颗折叠把手（0.4.0 F1）。**不加 gutter** —— 加一条要占掉一列版面，
+ * 而且与「屏幕上就是成稿的样子」直接冲突。平时淡着，鼠标扫到这一行才显形；
+ * 折着的时候一直亮着（否则那一节看起来就只是「后面没写」）。
+ */
+export class FoldHandleWidget extends WidgetType {
+  constructor(readonly folded: boolean) {
+    super()
+  }
+  eq(other: FoldHandleWidget): boolean {
+    return other.folded === this.folded
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'cm-lp-fold' + (this.folded ? ' is-folded' : '')
+    const label = t(this.folded ? 'w.unfoldSection' : 'w.foldSection')
+    el.setAttribute('aria-label', label)
+    el.title = label
+    el.innerHTML = icon('chevron')
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault() // 不让焦点离开编辑器，否则选区没了（同告示块那颗三角）
+      toggleFoldAt(view, view.posAtDOM(el))
+    })
+    return el
+  }
+}
+
+/**
+ * 折起来的一节 → 标题后面一颗药丸（blockField 出的跨行替换），点一下展开。
+ * 上面写着藏了多少行 —— 「这里还有东西」与「这一节就这么短」得看得出区别。
+ */
+export class SectionFoldWidget extends WidgetType {
+  constructor(readonly lines: number) {
+    super()
+  }
+  eq(other: SectionFoldWidget): boolean {
+    return other.lines === this.lines
+  }
+  override ignoreEvent(): boolean {
+    return false
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement('span')
+    el.className = 'cm-lp-section-more'
+    el.setAttribute('aria-label', t('w.unfoldSection'))
+    el.title = t('w.unfoldSection')
+    el.textContent = t('w.foldedLines', { n: this.lines })
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      toggleFoldAt(view, view.posAtDOM(el))
+    })
     return el
   }
 }

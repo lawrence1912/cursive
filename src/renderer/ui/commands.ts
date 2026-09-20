@@ -70,6 +70,7 @@ const GENERAL: Entry[] = [
   { action: 'view:toggle-source', labelKey: 'cmd.source', hint: '⌘/' },
   { action: 'view:toggle-focus', labelKey: 'cmd.focus', hint: '⌥⌘F' },
   { action: 'view:toggle-typewriter', labelKey: 'cmd.typewriter', hint: '⌥⌘T' },
+  { action: 'view:toggle-fold', labelKey: 'cmd.toggleFold' },
   { action: 'view:toggle-dark', labelKey: 'cmd.toggleDark', hint: '⌃⌘D' },
   { action: 'view:disable-custom-theme', labelKey: 'cmd.customOff' },
   { action: 'app:preferences', labelKey: 'cmd.prefs', hint: '⌘,' },

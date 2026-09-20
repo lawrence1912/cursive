@@ -154,6 +154,66 @@ body.cursive-em-italic .cm-md-em {
   color: var(--cal);
 }
 
+/* ---------- 折叠一节（0.4.0 F1）----------
+   把手画在标题行右侧，**不加 gutter**：加一列要占版面，而且与「屏幕上就是成稿的
+   样子」直接冲突。平时是透明的，鼠标扫到这一行才显形；折着的时候一直亮着 ——
+   否则那一节看起来就只是「后面还没写」 */
+.cm-lp-fold {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4em;
+  padding: 0 0.15em;
+  color: var(--mark-idle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  vertical-align: middle;
+}
+.cm-lp-fold .ic {
+  width: 0.8em;
+  height: 0.8em;
+  /* chevron 原样是朝右的：展开态转成朝下，折起来就是它本来的朝右 */
+  transform: rotate(90deg);
+}
+.cm-lp-fold.is-folded {
+  opacity: 1;
+}
+.cm-lp-fold.is-folded .ic {
+  transform: none;
+}
+.cm-line:hover .cm-lp-fold {
+  opacity: 1;
+}
+.cm-lp-fold:hover {
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-lp-fold {
+    transition: none;
+  }
+}
+
+/* 折起来那一节的尾巴：一颗写着「藏了多少行」的药丸。点它展开 */
+.cm-lp-section-more {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5em;
+  padding: 0 0.5em;
+  font-family: var(--body-font);
+  font-size: 0.72em;
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--mark-idle);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.cm-lp-section-more:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
+
 /* ---------- 代码块 ----------
    逐行铺背景，行与行之间没有间隙，视觉上就连成一整块；首尾两行另加
    .cm-lp-code-open / -close（decorate.ts 的 edgeLine），把这一整块收成圆角卡片。

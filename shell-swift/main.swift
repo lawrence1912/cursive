@@ -135,6 +135,7 @@ let SHELL_TEXT: [String: [String]] = [
     "view.source":      ["源代码模式", "Source Mode"],
     "view.focus":       ["专注模式", "Focus Mode"],
     "view.typewriter":  ["打字机模式", "Typewriter Mode"],
+    "view.toggleFold": ["折叠 / 展开本节", "Fold / Unfold Section"],
     "view.customOff":  ["停用自定义皮肤", "Disable Custom Theme"],
     "view.theme":       ["主题", "Theme"],
     "theme.system":     ["跟随系统", "System"],
@@ -4387,6 +4388,52 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             linkProbe = { err: String(e) }
           }
         }
+        // 0.4.0 F1 折叠一节：把手 → 折起来 → 药丸 → 展开，外加菜单那条路。
+        // **看行数**（.cm-line 的个数）而不是看装饰在不在：折叠这件事要的就是
+        // 「屏幕上真的少了几行」，装饰对不对是单测的事
+        // 摆在 callout.md 上：它有一个标题、正文够长，而且**这条用例不切标签**
+        // （dialect.md 那条的标签右键探针跑完，活动标签早就换成别的文档了）
+        let foldProbe = null
+        if (path.indexOf('callout.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const v = window.__cursive.view
+            const lines = () => document.querySelectorAll('.cm-line').length
+            const docBefore = v.state.doc.toString()
+            const before = lines()
+            // ① 标题行右边那颗把手（平时透明，鼠标扫到才显形 —— 探针直接派事件）
+            const handle = document.querySelector('.cm-lp-fold')
+            const handles = document.querySelectorAll('.cm-lp-fold').length
+            if (handle) handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+            await wait(300)
+            const folded = lines()
+            const pill = document.querySelector('.cm-lp-section-more')
+            const pillText = pill ? pill.textContent : null
+            // ② 药丸点一下展开
+            if (pill) pill.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+            await wait(300)
+            const back = lines()
+            // ③ 菜单那条路：光标放进第二节的正文里再折，折完光标要落在标题行上
+            //（不挪的话它就留在藏起来的正文里，而「落点掉进折叠区」会当场把它展开）
+            const hs = [...document.querySelectorAll('.cm-lp-h2, .cm-lp-h1')]
+            const anchor = v.state.doc.line(Math.min(v.state.doc.lines, 4)).from
+            v.dispatch({ selection: { anchor } })
+            await wait(120)
+            window.__shellEmit('menu', 'view:toggle-fold')
+            await wait(300)
+            const menuFolded = lines()
+            const caretLine = v.state.doc.lineAt(v.state.selection.main.head).text
+            // ④ 落点掉进折叠区 = 当场展开（查找 / 大纲 / 跨文件搜索都走这条）
+            const deep = Math.min(v.state.doc.length - 1, v.state.doc.line(Math.min(v.state.doc.lines, 8)).from)
+            v.dispatch({ selection: { anchor: deep } })
+            await wait(300)
+            const reopened = lines()
+            foldProbe = { before, folded, back, handles, pillText, menuFolded, caretLine,
+                          reopened, byteSafe: v.state.doc.toString() === docBefore }
+          } catch (e) {
+            foldProbe = { err: String(e) }
+          }
+        }
         // 0.3.0 T4 停用自定义皮肤（安全出口）。release.sh 在 themes/ 里放了一张
         // 认得出来的皮肤（把 .cm-content 染成 rgb(1,2,3)），这一段走完整条路：
         // 面板里选上 → 真的生效 → 菜单停用 → 真的摘掉 → 再启用 → 又回来。
@@ -4528,6 +4575,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           treeProbe,
           findProbe,
           linkProbe,
+          foldProbe,
           skinProbe,
           pngProbe,
           updateProbe,
@@ -4968,6 +5016,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.addItem(item(L("menu.view.palette"), "view:command-palette", key: "p", modifiers: [.command, .shift]))
         view.addItem(.separator())
         for key in ["source", "focus", "typewriter"] { view.addItem(viewFlagItems[key]!) }
+        // 0.4.0 F1：折叠一节。**不带勾** —— 它不是视图开关，是对光标所在那一节的一次动作。
+        // 不给快捷键：⌥⌘← 那一族在 macOS 上没空位，而这件事鼠标（标题行右边那颗把手）
+        // 与命令面板都够得着
+        view.addItem(item(L("view.toggleFold"), "view:toggle-fold", key: ""))
         view.addItem(.separator())
         let themeRoot = NSMenuItem(title: L("view.theme"), action: nil, keyEquivalent: "")
         let themeMenu = NSMenu(title: L("view.theme"))

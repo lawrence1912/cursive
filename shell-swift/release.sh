@@ -412,6 +412,21 @@ if sys.argv[1] == 'callout.md':
     # `[!summary]-` 默认折起 → 点三角展开 → 再点折回；折叠状态不写回文档
     ok = ok and (cp.get('more0'), cp.get('more1'), cp.get('more2')) == (1, 0, 1)
     ok = ok and cp.get('docLen') == cp.get('docLenAfter')
+    # ---- 0.4.0 F1 折叠一节 ----
+    fp = r.get('foldProbe') or {}
+    ok = ok and not fp.get('err')
+    ok = ok and fp.get('handles', 0) >= 1
+    # 折起来之后屏幕上**只剩标题那一行** —— 这才叫折叠，不是「变淡」
+    ok = ok and fp.get('before', 0) > 5 and fp.get('folded') == 1
+    ok = ok and (fp.get('pillText') or '').endswith('行')
+    ok = ok and fp.get('back') == fp.get('before')
+    # 菜单那条路也要真的折得动，而且**光标要落回标题行** ——
+    # 不落回去的话它就留在刚藏起来的正文里，「落点掉进折叠区就展开」会当场把它弹开
+    ok = ok and fp.get('menuFolded') == 1 and (fp.get('caretLine') or '').startswith('#')
+    # 落点掉进折叠区 = 当场展开（查找 / 大纲 / 跨文件搜索都走这条）
+    ok = ok and fp.get('reopened') == fp.get('before')
+    # 红线一：折叠一个字节都不许改文档
+    ok = ok and fp.get('byteSafe') is True
 if sys.argv[1] == 'links.md':
     # 0.2.0 链接跳转：⌘+点击的四条去处 + 两种打不开
     lp = r.get('linkProbe') or {}

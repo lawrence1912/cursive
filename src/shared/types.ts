@@ -53,6 +53,12 @@ export type MenuAction =
   | 'view:toggle-format-bar'
   | 'view:toggle-focus'
   | 'view:toggle-typewriter'
+  /**
+   * 折叠 / 展开光标所在的那一节（0.4.0 F1）。**不是视图开关**（没有勾），
+   * 是对某一节的一次动作 —— 所以走这条而不是 `ViewFlags`。
+   * 折叠态只在编辑器里，不写回文档、不进导出物（判断 4）
+   */
+  | 'view:toggle-fold'
   | 'view:theme-system'
   | 'view:theme-light'
   | 'view:theme-dark'

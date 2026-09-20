@@ -20,6 +20,7 @@ import {
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
 import { carryDecorations } from '../carry'
+import { foldedSpans, sectionFoldField, toggleSectionFold } from '../fold'
 import { docDir } from '../doc-dir'
 import { HEADING_RE } from '../headings'
 import { followLink } from '../link'
@@ -40,6 +41,7 @@ import {
 } from './table'
 import {
   CalloutFoldWidget,
+  SectionFoldWidget,
   collectHeadings,
   currentTheme,
   EmojiWidget,
@@ -135,7 +137,8 @@ export const blockField = StateField.define<DecorationSet>({
   create: buildBlocks,
   update(value, tr) {
     const effect = tr.effects.some(
-      (e) => e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold)
+      (e) =>
+        e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold) || e.is(toggleSectionFold)
     )
     // 后台 parse 推进（空事务）也要认：文档大到一次 ensure 解析不完时，块级装饰
     // 只在这条路上才等得到剩下的树 —— 否则半截表格就一直半截着。
@@ -296,6 +299,26 @@ export function patchBlocks(
   // 后台 parse 新解析出来的那一段。左边界撑到顶层块：旧快照很可能断在某个块的中间
   if (grownFrom !== null) dirtyNow(Math.min(grownFrom, tree.length), tree.length)
 
+  // 0.4.0 F1：脏区碰到折叠区，就把**整段折叠区**吞进来。药丸那条替换装饰从标题行末尾
+  // 一直盖到本节最后一行，而脏区只按块撑 —— 只盖住半条的话，RangeSet 那趟 filter
+  // （按装饰自己的 from/to 算）既删不干净又会重出一条，两条重叠的跨行替换当场报错。
+  // **两边的折叠区都要算**：删掉一个折起来的标题时，新 state 里那条折叠已经没了，
+  // 只有老 state 还记得该把哪一段重算（不然那颗药丸会留在原地，底下的正文一直藏着）
+  const foldZones: Span[] = foldedSpans(now).map((f) => ({ from: f.from, to: f.to }))
+  for (const f of foldedSpans(old)) {
+    const from = changes ? changes.mapPos(f.from, -1) : f.from
+    const to = changes ? changes.mapPos(f.to, 1) : f.to
+    if (to > from) foldZones.push({ from, to })
+  }
+  if (foldZones.length) {
+    for (const s of spans) {
+      for (const z of foldZones) {
+        if (z.to < s.from || z.from > s.to) continue
+        s.from = Math.min(s.from, z.from)
+        s.to = Math.max(s.to, z.to)
+      }
+    }
+  }
   const merged = mergeSpans(spans)
   // 脏区盖住大半份文档（全选、几十个光标、一次改动把后面整篇吞进代码块）就别绕了：
   // 那时候增量省不下什么，还要多走几趟 RangeSet。阈值按**撑开之后**的脏区算 ——
@@ -418,10 +441,22 @@ function collectBlocks(
   let toc = false
   const reveal = new Reveal(state, state.facet(revealScope))
   const editAt = tableEditAt(state)
+  // 0.4.0 F1 折叠一节。两件事在这儿一起做，因为它们必须看同一份折叠区：
+  // ① 折起来的那几段**整段换成一颗药丸**；② 段里的块（表格 / 公式 / mermaid）
+  // **一个都不许再出装饰** —— 两条跨行替换重叠 CM 当场报错（判断 2 那个老坑的新形状）
+  const folds = foldedSpans(state)
+  const hidden = (pos: number): boolean => folds.some((f) => pos >= f.from && pos < f.to)
+  for (const f of folds) {
+    if (f.from < from || f.from >= to) continue
+    const lines = state.doc.lineAt(f.to).number - state.doc.lineAt(f.from).number
+    out.push(Decoration.replace({ widget: new SectionFoldWidget(lines) }).range(f.from, f.to))
+  }
   tree.iterate({
     from,
     to,
     enter: (node) => {
+      // 折起来的那一段里，块级装饰一个都不出（上面那颗药丸已经把它整段盖住了）
+      if (hidden(node.from)) return false
       switch (node.name) {
         case 'Table': {
           // 就地编辑中的那张表不回落源码 —— 光标本来就在它的某一格里，
@@ -526,6 +561,7 @@ export function livePreview(): Extension {
     livePreviewPlugin,
     tableEditField,
     calloutFoldField,
+    sectionFoldField,
     blockField,
     openLinkOnClick,
     // 必须压过 defaultKeymap 的光标移动：方向键撞上渲染态表格时要进单元格

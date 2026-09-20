@@ -2,6 +2,8 @@ import { type EditorState, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 import { calloutFolded, matchCallout, type CalloutMatch } from '../callout'
+import { sectionFolded, spanOf as foldSpanOf } from '../fold'
+import { collectHeadings } from '../headings'
 import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
 import { parsedTree } from '../syntax'
@@ -13,6 +15,7 @@ import {
   CalloutHeadWidget,
   CheckboxWidget,
   EmojiWidget,
+  FoldHandleWidget,
   FootnoteRefWidget,
   ImageWidget,
   MathWidget,
@@ -99,6 +102,27 @@ export function buildDecorations(view: EditorView): DecorationSet {
   return Decoration.set(ctx.out, true)
 }
 
+/**
+ * 0.4.0 F1：标题行右侧那颗折叠把手。
+ *
+ * **它从 ViewPlugin 出而不是从 blockField 出**：把手的「有没有」取决于这一节后面
+ * 还有没有正文（而那是标题**之外**的事），blockField 那条增量重建只按脏区走，
+ * 在标题旁边的编辑不会重算它 —— 于是会留下一颗过期的把手。ViewPlugin 每次都按
+ * 视口重来一遍，天然不会过期，代价也只有视口这么大。点击那一半在 `FoldHandleWidget`。
+ */
+function foldHandle(ctx: Ctx, pos: number): void {
+  const h = collectHeadings(ctx.state).find((x) => x.pos === pos)
+  if (!h) return
+  const span = foldSpanOf(ctx.state, h)
+  if (!span) return // 这一节只有标题行，没东西可折
+  ctx.out.push(
+    Decoration.widget({
+      widget: new FoldHandleWidget(sectionFolded(ctx.state, pos)),
+      side: -1
+    }).range(span.from)
+  )
+}
+
 /** 返回 false 表示不再深入这个节点的子树 */
 function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
   const { out, doc, reveal } = ctx
@@ -117,6 +141,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
     case 'ATXHeading5':
     case 'ATXHeading6':
       addLines(ctx, node.from, node.to, `cm-lp-h${node.name.slice(-1)}`)
+      foldHandle(ctx, node.from)
       return
 
     case 'Blockquote': {
