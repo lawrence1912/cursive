@@ -316,6 +316,8 @@ let BRIDGE_JS = """
     moveItem: (src, destDir) => call('moveItem', [src, destDir]),
     revealInFinder: (path) => call('revealInFinder', [path]),
     searchFiles: (token, root, query, opts) => call('searchFiles', [token, root, query, opts]),
+    replaceInFiles: (targets, replacement) => call('replaceInFiles', [targets, replacement]),
+    undoReplaceInFiles: (token) => call('undoReplaceInFiles', [token]),
     cancelSearch: (token) => call('cancelSearch', [token]),
     userThemes: () => call('userThemes'),
     exportHtml: (html, name) => call('exportHtml', [html, name]),
@@ -1680,6 +1682,11 @@ var smokeCopyHtml: [Int] = []
 /// 「渲染层把哪条地址交给了系统」—— 尤其是本地文件那半（`file://` 编码对不对）
 var smokeExternal: [String] = []
 
+/// 0.4.0 F2 跨文件替换的撤销底本。**只留最近那一次** —— 状态栏那颗撤销是 8 秒的事，
+/// 留更多只是白占内存；再往前要找就去版本历史（每个被改的文件改前都留了一份）
+var replaceUndo: (token: Int, entries: [(path: String, content: String, fp: Fingerprint)])?
+var replaceToken = 0
+
 /// E2E 用（0.3.0 T2 检查更新）：自检下**一个字节都不联网**，按 `CURSIVE_SMOKE_UPDATE`
 /// 里逗号分隔的版本依次作答（用完停在最后一个）。要逗号是因为一轮 E2E 得把**四条**分支
 /// 都走到（有新版本 / 已是最新 / 那边还没发过 release / 没问着），而一个进程只有一份环境变量
@@ -2618,6 +2625,70 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             respond(id, NSNull())
 
         // ---- P3-4 用户自定义主题（契约 v12）----
+        case "replaceInFiles":
+            guard let rawTargets = args.first as? [[String: Any]],
+                  let replacement = args.count > 1 ? args[1] as? String : nil else {
+                respond(id, NSNull())
+                break
+            }
+            var changedFiles = 0
+            var changedHits = 0
+            var skipped: [String] = []
+            var undo: [(path: String, content: String, fp: Fingerprint)] = []
+            for target in rawTargets {
+                let rawPath = target["path"] as? String ?? ""
+                // 只认工作区（或当前文档目录）底下的文件 —— 路径是渲染层递过来的，
+                // 而这条通道能写盘
+                guard let path = safeTarget(rawPath),
+                      let hits = target["hits"] as? [[String: Any]], !hits.isEmpty,
+                      let raw = try? readRawDoc(path) else {
+                    if !rawPath.isEmpty { skipped.append(rawPath) }
+                    continue
+                }
+                let (text, fp) = decodeDoc(raw)
+                guard let next = applyReplacements(text, hits: hits, with: replacement) else {
+                    skipped.append(path)
+                    continue
+                }
+                // 改之前先留一份（契约 v22 的版本历史）。8 秒那颗撤销过期之后，
+                // 这是唯一还找得回来的地方 —— 所以它必须在**写盘之前**
+                saveSnapshot(path: path, content: text)
+                do {
+                    try encodeDoc(next.text, fp)
+                        .write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+                    undo.append((path, text, fp))
+                    changedFiles += 1
+                    changedHits += next.count
+                } catch {
+                    skipped.append(path)
+                }
+            }
+            replaceToken += 1
+            if undo.isEmpty {
+                replaceUndo = nil
+            } else {
+                replaceUndo = (token: replaceToken, entries: undo)
+            }
+            let undoToken = undo.isEmpty ? 0 : replaceToken
+            respond(id, ["files": changedFiles, "hits": changedHits,
+                         "skipped": skipped, "token": undoToken])
+
+        case "undoReplaceInFiles":
+            guard let token = args.first as? Int, let saved = replaceUndo, saved.token == token else {
+                respond(id, 0)
+                break
+            }
+            replaceUndo = nil
+            var restored = 0
+            for e in saved.entries {
+                // 原样写回去（连指纹一起）—— 撤销之后应当与替换前逐字节相同
+                if (try? encodeDoc(e.content, e.fp)
+                    .write(to: URL(fileURLWithPath: e.path), atomically: true, encoding: .utf8)) != nil {
+                    restored += 1
+                }
+            }
+            respond(id, restored)
+
         case "userThemes":
             var themes: [[String: Any]] = []
             if let files = try? FileManager.default.contentsOfDirectory(
@@ -2881,6 +2952,61 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 .standardizingPath)
         }
         return roots.contains { path == $0 || path.hasPrefix("\($0)/") } ? path : nil
+    }
+
+    /**
+     * 0.4.0 F2：按「行号 + 列 + 原文」逐处替换。**有一处对不上就整份放弃**（回 nil）。
+     *
+     * 搜完之后文件被别处改过时，按行列硬改会改到别的地方去 —— 那是最坏的一种损坏，
+     * 因为它看起来成功了。宁可整份跳过、让人重搜一次。
+     *
+     * 同一行里有好几处时**从右往左改**：先改左边的话，右边那些的列号当场失效。
+     * 列按 UTF-16 码元算（`SearchHit` 的口径），所以整行按 `utf16` 拆。
+     */
+    private func applyReplacements(_ text: String, hits: [[String: Any]],
+                                   with replacement: String) -> (text: String, count: Int)? {
+        struct Hit { let line: Int; let col: Int; let length: Int; let match: String }
+        let parsed = hits.compactMap { h -> Hit? in
+            guard let line = h["line"] as? Int, let col = h["col"] as? Int,
+                  let length = h["length"] as? Int, let match = h["match"] as? String,
+                  length >= 0 else { return nil }
+            return Hit(line: line, col: col, length: length, match: match)
+        }
+        guard parsed.count == hits.count else { return nil }
+        var lines = text.components(separatedBy: "\n")
+        let repl = Array(replacement.utf16)
+        for h in parsed.sorted(by: { $0.line == $1.line ? $0.col > $1.col : $0.line > $1.line }) {
+            let idx = h.line - 1   // SearchHit.line 是 1 起
+            guard idx >= 0, idx < lines.count else { return nil }
+            let u = Array(lines[idx].utf16)
+            guard h.col >= 0, h.col + h.length <= u.count else { return nil }
+            let found = String(utf16CodeUnits: Array(u[h.col..<(h.col + h.length)]), count: h.length)
+            guard found == h.match else { return nil }
+            var next = Array(u[0..<h.col])
+            next.append(contentsOf: repl)
+            next.append(contentsOf: Array(u[(h.col + h.length)...]))
+            lines[idx] = String(utf16CodeUnits: next, count: next.count)
+        }
+        return (lines.joined(separator: "\n"), parsed.count)
+    }
+
+    /// 版本历史落一份（契约 v22）。`snapshotSave` 通道与跨文件替换共用这一份实现 ——
+    /// 各写一遍的话，迟早有一边忘了去重或忘了清理
+    @discardableResult
+    func saveSnapshot(path: String, content: String) -> Bool {
+        let dir = historyDir(for: path)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let existing = snapshotFiles(dir)
+        if let newest = existing.last,
+           let old = try? String(contentsOf: newest, encoding: .utf8), old == content {
+            return false
+        }
+        try? content.write(
+            to: dir.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000)).md"),
+            atomically: true, encoding: .utf8)
+        try? path.write(to: dir.appendingPathComponent("path.txt"), atomically: true, encoding: .utf8)
+        pruneSnapshots(dir)
+        return true
     }
 
     /// 重名就在扩展名前加 `-2`、`-3`…，绝不覆盖已有文件
@@ -4388,6 +4514,53 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             linkProbe = { err: String(e) }
           }
         }
+        // 0.4.0 F2 跨文件替换（契约 v30）—— **全应用风险最高的一个动作**：一次改几十个
+        // 没打开过的文件。这一段走完两轮：① 改掉三份夹具（LF / CRLF / BOM 各一份），
+        // 中间**勾掉一处**证明「所见即所改」；② 另一份改完当场撤销。
+        // 盘上的字节由 release.sh 的 python 收尾对账（指纹、没命中的行、版本历史快照）
+        let replaceProbe = null
+        if (path.indexOf('crlf.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const noteEl = document.getElementById('status-note')
+            const runSearch = async (q) => {
+              window.__cursive.sidebar.openSearch()
+              await wait(200)
+              const input = document.querySelector('.fs-input')
+              input.value = q
+              input.dispatchEvent(new Event('input', { bubbles: true }))
+              await wait(1400)   // 防抖 220ms + 壳侧扫一遍夹具目录
+            }
+            // ① 三份夹具里的「术语」→「名词」，但**最后一处勾掉**
+            await runSearch('术语')
+            const found = document.querySelectorAll('.fs-hit').length
+            const picks = [...document.querySelectorAll('.fs-pick')]
+            const offRow = picks.length ? picks[picks.length - 1].closest('.fs-hit') : null
+            const offText = offRow ? offRow.textContent : null
+            if (picks.length) picks[picks.length - 1].click()
+            await wait(150)
+            const btnLabel = document.querySelector('.fs-replace-all').textContent
+            document.querySelector('.fs-replace').value = '名词'
+            noteEl.textContent = ''
+            document.querySelector('.fs-replace-all').click()
+            await wait(1800)
+            const replacedNote = noteEl.textContent
+            // ② 另一份：改完当场撤销，盘上要逐字节回到改之前
+            await runSearch('待撤销')
+            document.querySelector('.fs-replace').value = '改过了'
+            noteEl.textContent = ''
+            document.querySelector('.fs-replace-all').click()
+            await wait(1800)
+            const undoNote = noteEl.textContent
+            const undoBtn = noteEl.querySelector('.note-act')
+            if (undoBtn) undoBtn.click()
+            await wait(1500)
+            replaceProbe = { found, offText, btnLabel, replacedNote, undoNote,
+                             undoneNote: noteEl.textContent }
+          } catch (e) {
+            replaceProbe = { err: String(e) }
+          }
+        }
         // 0.4.0 F1 折叠一节：把手 → 折起来 → 药丸 → 展开，外加菜单那条路。
         // **看行数**（.cm-line 的个数）而不是看装饰在不在：折叠这件事要的就是
         // 「屏幕上真的少了几行」，装饰对不对是单测的事
@@ -4576,6 +4749,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           findProbe,
           linkProbe,
           foldProbe,
+          replaceProbe,
           skinProbe,
           pngProbe,
           updateProbe,

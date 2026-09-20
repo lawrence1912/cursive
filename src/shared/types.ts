@@ -183,6 +183,39 @@ export interface SearchHit {
   textCol: number
 }
 
+/**
+ * ---- 0.4.0 F2 跨文件替换（契约 v30）----
+ * 一处要改的命中。坐标与 `SearchHit` 同一套（行 1 起、列按 UTF-16 码元），
+ * 外加一份 `match`：壳侧**逐字比对过才改**。
+ *
+ * 为什么要带原文：搜完到按下「全部替换」之间，文件可能已经被别处改过了 ——
+ * 那时候按行列硬改会改到别的地方去，而那是最坏的一种损坏（看起来成功了）。
+ * 对不上就**整份文件跳过**并在回执里说出来，让人重搜一次。
+ */
+export interface ReplaceHit {
+  line: number
+  col: number
+  length: number
+  /** 搜到的那一下的原文，壳侧据此校验 */
+  match: string
+}
+
+/** 一个文件里要改的那些处（勾掉的不在里面 —— 所见即所改） */
+export interface ReplaceTarget {
+  path: string
+  hits: ReplaceHit[]
+}
+
+export interface ReplaceOutcome {
+  /** 真的改了的文件数 / 处数 */
+  files: number
+  hits: number
+  /** 整份跳过的（内容对不上、读不到、写不了、不在工作区里） */
+  skipped: string[]
+  /** 撤销令牌；0 = 没有可撤销的（一个文件都没改成） */
+  token: number
+}
+
 export interface SearchBatch {
   token: number
   hits: SearchHit[]
@@ -445,6 +478,22 @@ export interface CursiveApi {
   cancelSearch(token: number): void
   onSearchHits(fn: (batch: SearchBatch) => void): () => void
   onSearchDone(fn: (done: SearchDone) => void): () => void
+
+  /** ---- 0.4.0 F2 跨文件替换（契约 v30）----
+   * **这是整个应用里唯一一个一次改几十个文件的动作**，而且大部分文件没在编辑器里
+   * 打开过 —— 红线一（保存零损耗）在这儿最容易破。四条约束都在壳侧：
+   *
+   * ① **只改清单里这些处**：不回盘重搜一遍（文件可能已经变了），每一处都带着原文，
+   *    逐字比对过才动；有一处对不上就**整份跳过**，宁可少改也不改错地方；
+   * ② **指纹原样**：走 `decodeDoc` / `encodeDoc` 那条路（与保存同一条），
+   *    CRLF 的文件改完还是 CRLF、带 BOM 的还带 BOM、没命中的行一个字节不动；
+   * ③ **改之前每个文件先留一份快照**（契约 v22 的版本历史，回滚路径白拿）；
+   * ④ **一颗 8 秒撤销**：壳侧留着改前那几份，`undoReplaceInFiles` 原样写回去
+   *    （回真的还原了几个文件）。过了那一下就只能去版本历史里翻 —— 所以 ③ 不能省。
+   *
+   * 路径都要过 `safeTarget`：只认工作区（或当前文档目录）底下的文件。 */
+  replaceInFiles(targets: ReplaceTarget[], replacement: string): Promise<ReplaceOutcome>
+  undoReplaceInFiles(token: number): Promise<number>
 
   /** ---- P3-4 自定义主题（契约 v12）----
    * 扫 `~/Library/Application Support/cursive/themes/*.css`，整份 CSS 一起回来

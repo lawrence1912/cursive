@@ -1254,6 +1254,53 @@ body.is-dragging-row * { cursor: grabbing !important; }
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* 0.4.0 F2 跨文件替换。替换行复用 .fs-box 那只盒子（同一条视觉规格），
+   只多一颗按钮；逐处复选框长在命中行最前面 */
+.fs-replace {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
+}
+.fs-replace-all {
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fs-replace-all:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.fs-replace-all:disabled {
+  color: var(--mark-idle);
+  cursor: default;
+  opacity: 0.6;
+}
+.fs-pick {
+  flex: none;
+  margin: 0;
+  align-self: center;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* 勾掉的那一处：留在列表里（还要能勾回来），但一眼看得出它不会被改 */
+.fs-hit.is-off .fs-text {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 .fs-hit {
   display: flex;
   gap: 7px;

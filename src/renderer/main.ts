@@ -6,7 +6,7 @@ import { findNext, findPrevious, openSearchPanel, selectNextOccurrence } from '@
 import { EditorView } from '@codemirror/view'
 import { EditorState, type Text, type TransactionSpec } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
-import type { DocPayload, MenuAction, SearchHit } from '../shared/types'
+import type { DocPayload, MenuAction, ReplaceTarget, SearchHit } from '../shared/types'
 import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
 import { group, readLabel } from '../shared/wordcount'
 import { applyI18n, detectLang, getLang, localeOf, onLangChange, setLang, t } from './i18n'
@@ -191,8 +191,36 @@ const sidebar = new Sidebar({
   // 会按旧路径写回去 —— 等于凭空复活一个已经不在那儿的文件
   moved: (from, to) => retargetTabs(from, to),
   openHit: (hit) => void openHit(hit),
+  replaceInFiles: (targets, replacement) => replaceInFiles(targets, replacement),
   pickFolder: () => openFolder()
 })
+/**
+ * 0.4.0 F2 跨文件替换的回执那一半（契约 v30）。
+ *
+ * 改盘的事全在壳里（指纹、快照、逐字校验），这里只管**说清楚发生了什么**：
+ * 改了几个文件几处、有没有整份跳过的（那说明文件在搜完之后变过）、
+ * 以及那颗 8 秒撤销。这是整个应用里改动面最大的一个动作，回执不能含糊。
+ */
+async function replaceInFiles(targets: ReplaceTarget[], replacement: string): Promise<void> {
+  const out = await window.api.replaceInFiles(targets, replacement)
+  if (!out.files) {
+    note(t('note.replacedNone'), { warn: true })
+    return
+  }
+  const skipped = out.skipped.length ? t('note.replaceSkipped', { n: out.skipped.length }) : ''
+  note(t('note.replaced', { files: out.files, hits: out.hits }) + skipped, {
+    warn: out.skipped.length > 0,
+    action: {
+      label: t('note.undo'),
+      run: () => {
+        void window.api.undoReplaceInFiles(out.token).then((n) => {
+          note(n ? t('note.replaceUndone', { n }) : t('note.restoreFailed'), { warn: n === 0 })
+        })
+      }
+    }
+  })
+}
+
 /**
  * 「打开文件夹」= **开一个新窗口**（一个窗口 = 一个工作区，与 Finder 打开文件夹同一条规矩）。
  * 唯一的例外是当前窗口还干净得像刚开出来 —— 一个空白标签、没改过东西 ——

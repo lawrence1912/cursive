@@ -80,6 +80,22 @@ cat > "$FIX/links.md" <<'LINKS'
 
 写不对的：[看不出是文件](我的 笔记 没有后缀) —— 地址带空格又没有后缀，认不出来
 LINKS
+# 0.4.0 F2 跨文件替换的四份夹具。三种指纹各一份 —— 替换走的是与保存同一条
+# decode/encode 路，CRLF 的改完还得是 CRLF、带 BOM 的还得带 BOM；
+# 每份都留一行**不含命中**的正文，用来证明「没命中的行一个字节不动」
+python3 - <<'REPFIX'
+import io, os
+d = '/tmp/cursive-e2e'
+io.open(os.path.join(d, 'rep-lf.md'), 'w', encoding='utf-8', newline='').write(
+    '# 替换 LF\n\n第一处 术语 在这儿。\n没有命中的一行 —— 一个字节都不许动。\n又一处 术语 收尾。\n')
+io.open(os.path.join(d, 'rep-crlf.md'), 'w', encoding='utf-8', newline='').write(
+    '# 替换 CRLF\r\n\r\n这一行有 术语 在。\r\n这一行没有。\r\n')
+io.open(os.path.join(d, 'rep-bom.md'), 'w', encoding='utf-8-sig', newline='').write(
+    '# 替换 BOM\n\n带 BOM 的 术语 一处。\n尾行不动。\n')
+io.open(os.path.join(d, 'rep-undo.md'), 'w', encoding='utf-8', newline='').write(
+    '# 撤销\n\n这里有一个 待撤销 的词。\n')
+REPFIX
+
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
 
@@ -495,6 +511,39 @@ if sys.argv[1] == 'crlf.md':
     # ⑤ 真·没问着：这一句才是黄的（「没能如愿」用黄色是 note() 的分工）
     ok = ok and '连不上 GitHub' in (up.get('failText') or '')
     ok = ok and up.get('failWarn') is True
+    # ---- 0.4.0 F2 跨文件替换（契约 v30）----
+    rp = r.get('replaceProbe') or {}
+    ok = ok and not rp.get('err')
+    # 三份夹具四处命中（rep-lf 两处、crlf 一处、bom 一处）
+    ok = ok and rp.get('found') == 4
+    # 按钮上写着「还剩几处」—— 勾掉一处之后它得跟着变
+    ok = ok and '替换' in (rp.get('btnLabel') or '')
+    # 回执要说清楚改了几个文件几处（勾掉的那一处不算）
+    ok = ok and '已替换 3 个文件里的 3 处' in (rp.get('replacedNote') or '')
+    ok = ok and '已还原 1 个文件' in (rp.get('undoneNote') or '')
+    # **盘上的字节**（回执说了什么不算数，这一段才算）
+    def rd(name):
+        return open('/tmp/cursive-e2e/' + name, 'rb').read()
+    lf = rd('rep-lf.md')
+    # 勾掉的是最后一处 —— 「又一处 术语 收尾」那一行必须原样留着
+    ok = ok and lf == ('# 替换 LF\n\n第一处 名词 在这儿。\n没有命中的一行 —— 一个字节都不许动。\n'
+                       '又一处 术语 收尾。\n').encode()
+    # CRLF 一条：改完还得是 CRLF，而且**一个 \n 都不许裸着**
+    crlf = rd('rep-crlf.md')
+    ok = ok and crlf == '# 替换 CRLF\r\n\r\n这一行有 名词 在。\r\n这一行没有。\r\n'.encode()
+    # BOM 一条：头三个字节还在
+    bom = rd('rep-bom.md')
+    ok = ok and bom.startswith(b'\xef\xbb\xbf')
+    ok = ok and bom == '\ufeff# 替换 BOM\n\n带 BOM 的 名词 一处。\n尾行不动。\n'.encode('utf-8')
+    # 撤销那一份：**逐字节回到改之前**
+    ok = ok and rd('rep-undo.md') == '# 撤销\n\n这里有一个 待撤销 的词。\n'.encode()
+    # 每个被改的文件改前都留了一份历史版本（8 秒那颗撤销过期之后唯一的退路）
+    hist = os.path.expanduser('~/Library/Application Support/cursive/history')
+    for name in ('rep-lf.md', 'rep-crlf.md', 'rep-bom.md'):
+        key = hashlib.sha256(('/tmp/cursive-e2e/' + name).encode()).hexdigest()[:16]
+        snaps = [f for f in os.listdir(os.path.join(hist, key))
+                 if f.endswith('.md')] if os.path.isdir(os.path.join(hist, key)) else []
+        ok = ok and len(snaps) >= 1
 if sys.argv[1] == 'mermaid.md':
     # P4-1：图烘成静态 SVG 写进文件（导出物里不留运行时依赖）；非法那块保留源码
     ok = ok and '<figure class="mermaid"' in page and '<svg' in page

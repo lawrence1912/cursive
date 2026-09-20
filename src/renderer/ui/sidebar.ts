@@ -3,7 +3,7 @@ import { applyI18n, onLangChange, t, type Key } from '../i18n'
 import { icon, type IconName } from './icons'
 import { closeMenu, openMenu, type MenuItem } from './menu'
 import { FileSearch } from './file-search'
-import type { DirEntry, SearchHit } from '../../shared/types'
+import type { DirEntry, ReplaceTarget, SearchHit } from '../../shared/types'
 
 interface Node {
   entry: DirEntry
@@ -48,6 +48,8 @@ export interface SidebarHooks {
   moved?: (from: string, to: string) => void
   /** 跨文件搜索点中一处命中 */
   openHit?: (hit: SearchHit) => void
+  /** 0.4.0 F2 跨文件替换：回执与撤销都在 main.ts（状态栏那条通道在那儿） */
+  replaceInFiles?: (targets: ReplaceTarget[], replacement: string) => Promise<void>
   /**
    * 「打开其他文件夹」：**开哪个窗口由 main.ts 决定**（一个窗口 = 一个工作区，
    * 默认新窗口）。侧栏自己只负责把这件事转出去
@@ -112,7 +114,10 @@ export class Sidebar {
 
     this.search = new FileSearch(
       (hit) => hooks.openHit?.(hit),
-      () => this.closeSearch()
+      () => this.closeSearch(),
+      async (targets, replacement) => {
+        await hooks.replaceInFiles?.(targets, replacement)
+      }
     )
     this.el.insertBefore(this.search.el, this.el.querySelector('.sb-resize'))
 

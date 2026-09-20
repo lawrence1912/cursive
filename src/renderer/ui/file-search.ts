@@ -1,7 +1,7 @@
 import { basename } from '../../shared/path'
 import { applyI18n, onLangChange, t } from '../i18n'
 import { icon } from './icons'
-import type { SearchHit, SearchOptions } from '../../shared/types'
+import type { ReplaceHit, ReplaceTarget, SearchHit, SearchOptions } from '../../shared/types'
 
 /** macOS 上 /tmp、/var 都是 /private 下的软链，路径两边可能一边带一边不带 */
 function unprivate(p: string): string {
@@ -49,9 +49,42 @@ export function relativeDir(path: string, root: string | null): string {
 }
 
 /** 一个文件下的全部命中 —— 结果按文件分组，正好也是壳侧回推的批次单位 */
-interface Group {
+export interface Group {
   path: string
   hits: SearchHit[]
+}
+
+/** 逐处复选框的身份：第几组第几条。勾掉的记在一张集合里（默认全选） */
+export function hitKey(group: number, hit: number): string {
+  return `${group}:${hit}`
+}
+
+/**
+ * 0.4.0 F2：勾剩下的那些命中 → 送给壳的那份清单（契约 v30）。
+ *
+ * **所见即所改**：清单里只有此刻列在结果里、而且没被勾掉的那些处，壳侧不再回盘
+ * 重搜一遍。每一处都带上原文（`hit.text` 里按 `textCol` 切出来的那一段）——
+ * 壳侧逐字比对过才改，对不上就整份跳过。
+ *
+ * 纯函数，`test/file-search.test.ts` 直接测：这条路上会错的（把勾掉的也送出去、
+ * 原文切歪一个字符）全在这几行里，而它下游是「一次改几十个文件」。
+ */
+export function buildTargets(groups: Group[], excluded: ReadonlySet<string>): ReplaceTarget[] {
+  const out: ReplaceTarget[] = []
+  for (const [gi, g] of groups.entries()) {
+    const hits: ReplaceHit[] = []
+    for (const [hi, hit] of g.hits.entries()) {
+      if (excluded.has(hitKey(gi, hi))) continue
+      hits.push({
+        line: hit.line,
+        col: hit.col,
+        length: hit.length,
+        match: hit.text.slice(hit.textCol, hit.textCol + hit.length)
+      })
+    }
+    if (hits.length) out.push({ path: g.path, hits })
+  }
+  return out
 }
 
 const OPT_KEY = 'cursive.searchOpts'
@@ -91,11 +124,19 @@ export class FileSearch {
   private total = 0
   private timer: number | undefined
   private status: Status = { kind: 'blank' }
+  /** 0.4.0 F2：被勾掉的那些命中（默认一个都没勾掉 = 全改） */
+  private excluded = new Set<string>()
+  private replacing = false
 
   constructor(
     private readonly onOpenHit: (hit: SearchHit) => void,
     /** 面板收起（Esc / 返回键）：交还给文件树 */
-    private readonly onBack: () => void
+    private readonly onBack: () => void,
+    /** 0.4.0 F2：按下「全部替换」。回执与撤销都在 main.ts（状态栏那条通道在那儿） */
+    private readonly onReplaceAll: (
+      targets: ReplaceTarget[],
+      replacement: string
+    ) => Promise<void> = async () => undefined
   ) {
     this.opts = this.loadOpts()
     this.el = document.createElement('div')
@@ -113,6 +154,14 @@ export class FileSearch {
         <button data-opt="caseSensitive" title="${t('fs.case')}" data-i18n-title="fs.case">Aa</button>
         <button data-opt="wholeWord" title="${t('fs.word')}" data-i18n-title="fs.word">ab|</button>
         <button data-opt="regex" title="${t('fs.regex')}" data-i18n-title="fs.regex">.*</button>
+      </div>
+      <div class="fs-box fs-box-replace">
+        <span class="fs-icon">${icon('pencil')}</span>
+        <input class="fs-replace" type="text" placeholder="${t('fs.replacePh')}" aria-label="${t('fs.replacePh')}"
+               data-i18n-ph="fs.replacePh" data-i18n-aria="fs.replacePh"
+               autocomplete="off" spellcheck="false" />
+        <button class="fs-replace-all" disabled title="${t('fs.replaceAllTip')}"
+                data-i18n="fs.replaceAll" data-i18n-title="fs.replaceAllTip">${t('fs.replaceAll')}</button>
       </div>
       <div class="fs-status"></div>
       <div class="fs-list" tabindex="-1"></div>
@@ -142,6 +191,22 @@ export class FileSearch {
     })
     this.clearBtn.addEventListener('click', () => this.clear())
 
+    // 0.4.0 F2：替换那一行。回车 = 按下「全部替换」（与查找框的回车对称）
+    const replaceInput = this.el.querySelector<HTMLInputElement>('.fs-replace')!
+    replaceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        this.onBack()
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        void this.replaceAll()
+      }
+    })
+    this.el
+      .querySelector('.fs-replace-all')!
+      .addEventListener('click', () => void this.replaceAll())
+
     this.el.querySelector('.fs-opts')!.addEventListener('click', (e) => {
       const btn = (e.target as Element).closest<HTMLElement>('button[data-opt]')
       if (!btn) return
@@ -156,6 +221,16 @@ export class FileSearch {
     this.listEl.addEventListener('click', (e) => {
       const row = (e.target as Element).closest<HTMLElement>('.fs-hit')
       if (!row) return
+      const key = hitKey(Number(row.dataset['g']), Number(row.dataset['h']))
+      // 0.4.0 F2：勾掉某一处 —— **点复选框不算点这一行**，否则想取消一处就被带着跳走了
+      if ((e.target as Element).closest('.fs-pick')) {
+        const box = row.querySelector<HTMLInputElement>('.fs-pick')!
+        if (box.checked) this.excluded.delete(key)
+        else this.excluded.add(key)
+        row.classList.toggle('is-off', !box.checked)
+        this.syncReplace()
+        return
+      }
       const g = this.groups[Number(row.dataset['g'])]
       const hit = g?.hits[Number(row.dataset['h'])]
       if (hit) this.onOpenHit(hit)
@@ -169,6 +244,7 @@ export class FileSearch {
       this.total += batch.hits.length
       this.appendGroup(this.groups.length - 1)
       this.setStatus({ kind: 'hits', truncated: false })
+      this.syncReplace()
     })
     window.api.onSearchDone((done) => {
       if (done.token !== this.token) return
@@ -239,6 +315,40 @@ export class FileSearch {
     this.groups = []
     this.total = 0
     this.listEl.replaceChildren()
+    // 勾掉的那些跟着结果一起作废：下一次搜出来的第 3 条与这一次的第 3 条毫无关系
+    this.excluded.clear()
+    this.syncReplace()
+  }
+
+  /**
+   * 0.4.0 F2：按下「全部替换」。
+   *
+   * **只送清单里剩下的那些处**（所见即所改），改完**重搜一次** —— 结果里那些行
+   * 已经不成立了，留着会让人对着一份过期的清单再点一次。
+   */
+  private async replaceAll(): Promise<void> {
+    if (this.replacing) return
+    const replacement = this.el.querySelector<HTMLInputElement>('.fs-replace')!.value
+    const targets = buildTargets(this.groups, this.excluded)
+    if (!targets.length) return
+    this.replacing = true
+    this.syncReplace()
+    try {
+      await this.onReplaceAll(targets, replacement)
+    } finally {
+      this.replacing = false
+      this.syncReplace()
+    }
+    this.run()
+  }
+
+  /** 「全部替换」什么时候能按：有查询、有剩下的命中、而且这会儿没在改 */
+  private syncReplace(): void {
+    const btn = this.el.querySelector<HTMLButtonElement>('.fs-replace-all')
+    if (!btn) return
+    const left = buildTargets(this.groups, this.excluded).reduce((n, t) => n + t.hits.length, 0)
+    btn.disabled = this.replacing || !this.input.value || left === 0
+    btn.textContent = left ? t('fs.replaceAllN', { n: left }) : t('fs.replaceAll')
   }
 
   private run(): void {
@@ -311,6 +421,12 @@ export class FileSearch {
       row.dataset['g'] = String(index)
       row.dataset['h'] = String(i)
       row.title = t('fs.line', { line: hit.line })
+      // 0.4.0 F2：每一处都能单独去掉 —— 「全有或全无」在跨文件替换里太粗
+      const pick = document.createElement('input')
+      pick.type = 'checkbox'
+      pick.className = 'fs-pick'
+      pick.checked = !this.excluded.has(hitKey(index, i))
+      pick.setAttribute('aria-label', t('fs.pick'))
       const ln = document.createElement('span')
       ln.className = 'fs-line'
       ln.textContent = String(hit.line)
@@ -324,7 +440,7 @@ export class FileSearch {
         mark,
         document.createTextNode(hit.text.slice(hit.textCol + hit.length))
       )
-      row.append(ln, text)
+      row.append(pick, ln, text)
       wrap.appendChild(row)
     }
     this.listEl.appendChild(wrap)
