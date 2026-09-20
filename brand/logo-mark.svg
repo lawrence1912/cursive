@@ -1,26 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="196 202 620 620" width="310" height="310" role="img" aria-label="cursive">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="183 205 620 620" width="310" height="310" role="img" aria-label="cursive">
   <title>cursive mark</title>
   <defs>
-    <linearGradient id="m-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4c463e"/><stop offset="1" stop-color="#201e1b"/></linearGradient>
-    <linearGradient id="m-mk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bdb5a7"/><stop offset="1" stop-color="#948b7d"/></linearGradient>
-    <linearGradient id="m-car" x1=".2" y1="0" x2=".8" y2="1">
-      <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
+    <!-- 一整笔写出来的 c：入笔细、左侧下行最粗、收笔提细，末了带一小截出锋。
+         外轮廓是变宽度笔画拟合的三次贝塞尔（偏差 ≤1.1px），字身右倾 5° 已烘进坐标。 -->
+    <path id="m-c" d="M 709.7 303 C 684.9 275 653.7 254.2 617.7 242.1 C 582.8 230.3 540.6 227 500.5 234.2 C 461.2 241.3 419.3 259.2 384.1 284.9 C 349.7 310.1 317.8 345.5 295.4 384.5 C 272.4 424.6 258.5 467.4 253.8 512 C 249.1 556.8 254.1 600.4 269.4 641.1 C 284.5 681.1 308.3 715.8 340.3 743.3 C 371.4 769.9 410.9 788.6 449.7 796 C 489.6 803.6 531.1 801 571.4 788.2 C 610.5 775.8 646.2 754.4 676.6 725.6 C 677 719.6 686.1 710 688.3 706.6 C 692.3 700.5 695.9 694.7 699.5 688.4 C 703.1 682.3 706.3 676.4 709.6 670.1 C 712.7 663.9 715.5 657.9 718.3 651.6 A 8 8 0 0 0 705.4 643.1 C 700.6 647.4 695.9 651.3 690.7 655.2 C 685.6 659 680.6 662.4 675.2 665.7 C 669.9 668.9 664.8 671.7 659.1 674.3 C 656.1 675.6 646.5 681.3 641.9 679.8 C 614.7 696.2 586.7 705.5 559.4 708.5 C 532.8 711.4 505.5 707.8 482.7 699.2 C 459.1 690.3 438.8 676.2 422 657.9 C 405.7 640 392.3 616.9 384.3 592 C 376.4 567.8 372.5 539.8 374.2 512 C 375.8 483.9 382.6 456.7 394.9 430.4 C 406.9 404.6 423.2 381.6 444.2 361.9 C 464.7 342.6 488.3 327.9 514.5 318.6 C 539.6 309.7 568.8 306 595.9 309.2 C 623.5 312.5 650.6 322.3 675.5 339.6 A 24 24 0 0 0 709.7 303 Z"/>
+    <clipPath id="m-cc"><use href="#m-c"/></clipPath>
+    <linearGradient id="m-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34353f"/><stop offset="1" stop-color="#0e1018"/></linearGradient>
+    <linearGradient id="m-mk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c9c9ce"/><stop offset="1" stop-color="#9a9aa2"/></linearGradient>
+    <linearGradient id="m-car" x1=".2" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
     <radialGradient id="m-halo" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#3d90f0" stop-opacity=".34"/><stop offset=".5" stop-color="#3d90f0" stop-opacity=".1"/><stop offset="1" stop-color="#3d90f0" stop-opacity="0"/></radialGradient>
-    <radialGradient id="m-cast" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#221f1a" stop-opacity=".24"/><stop offset=".62" stop-color="#221f1a" stop-opacity=".08"/><stop offset="1" stop-color="#221f1a" stop-opacity="0"/></radialGradient>
+      <stop offset="0" stop-color="#3d90f0" stop-opacity=".26"/><stop offset=".5" stop-color="#3d90f0" stop-opacity=".08"/><stop offset="1" stop-color="#3d90f0" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m-pool" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#000"/><stop offset=".6" stop-color="#000" stop-opacity=".35"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m-cast" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#1d1d1f" stop-opacity=".2"/><stop offset=".62" stop-color="#1d1d1f" stop-opacity=".07"/><stop offset="1" stop-color="#1d1d1f" stop-opacity="0"/></radialGradient>
   </defs>
-  <!-- C：一整笔，开口朝右，缺口正对光标 -->
-  <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="url(#m-ink)" stroke-width="106" stroke-linecap="round"/>
-  <path d="M 600 290 A 236 236 0 0 0 330 430" fill="none" stroke="#fff" stroke-opacity=".13" stroke-width="9" stroke-linecap="round"/>
-  <!-- 怀里那一行：灰方块是 markdown 标记（光标停在这一行才显形），后面是排好版的成品 -->
-  <ellipse cx="455" cy="562" rx="112" ry="15" fill="url(#m-cast)"/>
-  <rect x="352" y="477" width="70" height="70" rx="24" fill="url(#m-mk)"/>
-  <rect x="359" y="484" width="56" height="5" rx="2.5" fill="#fff" opacity=".4"/>
-  <rect x="444" y="477" width="118" height="70" rx="35" fill="url(#m-ink)"/>
-  <rect x="456" y="484" width="94" height="5" rx="2.5" fill="#fff" opacity=".14"/>
-  <!-- 光标：停在 C 的缺口上，也正是那一行的行尾 -->
-  <ellipse cx="660" cy="512" rx="92" ry="112" fill="url(#m-halo)"/>
-  <rect x="634" y="424" width="52" height="176" rx="26" fill="url(#m-car)"/>
-  <rect x="645" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
+  <!-- 墨洇进纸的纤维里：把轮廓描三道宽边，一半压在墨下，一半渗到纸上 -->
+  <use href="#m-c" fill="none" stroke="#0e1018" stroke-opacity=".02" stroke-width="42"/>
+  <use href="#m-c" fill="none" stroke="#0e1018" stroke-opacity=".035" stroke-width="24"/>
+  <use href="#m-c" fill="none" stroke="#0e1018" stroke-opacity=".05" stroke-width="11"/>
+  <use href="#m-c" fill="url(#m-ink)"/>
+  <!-- 落笔处、碗底转向处：笔一慢，墨就积得深一点 -->
+  <g clip-path="url(#m-cc)"><circle cx="693" cy="321" r="78" fill="url(#m-pool)" opacity=".42"/><circle cx="517" cy="754" r="96" fill="url(#m-pool)" opacity=".26"/></g>
+  <!-- 怀里那一行：灰方块是 markdown 标记（光标停在这一行才显形），后面是排好版的成品。
+       手写的 c 是你敲进去的，规整的胶囊是渲染出来的 —— 这一对正是产品本身。 -->
+  <ellipse cx="509" cy="562" rx="112" ry="15" fill="url(#m-cast)"/>
+  <rect x="404" y="477" width="70" height="70" rx="24" fill="url(#m-mk)"/>
+  <rect x="411" y="484" width="56" height="5" rx="2.5" fill="#fff" opacity=".45"/>
+  <rect x="496" y="477" width="118" height="70" rx="35" fill="url(#m-ink)"/>
+  <rect x="508" y="484" width="94" height="5" rx="2.5" fill="#fff" opacity=".14"/>
+  <!-- 光标：停在这一笔的末端，也正是那一行的行尾 -->
+  <ellipse cx="706" cy="512" rx="92" ry="112" fill="url(#m-halo)"/>
+  <rect x="680" y="424" width="52" height="176" rx="26" fill="url(#m-car)"/>
+  <rect x="691" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
 </svg>

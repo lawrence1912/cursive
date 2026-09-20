@@ -1,23 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 128" width="440" height="128" role="img" aria-label="cursive">
   <title>cursive logo (dark)</title>
   <defs>
-    <linearGradient id="lkD-tile" x1=".14" y1="0" x2=".86" y2="1"><stop offset="0" stop-color="#434049"/><stop offset=".5" stop-color="#26242b"/><stop offset="1" stop-color="#141317"/></linearGradient>
-    <radialGradient id="lkD-sheen" cx=".24" cy=".1" r=".76"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
-    <linearGradient id="lkD-edge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".6" stop-color="#fff" stop-opacity=".02"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
-    <linearGradient id="lkD-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfbf7"/><stop offset="1" stop-color="#ded7ca"/></linearGradient>
-    <linearGradient id="lkD-car" x1=".2" y1="0" x2=".8" y2="1">
-      <stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
+    <!-- 图标部分与 app-icon.svg 同源，整组缩到 1/8（1024 → 128） -->
+    <path id="lkD-tile" d="M 366 100 H 658 C 711.3 100 800 100.5 861.8 162.2 C 923.5 224 924 312.7 924 366 V 658 C 924 711.3 923.5 800 861.8 861.8 C 800 923.5 711.3 924 658 924 H 366 C 312.7 924 224 923.5 162.2 861.8 C 100.5 800 100 711.3 100 658 V 366 C 100 312.7 100.5 224 162.2 162.2 C 224 100.5 312.7 100 366 100 Z"/>
+    <clipPath id="lkD-clip"><use href="#lkD-tile"/></clipPath>
+    <path id="lkD-c" d="M 709.7 303 C 684.9 275 653.7 254.2 617.7 242.1 C 582.8 230.3 540.6 227 500.5 234.2 C 461.2 241.3 419.3 259.2 384.1 284.9 C 349.7 310.1 317.8 345.5 295.4 384.5 C 272.4 424.6 258.5 467.4 253.8 512 C 249.1 556.8 254.1 600.4 269.4 641.1 C 284.5 681.1 308.3 715.8 340.3 743.3 C 371.4 769.9 410.9 788.6 449.7 796 C 489.6 803.6 531.1 801 571.4 788.2 C 610.5 775.8 646.2 754.4 676.6 725.6 C 677 719.6 686.1 710 688.3 706.6 C 692.3 700.5 695.9 694.7 699.5 688.4 C 703.1 682.3 706.3 676.4 709.6 670.1 C 712.7 663.9 715.5 657.9 718.3 651.6 A 8 8 0 0 0 705.4 643.1 C 700.6 647.4 695.9 651.3 690.7 655.2 C 685.6 659 680.6 662.4 675.2 665.7 C 669.9 668.9 664.8 671.7 659.1 674.3 C 656.1 675.6 646.5 681.3 641.9 679.8 C 614.7 696.2 586.7 705.5 559.4 708.5 C 532.8 711.4 505.5 707.8 482.7 699.2 C 459.1 690.3 438.8 676.2 422 657.9 C 405.7 640 392.3 616.9 384.3 592 C 376.4 567.8 372.5 539.8 374.2 512 C 375.8 483.9 382.6 456.7 394.9 430.4 C 406.9 404.6 423.2 381.6 444.2 361.9 C 464.7 342.6 488.3 327.9 514.5 318.6 C 539.6 309.7 568.8 306 595.9 309.2 C 623.5 312.5 650.6 322.3 675.5 339.6 A 24 24 0 0 0 709.7 303 Z"/>
+    <linearGradient id="lkD-face" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3a3e"/><stop offset=".55" stop-color="#252528"/><stop offset="1" stop-color="#151517"/></linearGradient>
+    <linearGradient id="lkD-rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".5" stop-color="#fff" stop-opacity=".05"/><stop offset="1" stop-color="#fff" stop-opacity=".02"/></linearGradient>
+    <linearGradient id="lkD-ink" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#dfe0e6"/></linearGradient>
+    <linearGradient id="lkD-car" x1=".2" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#a8d6ff"/><stop offset=".42" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
   </defs>
   <g transform="scale(0.125)">
-    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-tile)"/>
-    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#lkD-sheen)"/>
-    <!-- 图标 = 应用图标的同一版 C：一整笔，缺口正对光标 -->
-    <path d="M 657 331 A 236 236 0 1 0 657 693" fill="none" stroke="url(#lkD-ink)" stroke-width="106" stroke-linecap="round"/>
-    <rect x="634" y="424" width="52" height="176" rx="26" fill="url(#lkD-car)"/>
-    <rect x="645" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
-    <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="url(#lkD-edge)" stroke-width="3"/>
+    <use href="#lkD-tile" fill="url(#lkD-face)"/>
+    <g clip-path="url(#lkD-clip)">
+      <rect x="168" y="190" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <rect x="168" y="320" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <rect x="168" y="450" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <rect x="168" y="580" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <rect x="168" y="710" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <rect x="168" y="840" width="688" height="7" rx="3.5" fill="#fff" opacity=".07"/>
+      <use href="#lkD-c" fill="url(#lkD-ink)"/>
+      <rect x="680" y="424" width="52" height="176" rx="26" fill="url(#lkD-car)"/>
+      <rect x="691" y="438" width="14" height="120" rx="7" fill="#fff" opacity=".5"/>
+    </g>
+    <g clip-path="url(#lkD-clip)"><use href="#lkD-tile" fill="none" stroke="url(#lkD-rim)" stroke-width="6"/></g>
   </g>
-  <g transform="translate(160 51.4) scale(0.655)" fill="none" stroke="#f2efe9" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="translate(160 51.4) scale(0.655)" fill="none" stroke="#f5f5f7" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
     <path d="M49.34 4.3 A28 28 0 1 0 49.34 51.7"/>
     <path d="M77.5 0 V28 A28 28 0 0 0 133.5 28 V0"/>
     <path d="M158.5 0 V56"/><path d="M158.5 26 A26 26 0 0 1 184.5 0"/>

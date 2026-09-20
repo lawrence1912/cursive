@@ -1,11 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="cursive">
   <title>cursive</title>
   <defs>
-    <linearGradient id="f-t" x1=".15" y1="0" x2=".85" y2="1"><stop offset="0" stop-color="#faf8f3"/><stop offset="1" stop-color="#d8d0c1"/></linearGradient>
+    <path id="f-tile" d="M 10.33 0 H 21.67 C 23.74 0 27.18 0.02 29.58 2.42 C 31.98 4.82 32 8.26 32 10.33 V 21.67 C 32 23.74 31.98 27.18 29.58 29.58 C 27.18 31.98 23.74 32 21.67 32 H 10.33 C 8.26 32 4.82 31.98 2.42 29.58 C 0.02 27.18 0 23.74 0 21.67 V 10.33 C 0 8.26 0.02 4.82 2.42 2.42 C 4.82 0.02 8.26 0 10.33 0 Z"/>
+    <clipPath id="f-clip"><use href="#f-tile"/></clipPath>
     <linearGradient id="f-c" x1=".2" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#8cc6ff"/><stop offset=".5" stop-color="#3f93f2"/><stop offset="1" stop-color="#0f51ae"/></linearGradient>
   </defs>
-  <rect width="32" height="32" rx="7.5" fill="url(#f-t)"/>
-  <!-- 16–32px 版的 C：笔画按像素加粗、缺口开大，光标缩成一根短棍 -->
-  <path d="M 22.93 9.41 A 8.6 8.6 0 1 0 22.93 22.59" fill="none" stroke="#272420" stroke-width="4.4" stroke-linecap="round"/>
-  <rect x="21.4" y="12.8" width="2.4" height="6.4" rx="1.2" fill="url(#f-c)"/>
+  <use href="#f-tile" fill="#fff"/>
+  <!-- 16–32px 版：纸的横格这个尺寸只会变成脏点，去掉；笔画按像素重新加粗、提按压到最小 -->
+  <path d="M 23 8.6 C 21.9 7.5 20.5 6.7 19 6.4 C 17.4 6.1 15.7 6.3 14.1 6.9 C 12.4 7.5 10.9 8.6 9.8 10 C 8.6 11.4 7.8 13.1 7.5 14.8 C 7.1 16.6 7.2 18.4 7.7 20 C 8.3 21.6 9.2 23 10.5 24.1 C 11.8 25.1 13.4 25.7 15.1 25.9 C 16.7 26 18.4 25.6 20 24.8 C 20 24.5 20.5 24.2 20.6 24.1 C 20.8 23.8 21 23.6 21.1 23.4 C 21.3 23.2 21.5 22.9 21.6 22.7 A 1.1 1.1 0 0 0 20.3 21.1 C 20.1 21.2 19.9 21.2 19.7 21.2 C 19.5 21.3 19.3 21.3 19.1 21.3 C 19 21.3 18.6 21.3 18.5 21.2 C 17.6 21.5 16.7 21.6 15.9 21.5 C 15.1 21.3 14.4 20.9 13.8 20.4 C 13.2 19.8 12.7 19 12.5 18.2 C 12.2 17.3 12.2 16.3 12.4 15.4 C 12.5 14.4 12.9 13.5 13.5 12.7 C 14 12 14.8 11.3 15.5 10.9 C 16.3 10.5 17.2 10.3 18.1 10.3 C 18.9 10.4 19.8 10.7 20.6 11.2 A 1.7 1.7 0 0 0 23 8.6 Z" fill="#17181e"/>
+  <rect x="21.2" y="12.8" width="2.6" height="6.4" rx="1.3" fill="url(#f-c)"/>
+  <!-- 白瓷砖在白底上也得有个边 -->
+  <g clip-path="url(#f-clip)"><use href="#f-tile" fill="none" stroke="#000" stroke-opacity=".13" stroke-width="1.4"/></g>
 </svg>
