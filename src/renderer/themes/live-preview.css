@@ -312,8 +312,6 @@ body.cursive-em-italic .cm-md-em {
    光标和选区归浏览器画 —— 编辑器此时是失焦的，drawSelection 不会再出一个假光标 */
 .cm-lp-tableview th,
 .cm-lp-tableview td {
-  /* 只留横线，不画竖线：竖线是网格的一半噪声，而列本来就靠对齐读得出来。
-     格子的编辑落点不靠边框交代 —— 点进去有 :focus 那圈强调色环 */
   border: none;
   border-bottom: 1px solid var(--divider);
   padding: 6px 12px;
@@ -321,6 +319,19 @@ body.cursive-em-italic .cm-md-em {
   user-select: text;
   caret-color: var(--fg);
   outline: none;
+}
+/* 竖线只画在格与格之间（末列不画，所以不会围出一个外框）。
+   从前这里是「只留横线」，理由是「列本来就靠对齐读得出来」—— 那对文字密的表成立，
+   对**空格子多的表**不成立：三列全空时没有竖线，整张表就是一条灰带，连有几列都看不出来。
+   而密表这边加上竖线也不吃亏（分量与横线同一档），所以按吃亏小的那边走。
+
+   颜色**不能用 --divider**：那一档是照着 --bg 调的，压到表头那块 --code-bg 上就没了
+   （深色里两者只差 0 级，逐像素量过，竖线在表头整条消失）。改成从 --fg 兑出来的一层
+   半透明墨 —— 铺在正文底上还是表头底上都成立，三套主题一处不用改。
+   用 border-inline-end 而不是 -right：RTL 文档里自动翻边 */
+.cm-lp-tableview th:not(:last-child),
+.cm-lp-tableview td:not(:last-child) {
+  border-inline-end: 1px solid color-mix(in srgb, var(--fg) 5%, transparent);
 }
 /* 强调色环走 outline，**不能用 inset box-shadow**（0.4.0 修）。
    `border-collapse: collapse` 下，合并出来的那条横线归**表格**画，而且排在
@@ -340,9 +351,12 @@ body.cursive-em-italic .cm-md-em {
   background-color: var(--sel) !important;
 }
 .cm-lp-tableview thead th {
-  /* 表头不再铺灰底：底下那条实线（比行间的发丝线重一档）已经说清楚它是表头，
-     再加一块填色就是同一件事说两遍 */
-  border-bottom: 1px solid var(--border);
+  /* 表头铺一层主题自己的浅底。用 --code-bg 而不是写死的灰：那是「正文栏里的一块面」
+     这一档颜色，浅色 / 深色 / 护眼三份都各自调过（白底上 #f4f5f7、深色上比底色亮一档、
+     护眼上是同一张纸的暖阶），换主题不用再改这里一个字。
+     底线跟着退回发丝线一档 —— 有了填色再压一条重线，就是同一件事说两遍 */
+  background: var(--code-bg);
+  border-bottom: 1px solid var(--divider);
   font-weight: 600;
 }
 /* 斑马纹去掉：有了行间横线，它是第二套行分隔，两套叠在一起才是「表格很吵」的来源 */
