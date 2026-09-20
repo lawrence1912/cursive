@@ -14,6 +14,8 @@ import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
 import { openTarget, resolveLink } from '../link'
 import { isHiddenInline } from '../inline-text'
+import { clipboardMarkdown } from '../paste'
+import { note } from '../../ui/note'
 import { parsedTree } from '../syntax'
 import { Reveal, revealScope } from './reveal'
 import { fillMath } from './widgets'
@@ -235,6 +237,18 @@ export function cellPos(
   if (!line) return null
   const span = cellSpan(line.text, col)
   return span ? { from: line.from + span.from, to: line.from + span.to } : null
+}
+
+/**
+ * 粘进格子的那段文本（0.4.0 还的第二条账）。
+ *
+ * **表格行就是一行，格子里放不下换行** —— 多行并成空格分隔的一行，并把行数报出来，
+ * 让调用方说一句。从前是默默压扁（`escapeCell` 里那条 `[\r\n]+ → ' '`），
+ * 人只会觉得「怎么少了两行」。空行直接丢：从网页复制的段落之间常夹着空行。
+ */
+export function cellPasteText(md: string): { text: string; lines: number } {
+  const lines = md.split(/\r\n?|\n/).filter((l) => l.trim() !== '')
+  return { text: lines.join(' ').trim(), lines: lines.length }
 }
 
 /** 写进单元格的文本：`|` 要转义、换行压成空格（粘贴多行时全靠这条兜） */
@@ -1095,6 +1109,34 @@ function buildRows(
 function editable(cell: HTMLTableCellElement): void {
   cell.contentEditable = 'plaintext-only'
   cell.spellcheck = false
+  cell.addEventListener('paste', (e) => onCellPaste(e, cell))
+}
+
+/**
+ * 0.4.0 还的第二条账：**格内粘贴**。
+ *
+ * 此前这儿退化成浏览器自己的纯文本粘贴（`plaintext-only`）—— 从网页 / 飞书复制一段
+ * 带格式的文字，格子里只剩裸字，而正文那边（P2-4 智能粘贴）早就转成 Markdown 了。
+ * 现在走**同一条** turndown 路，格子里粘出来的与正文里粘出来的一模一样。
+ *
+ * 换行另说：Markdown 的表格行就是一行，**格子里放不下换行**。多行并成一空格分隔的
+ * 一行，并且**说一句** —— 从前是默默压扁，人只会觉得「怎么少了两行」。
+ */
+function onCellPaste(e: ClipboardEvent, cell: HTMLTableCellElement): void {
+  const data = e.clipboardData
+  if (!data) return
+  e.preventDefault()
+  const plain = data.getData('text/plain')
+  const html = data.getData('text/html') || null
+  void clipboardMarkdown(plain, html).then((md) => {
+    const { text, lines } = cellPasteText(md)
+    if (lines > 1) note(t('note.cellMultiline', { n: lines }))
+    if (!text) return
+    cell.focus()
+    // `insertText` 会照常派 input 事件 —— 格子那条 input 监听器据此写回文档
+    // （与人手打字走同一条路，撤销也因此归 CM 管，不落进 contenteditable 自己那套）
+    document.execCommand('insertText', false, text)
+  })
 }
 
 // ---------- 底部浮动工具栏 ----------

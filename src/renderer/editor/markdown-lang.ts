@@ -314,15 +314,24 @@ export const FOOTNOTE_DEF = /^\[\^([^\s\]]+)\]:[ \t]*/
  * 编辑器、导出、`findFootnoteDef` 三处看到的定义数目才是同一个。
  */
 function parseFootnoteDef(cx: BlockContext, line: Line): BlockResult {
-  if (!FOOTNOTE_DEF.test(line.text.slice(line.pos))) return false
+  const head = FOOTNOTE_DEF.exec(line.text.slice(line.pos))
+  if (!head) return false
   const from = cx.lineStart + line.pos
+  // 0.4.0 还的第一条账：**定义正文也要按行内语法解一遍**。
+  // 从前这里出的是一个**没有孩子**的叶子节点，于是 `[^1]: **粗体**` 在编辑器里
+  // （FootnoteDefWidget）与导出物里（renderFootnoteDefs 的 inline）都只能原样摆出
+  // 四个星号 —— 两处都不是各自的 bug，是这棵树里压根没有那几个节点。
+  // 续行要一起收：正文可能有好几行，位置必须与文档对得上（下面按行累加）
+  const bodyFrom = from + head[0].length
+  let text = line.text.slice(line.pos + head[0].length)
   for (;;) {
     const peeked = cx.peekLine()
     if (!peeked || !peeked.trim() || FOOTNOTE_DEF.test(peeked)) break
     cx.nextLine()
+    text += `\n${line.text}`
   }
   const end = cx.lineStart + line.text.length
-  cx.addElement(cx.elt('FootnoteDefinition', from, end))
+  cx.addElement(cx.elt('FootnoteDefinition', from, end, cx.parser.parseInline(text, bodyFrom)))
   // 必须把当前行推过定义块，否则 parsedPos 不前进，解析器原行重试直到超时
   cx.nextLine()
   return true

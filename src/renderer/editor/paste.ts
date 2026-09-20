@@ -43,6 +43,23 @@ function loadTurndown(): Promise<TurndownService> {
 const URL_RE = /^https?:\/\/\S+$/i
 
 /**
+ * 剪贴板（纯文本 + HTML）→ 该插进去的 Markdown。
+ *
+ * 0.4.0 还的第二条账把它开出来：**表格格内粘贴**此前退化成浏览器的纯文本粘贴，
+ * 从网页 / 飞书复制一段带格式的文字，格子里只剩裸字 —— 而正文这边 P2-4 早就转
+ * Markdown 了。两处共用这一条，格子里粘出来的东西与正文里粘出来的一模一样。
+ */
+export async function clipboardMarkdown(plain: string, html: string | null): Promise<string> {
+  if (!html) return plain
+  try {
+    const td = await loadTurndown()
+    return choosePasteContent(plain, html, (h) => td.turndown(h)).text
+  } catch {
+    return plain
+  }
+}
+
+/**
  * 决定粘什么：HTML 能转出与纯文本**不同**的 Markdown 才用转换结果。
  * 从本编辑器复制的富文本，plain 已是 Markdown、html 是渲染结果，
  * 转一圈会等于 plain —— 这种情况直接用纯文本，避免无谓往返与损失。

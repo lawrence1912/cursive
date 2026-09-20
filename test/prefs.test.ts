@@ -53,7 +53,7 @@ describe('Prefs.adopt（契约 v17）', () => {
     calls: { setAppearance: number; setLanguage: number; syncPrefs: number; writes: number }
     theme: () => string | undefined
   } {
-    const calls = { setAppearance: 0, setLanguage: 0, syncPrefs: 0, writes: 0 }
+    const calls = { setAppearance: 0, setLanguage: 0, setImageDir: 0, syncPrefs: 0, writes: 0 }
     let store: string | null = null
     const root = {
       lang: '',
@@ -77,6 +77,8 @@ describe('Prefs.adopt（契约 v17）', () => {
       api: {
         setAppearance: () => calls.setAppearance++,
         setLanguage: () => calls.setLanguage++,
+        // 契约 v31（0.4.0 图片落脚）：窗口级的，apply 与 adopt 都要推
+        setImageDir: () => calls.setImageDir++,
         syncPrefs: () => calls.syncPrefs++
       }
     }
@@ -119,6 +121,14 @@ describe('Prefs.adopt（契约 v17）', () => {
     prefs.adopt({ ...prefs.values, lang: 'en' })
     expect(getLang()).toBe('en')
     expect(calls.setLanguage, '菜单栏是 app 级的，发起窗口推过了').toBe(before)
+  })
+
+  it('别的窗口改了图片落脚，这个窗口也要推给自己的壳（契约 v31 是窗口级的）', () => {
+    const { prefs, calls } = harness()
+    const before = calls.setImageDir
+    prefs.adopt({ ...prefs.values, imageDir: 'root' })
+    expect(prefs.values.imageDir).toBe('root')
+    expect(calls.setImageDir, 'Finder 拖入那条路压根不经过渲染层，壳得知道').toBe(before + 1)
   })
 
   it('adopt 进来的越界值照样钳住', () => {

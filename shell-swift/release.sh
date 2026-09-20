@@ -261,6 +261,10 @@ ok = ok and (v.get('plainItems') or []) == []
 li = v.get('linkItems') or []
 ok = ok and len(li) >= 2 and not any(it.startswith('/') for it in li)
 ok = ok and v.get('completeRestored') is True
+# 0.4.0 还的第四条账：⌘P 归「打印…」，导出 PDF 让到 ⇧⌘P（菜单是原生的，网页那侧看不见）
+fm = c.get('fileMenu') or []
+ok = ok and any(i['title'].startswith('打印') and i['key'] == 'p' and not i['shift'] for i in fm)
+ok = ok and any('PDF' in i['title'] and i['key'] == 'p' and i['shift'] for i in fm)
 
 # ---- 0.2.0 标签右键菜单（只在 dialect.md 这条用例上跑）----
 if sys.argv[1] == 'dialect.md':
@@ -415,6 +419,9 @@ if sys.argv[1] == 'dialect.md':
     # P4-1：目录与脚注在导出里是真的锚点
     ok = ok and '<nav class="toc">' in page and '<sup class="footnote-ref"' in page
     ok = ok and 'href="#fn-1"' in page and 'id="fn-1"' in page
+    # 0.4.0 还的第一条账：**脚注定义里的行内语法要渲染**（从前 `**粗体**` 就是四个星号
+    # 杵在那儿）。数的是定义区里真的出现了加粗/代码那两个 span
+    ok = ok and r['counts'].get('cm-lp-seg-strong', 0) >= 1
     # P1-3：TOC/脚注/emoji/高亮/上下标各自渲染成组件或样式
     c2 = r['counts']
     ok = ok and (c2.get('cm-lp-toc', 0) >= 1 and c2.get('cm-lp-footnote-ref', 0) >= 2

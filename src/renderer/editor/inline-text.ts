@@ -89,3 +89,96 @@ export function plainInline(state: EditorState, from: number, to: number): strin
   flush(to)
   return out
 }
+
+/**
+ * 一段带样式的文字（0.4.0 还的第一条账：脚注定义区里的行内语法）。
+ * `cls` 空串 = 普通文字；否则是类名，**尽量借正文那几个**，样式白拿。
+ */
+export interface InlineSeg {
+  text: string
+  cls: string
+}
+
+/**
+ * 行内语法 → 类名。加粗/斜体在正文里是**语法高亮**给的（`theme.ts` 的 `t.strong`），
+ * 而 widget 里没有高亮器，只能自带两个类（`cm-lp-seg-*`，样式在 live-preview.css）；
+ * 其余几个直接复用正文装饰的类名。
+ */
+const INLINE_STYLE: Record<string, string> = {
+  StrongEmphasis: 'cm-lp-seg-strong',
+  Emphasis: 'cm-lp-seg-em',
+  InlineCode: 'cm-lp-inline-code',
+  Strikethrough: 'cm-lp-seg-strike',
+  Highlight: 'cm-lp-highlight',
+  Superscript: 'cm-lp-sup',
+  Subscript: 'cm-lp-sub',
+  Link: 'cm-lp-link'
+}
+
+/**
+ * 把 [from,to) 这段源码摘成**带样式的片段**。与 `plainInline` 同一条路
+ * （同一棵树、同一张 `INLINE_MARKS` 表），区别只在于它把「这段文字外面裹着什么」
+ * 也报出来 —— 于是 widget 里画得出 `**粗体**`，而不是把两个星号原样摆在那儿。
+ *
+ * 为什么不直接拿导出那套渲染器：那一套要 `Ctx`（整份 state + 选项）并吐 HTML 串，
+ * 而 widget 要的是几个 span，还得躲开 innerHTML。这里只多走一趟同一棵树。
+ */
+export function inlineSegments(state: EditorState, from: number, to: number): InlineSeg[] {
+  const out: InlineSeg[] = []
+  const stack: string[] = []
+  let pos = from
+  const cls = (): string => [...new Set(stack)].join(' ')
+  const push = (text: string): void => {
+    if (!text) return
+    const last = out[out.length - 1]
+    // 连着的同款片段并成一条 —— 一个字一个 span 对谁都没好处
+    if (last && last.cls === cls()) last.text += text
+    else out.push({ text, cls: cls() })
+  }
+  const flush = (end: number): void => {
+    if (end > pos) push(state.doc.sliceString(pos, end))
+    pos = Math.max(pos, end)
+  }
+
+  parsedTree(state).iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (node.from < from || node.to > to) return
+      const name = node.name
+      if (isHiddenInline(name, node.node.parent?.name)) {
+        flush(node.from)
+        pos = Math.max(pos, node.to)
+        return false
+      }
+      if (name === 'Escape') {
+        flush(node.from)
+        pos = node.from + 1
+        return false
+      }
+      if (name === 'Emoji') {
+        const char = EMOJI[state.doc.sliceString(node.from + 1, node.to - 1)]
+        if (!char) return false
+        flush(node.from)
+        push(char)
+        pos = node.to
+        return false
+      }
+      const style = INLINE_STYLE[name]
+      if (style) {
+        flush(node.from)
+        stack.push(style)
+      }
+      return
+    },
+    leave: (node) => {
+      if (node.from < from || node.to > to) return
+      if (INLINE_STYLE[node.name]) {
+        flush(node.to)
+        stack.pop()
+      }
+    }
+  })
+  flush(to)
+  return out
+}

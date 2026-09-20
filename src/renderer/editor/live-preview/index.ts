@@ -20,6 +20,7 @@ import {
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
 import { carryDecorations } from '../carry'
+import { inlineSegments } from '../inline-text'
 import { foldedSpans, sectionFoldField, toggleSectionFold } from '../fold'
 import { docDir } from '../doc-dir'
 import { HEADING_RE } from '../headings'
@@ -526,7 +527,13 @@ function collectBlocks(
           if (!m) return false
           out.push(
             Decoration.replace({
-              widget: new FootnoteDefWidget(m[1], m[2].trim()),
+              widget: new FootnoteDefWidget(
+                m[1],
+                m[2].trim(),
+                // 片段从**正文那一段**切（跳过 `[^label]:` 那几个字符），
+                // 否则标签自己也会被当成行内语法走一遍
+                inlineSegments(state, node.from + (m[0].length - m[2].length), node.to)
+              ),
               block: true
             }).range(node.from, node.to)
           )

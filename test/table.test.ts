@@ -19,7 +19,8 @@ import {
   tableDataAt,
   TableWidget,
   tidyTable,
-  writeCell
+  writeCell,
+  cellPasteText
 } from '../src/renderer/editor/live-preview/table'
 
 describe('parseTable：GFM 管道表格', () => {
@@ -462,5 +463,30 @@ describe('estimatedHeight：CM 高度图靠它估这一块有多高', () => {
 
   it('表头也占一行', () => {
     expect(widget(0).estimatedHeight).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * 0.4.0 还的第二条账：**格内粘贴**。
+ *
+ * 事件那一半（`paste` → turndown → execCommand）是 DOM，进不了 node 测试；
+ * 这一半是「粘进来的 Markdown 该变成格子里的哪一串」——
+ * 而 Markdown 的表格行放不下换行，这条判断错了就是默默吞掉别人的内容。
+ */
+describe('格内粘贴的文本', () => {
+  it('单行原样（`|` 的转义归 escapeCell，那是写回文档那一步的事）', () => {
+    expect(cellPasteText('一段文字')).toEqual({ text: '一段文字', lines: 1 })
+  })
+
+  it('多行并成一行，并把行数报出来（调用方据此说一句）', () => {
+    expect(cellPasteText('第一行\n第二行\n第三行')).toEqual({ text: '第一行 第二行 第三行', lines: 3 })
+  })
+
+  it('CRLF 与空行：空行丢掉，不留双空格', () => {
+    expect(cellPasteText('甲\r\n\r\n乙')).toEqual({ text: '甲 乙', lines: 2 })
+  })
+
+  it('整段是空白 → 空串（调用方据此什么都不插）', () => {
+    expect(cellPasteText('  \n\n \t ')).toEqual({ text: '', lines: 0 })
   })
 })

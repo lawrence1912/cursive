@@ -5,6 +5,7 @@ import { EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { icon, type IconName } from '../../ui/icons'
 import { t } from '../../i18n'
+import type { InlineSeg } from '../inline-text'
 import { toggleCalloutFold } from '../callout'
 import { jumpTo } from '../navigation'
 import { focusKeepScroll } from '../focus'
@@ -561,7 +562,11 @@ export class FootnoteRefWidget extends WidgetType {
 export class FootnoteDefWidget extends WidgetType {
   constructor(
     readonly label: string,
-    readonly text: string
+    /** 定义正文的**源码**。eq 比它就够 —— 下面那份片段是从它算出来的 */
+    readonly text: string,
+    /** 0.4.0 还的第一条账：定义里的行内语法（`[^1]: **粗体**`）。
+     *  片段在建装饰时按语法树切好（`inlineSegments`），widget 这儿只负责摆 span */
+    readonly segs: InlineSeg[] = []
   ) {
     super()
   }
@@ -582,7 +587,23 @@ export class FootnoteDefWidget extends WidgetType {
     label.className = 'cm-lp-footnote-def-label'
     label.textContent = `^${this.label}`
     el.appendChild(label)
-    el.appendChild(document.createTextNode(this.text.split('\n')[0] ?? ''))
+    // 只摆第一行（定义区是折起来的一行），但**行内语法要画出来** ——
+    // 在这之前整段是 `document.createTextNode`，`**粗体**` 就是四个星号杵在那儿
+    const firstLine = this.text.split('\n')[0] ?? ''
+    if (!this.segs.length) el.appendChild(document.createTextNode(firstLine))
+    for (const seg of this.segs) {
+      const cut = seg.text.indexOf('\n')
+      const text = cut < 0 ? seg.text : seg.text.slice(0, cut)
+      if (!text) continue
+      if (!seg.cls) el.appendChild(document.createTextNode(text))
+      else {
+        const span = document.createElement('span')
+        span.className = seg.cls
+        span.textContent = text
+        el.appendChild(span)
+      }
+      if (cut >= 0) break
+    }
     return wrap
   }
 }

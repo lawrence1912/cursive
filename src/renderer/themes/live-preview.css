@@ -154,6 +154,12 @@ body.cursive-em-italic .cm-md-em {
   color: var(--cal);
 }
 
+/* 脚注定义区里的行内语法（0.4.0 还的第一条账）。加粗/斜体在正文里是语法高亮给的，
+   而 widget 里没有高亮器 —— 这两个类是它自带的那份 */
+.cm-lp-seg-strong { font-weight: 700; }
+.cm-lp-seg-em { font-style: italic; }
+.cm-lp-seg-strike { text-decoration: line-through; }
+
 /* ---------- 折叠一节（0.4.0 F1）----------
    把手画在标题行右侧，**不加 gutter**：加一列要占版面，而且与「屏幕上就是成稿的
    样子」直接冲突。平时是透明的，鼠标扫到这一行才显形；折着的时候一直亮着 ——

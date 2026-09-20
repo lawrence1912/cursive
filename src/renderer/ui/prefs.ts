@@ -1,4 +1,4 @@
-import type { AppearanceMode, BodyFont, PrefValues, UserTheme } from '../../shared/types'
+import type { AppearanceMode, BodyFont, ImageDir, PrefValues, UserTheme } from '../../shared/types'
 import { applyI18n, setLang as setI18nLang, systemLang, t, type Key, type Lang } from '../i18n'
 import { icon } from './icons'
 import { note } from './note'
@@ -14,7 +14,7 @@ const KEY = 'cursive.prefs'
  */
 const DEFAULTS: PrefValues = {
   theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null,
-  customOff: false, lang: systemLang(), spellcheck: false
+  customOff: false, imageDir: 'doc', lang: systemLang(), spellcheck: false
 }
 export const COLUMN_RANGE = { min: 30, max: 60 }
 
@@ -33,6 +33,8 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
     custom: parsed.custom ?? null,
     // 0.3.0 T4，老偏好里没有 —— 默认不停用（没停用过的人升上来一切照旧）
     customOff: parsed.customOff === true,
+    // 0.4.0 还的第三条账，老偏好里没有 —— 默认「文档同级」，与从前写死的行为一致
+    imageDir: parsed.imageDir === 'root' ? 'root' : 'doc',
     // 有偏好但没记过 lang = 老用户，一直看的是中文，别在某次升级后突然给人翻成英文。
     // 与 i18n 的 `detectLang()` 同一条规则（那边靠 raw 非空走到同一个结果）
     lang: parsed.lang ?? 'zh',
@@ -45,7 +47,7 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
 const THEMES_DIR = '~/Library/Application Support/cursive/themes'
 
 /** 走分段控件的那几项偏好 */
-type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck'
+type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck' | 'imageDir'
 
 /** 分段控件的选项。带 key 的走字典（跟着语言切）；只有 label 的写死 —— 语言选项各自以自身语言显示 */
 interface SegOpt {
@@ -66,6 +68,11 @@ const FONT_OPTS: SegOpt[] = [
 const LANG_OPTS: SegOpt[] = [
   { val: 'zh', label: '中文' },
   { val: 'en', label: 'English' }
+]
+/** 0.4.0 图片落脚。同样走分段控件 —— 面板里不再多一种控件 */
+const IMAGE_DIR_OPTS: SegOpt[] = [
+  { val: 'doc', key: 'pf.imageDir.doc' },
+  { val: 'root', key: 'pf.imageDir.root' }
 ]
 /** 0.2.0 拼写检查。做成分段控件而不是另造一个复选框：面板里已经有这一种控件了 */
 const SPELL_OPTS: SegOpt[] = [
@@ -256,6 +263,9 @@ export class Prefs {
   apply(): void {
     this.paint()
     window.api.setAppearance(this.v.theme)
+    // 契约 v31：图片往哪个 assets/ 落。**壳侧两条落盘路（粘贴 / Finder 拖入）共用它**，
+    // 而拖入那条压根不经过渲染层 —— 不推的话它永远按默认值落
+    window.api.setImageDir(this.v.imageDir)
     // 字号/行距变了，CodeMirror 缓存的字符尺寸就过期了，必须让它重量一次
     this.onApply()
   }
@@ -283,6 +293,9 @@ export class Prefs {
     this.onApply()
     // setLang 内部去重：语言没变就是空操作，不会白重建一遍装饰
     setI18nLang(this.v.lang)
+    // 契约 v31 是**窗口级**的（每个 WindowController 自己记一份），
+    // 所以这一条与 setAppearance 那条相反：别的窗口改了，这个窗口也得跟着推一次
+    window.api.setImageDir(this.v.imageDir)
     // 设置面板可能正开着（两个窗口各开各的），控件要跟着回填。
     // sync() 全是程序性赋值，不会反过来激起 input/change 事件 —— 不存在两窗互推
     this.sync()
@@ -330,6 +343,7 @@ export class Prefs {
         ${this.rangeRow('leading', 'pf.leading', 1.4, 2.4, 0.05, '')}
         ${this.rangeRow('column', 'pf.column', COLUMN_RANGE.min, COLUMN_RANGE.max, 1, 'rem')}
         ${this.segRow('spellcheck', 'pf.spell', SPELL_OPTS)}
+        ${this.segRow('imageDir', 'pf.imageDir', IMAGE_DIR_OPTS)}
         <div class="pf-row pf-custom"></div>
         <div class="pf-foot">
           <span class="pf-hint" data-i18n="pf.hint">${t('pf.hint')}</span>
@@ -357,6 +371,7 @@ export class Prefs {
       if (group === 'lang') this.setLang(val as Lang)
       else if (group === 'theme') this.setTheme(val as AppearanceMode)
       else if (group === 'spellcheck') this.set('spellcheck', val === 'true')
+      else if (group === 'imageDir') this.set('imageDir', val as ImageDir)
       else this.set('font', val as BodyFont)
     })
 

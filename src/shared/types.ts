@@ -260,6 +260,13 @@ export interface PrefValues {
   /** 界面语言（契约 v16：切换时推 setLanguage 给壳重建菜单/对话框） */
   lang: UiLang
   /**
+   * 图片落到哪个 `assets/`（0.4.0 还的第三条账）。
+   * `doc` = 当前文档同级（默认，与 0.2.x 之前的写死行为一致）；
+   * `root` = 工作区根 —— 一个仓库一堆散篇时，assets 不至于散得到处都是。
+   * 落脚与「插进文档的相对路径」都由壳算（契约 v31），两条落盘路共用一处。
+   */
+  imageDir: ImageDir
+  /**
    * 系统拼写检查（0.2.0）。**默认关**。
    *
    * 开关落在 `EditorView.contentAttributes` 的 `spellcheck` 上 —— 可编辑区一旦声明
@@ -537,6 +544,16 @@ export interface CursiveApi {
    * NSAlert/NSOpenPanel 等对话框文案随 `uiLang` 走。 */
   setLanguage(lang: UiLang): void
 
+  /** ---- 0.4.0 图片落脚（契约 v31）----
+   * 偏好的真相在渲染层（`PrefValues.imageDir`），启动时推一次、改了再推一次 ——
+   * 与语言 / 主题同一条规矩，壳只记在内存里。
+   *
+   * **为什么这件事必须壳知道**：粘贴走 `pasteImage`（渲染层发起），而 Finder 拖入
+   * 是壳自己接的（`onImageDropped`），后者压根没经过渲染层。两条路各判一次的话，
+   * 迟早一边落文档同级、一边落工作区根。壳侧 `assetsBaseDir` 是唯一那处判断，
+   * 回给渲染层的相对路径也由它算（落在工作区根时就是 `../assets/x.png`）。 */
+  setImageDir(mode: ImageDir): void
+
   /** ---- 跨窗口偏好同步（契约 v17）----
    * 偏好的真相是渲染层的 localStorage，而**每个窗口在启动时各读一份进内存** ——
    * 于是 A 窗改完主题/语言/字号，B 窗的内存副本还是旧的，要等下次重开才对得上。
@@ -561,6 +578,9 @@ export interface CursiveApi {
    * 是同一件事（没问着），而渲染层照 `warn` 那条路说一句。 */
   checkUpdate(): Promise<UpdateInfo | null>
 }
+
+/** 图片落脚（0.4.0 还的第三条账）：文档同级 / 工作区根 */
+export type ImageDir = 'doc' | 'root'
 
 /** `sepia` = 护眼（暖纸色），算在浅色一侧：`setAppearance` 给壳的是 `.aqua` */
 export type AppearanceMode = 'system' | 'light' | 'dark' | 'sepia'

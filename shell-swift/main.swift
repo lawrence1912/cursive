@@ -72,6 +72,7 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.file.exportHtml": ["导出为 HTML…", "Export as HTML…"],
     "menu.file.exportPdf":  ["导出为 PDF…", "Export as PDF…"],
     "menu.file.exportPng":  ["导出为长图…", "Export as Image…"],
+    "menu.file.print":      ["打印…", "Print…"],
     "menu.file.closeTab":   ["关闭标签", "Close Tab"],
     "menu.file.close":      ["关闭窗口", "Close Window"],
     // ---- 编辑 ----
@@ -198,6 +199,7 @@ let SHELL_TEXT: [String: [String]] = [
     "export.defaultPng":      ["未命名.png", "Untitled.png"],
     // ---- 错误提示 ----
     "err.export":       ["导出失败", "Export Failed"],
+    "err.print":        ["打印失败", "Print Failed"],
     "err.export.empty": ["渲染层没有交出可打印的内容", "The renderer did not provide printable content"],
     // PDF 那条路上的两处失败：走的是 NSError.localizedDescription → showError 的 detail，
     // 写成字面量的话英文界面会弹出「标题 English / 正文中文」的半拉子对话框
@@ -336,6 +338,7 @@ let BRIDGE_JS = """
     setTitlebarHoles: (holes) => call('setTitlebarHoles', [holes]),
     setViewFlags: (flags) => call('setViewFlags', [flags]),
     setLanguage: (lang) => call('setLanguage', [lang]),
+    setImageDir: (mode) => call('setImageDir', [mode]),
     syncPrefs: (values) => call('syncPrefs', [values]),
     scratchSave: (id, content, fp) => call('scratchSave', [id, content, fp]),
     scratchList: () => call('scratchList'),
@@ -1087,8 +1090,21 @@ enum PDFOutlineWriter {
     }
 }
 
+/**
+ * 这份文档印到哪儿去（0.4.0 还的第四条账）。
+ *
+ * 从前只有 `.file`：⌘P 直接导出 PDF，**根本没有真打印机那条路**
+ * （`jobDisposition = .save` 把打印任务改成了写文件）。`.printer` 走系统打印面板 ——
+ * 选哪台机器、几份、纸张都归它，「存为 PDF」也在那张面板的左下角。
+ */
+enum PDFDestination {
+    case file(URL)
+    case printer
+}
+
 final class PDFPrinter: NSObject, WKNavigationDelegate {
     private let html: String
+    private let dest: PDFDestination
     private let out: URL
     private let opts: PDFOptions
     private let outline: [OutlineItem]
@@ -1098,9 +1114,11 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
     /// 真的写进文件的书签条数（E2E 靠它证明这条路没有空跑）
     private var bookmarksWritten = 0
 
-    init(html: String, out: URL, opts: PDFOptions, outline: [OutlineItem]) {
+    init(html: String, dest: PDFDestination, opts: PDFOptions, outline: [OutlineItem]) {
         self.html = html
-        self.out = out
+        self.dest = dest
+        // 打印那条不写文件，`out` 只是个占位（下面所有用到它的分支都在 .file 里）
+        if case .file(let url) = dest { self.out = url } else { self.out = URL(fileURLWithPath: "/dev/null") }
         self.opts = opts
         self.outline = outline
     }
@@ -1165,12 +1183,17 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
         info.verticalPagination = .automatic
         info.isHorizontallyCentered = false
         info.isVerticallyCentered = false
-        info.jobDisposition = .save
-        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = out as NSURL
+        // 唯一的分岔口：导出把打印任务改成写文件，打印就让它是打印
+        if case .file(let url) = dest {
+            info.jobDisposition = .save
+            info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url as NSURL
+        }
 
         let op = wv.printOperation(with: info)
-        op.showsPrintPanel = false
-        op.showsProgressPanel = false
+        let printing: Bool
+        if case .printer = dest { printing = true } else { printing = false }
+        op.showsPrintPanel = printing
+        op.showsProgressPanel = printing
         // 打印视图默认零尺寸；挂了窗口之后其实不给也行，留着当保险（实测两种都对）
         op.view?.frame = NSRect(origin: .zero,
                                 size: NSSize(width: info.paperSize.width - m * 2,
@@ -1190,6 +1213,10 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
                                    contextInfo: UnsafeMutableRawPointer?) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // 打印那条不产出文件：面板里按了取消也算走完（success=false），不当失败报
+            if case .printer = self.dest {
+                return self.finish(.success(PDFStats()))
+            }
             guard success, FileManager.default.fileExists(atPath: self.out.path) else {
                 return self.fail(L("err.pdf.noFile"))
             }
@@ -1790,6 +1817,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         for p in paths where watchers[p] == nil { watch(p) }
     }
     var pdfPrinter: PDFPrinter?
+    /// 0.4.0 还的第三条账：图片落到哪个 assets/（"doc" 文档同级 / "root" 工作区根）。
+    /// 真相在渲染层的偏好，启动与切换时经契约 v31 推过来；壳不持久化（同主题 / 语言那条规矩）
+    var imageDirMode = "doc"
     /// 0.3.0 T3：长图那台快门。不拿住引用的话，`case "exportPng"` 一出作用域它就没了 ——
     /// 而整条路是异步的（加载 → 等字体图片 → 按快门），当场就成了「点了没反应」
     var pngShooter: PNGShooter?
@@ -2016,6 +2046,33 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         }
     }
 
+    /**
+     * 0.4.0 还的第四条账：**真打印机**。
+     *
+     * 与导出 PDF 同一条流程（同一份导出 HTML、同一台 `PDFPrinter`），只换一个去处：
+     * `.printer` 让 AppKit 弹系统打印面板 —— 选哪台机器、几份、纸张都归它，
+     * 「存为 PDF」也在那张面板上。从前 ⌘P 直接导出 PDF，这条路根本不存在。
+     *
+     * 自检下不跑：`runModal` 弹出来的打印面板会把无人值守的 E2E 卡死。
+     */
+    @objc func printDocument(_ sender: Any?) {
+        guard !smokeAuto else { return }
+        fetchExportHtml { [weak self] html in
+            guard let self, let html else { return }
+            self.fetchOutline { outline in
+                let printer = PDFPrinter(html: self.inlineImages(html, embed: true),
+                                         dest: .printer, opts: PDFOptions(), outline: outline)
+                self.pdfPrinter = printer
+                printer.run { [weak self] result in
+                    self?.pdfPrinter = nil
+                    if case .failure(let e) = result {
+                        self?.alertError(L("err.print"), e.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+
     /// 向渲染层要一份目录（0.2.0 PDF 书签）。要不到就当没有 —— 书签是尽力而为的
     private func fetchOutline(_ then: @escaping ([OutlineItem]) -> Void) {
         let js = "return window.__cursive && window.__cursive.outlineSource"
@@ -2076,8 +2133,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 相对路径在它那儿什么也找不到（导出 HTML 那条路才有「不嵌」的选项）
     private func printPDF(html: String, out: URL, opts: PDFOptions, outline: [OutlineItem],
                           then: @escaping (Result<PDFStats, Error>) -> Void) {
-        let printer = PDFPrinter(html: inlineImages(html, embed: true), out: out, opts: opts,
-                                 outline: outline)
+        let printer = PDFPrinter(html: inlineImages(html, embed: true), dest: .file(out),
+                                 opts: opts, outline: outline)
         pdfPrinter = printer
         printer.run { [weak self] result in
             self?.pdfPrinter = nil
@@ -2190,10 +2247,38 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         return handled
     }
 
-    /// 把外部图片复制进当前文档目录的 assets/，重名自动加序号，返回相对路径
-    private func copyImageToAssets(from url: URL) -> String? {
-        let baseDir = (lastDocPath as NSString?)?.deletingLastPathComponent
+    /**
+     * 0.4.0 还的第三条账：图片落到哪个 `assets/`。
+     *
+     * 从前写死「当前文档同级」。写作时两种习惯都常见 —— 一篇一个文件夹的人要文档同级，
+     * 一个仓库一堆散篇的人要**工作区根**一处收着（不然 assets 会散得到处都是）。
+     * 偏好在渲染层（`PrefValues.imageDir`），经契约 v31 的 `setImageDir` 推过来，
+     * **落脚与算相对路径都收在这一处**：粘贴与拖入两条路各算一遍的话，迟早一边对一边错。
+     */
+    private func assetsBaseDir(_ docDir: String?) -> String {
+        let doc = docDir ?? (lastDocPath as NSString?)?.deletingLastPathComponent
             ?? FileManager.default.currentDirectoryPath
+        guard imageDirMode == "root", let root = treeRoot else { return doc }
+        return root
+    }
+
+    /// 落盘位置 → **相对当前文档**的写法（图片链接是相对文档解析的）。
+    /// 落在工作区根时这里就会出现 `../assets/x.png` —— 渲染层原样插进文档
+    private func assetRelPath(_ full: String, docDir: String?) -> String {
+        let doc = ((docDir ?? (lastDocPath as NSString?)?.deletingLastPathComponent
+            ?? FileManager.default.currentDirectoryPath) as NSString).standardizingPath
+        let target = (full as NSString).standardizingPath
+        let a = doc.split(separator: "/").map(String.init)
+        let b = target.split(separator: "/").map(String.init)
+        var i = 0
+        while i < a.count, i < b.count, a[i] == b[i] { i += 1 }
+        if i == 0 { return target }
+        return (Array(repeating: "..", count: a.count - i) + b[i...]).joined(separator: "/")
+    }
+
+    /// 把外部图片复制进 assets/，重名自动加序号，返回**相对当前文档**的路径
+    private func copyImageToAssets(from url: URL) -> String? {
+        let baseDir = assetsBaseDir(nil)
         let assets = (baseDir as NSString).appendingPathComponent("assets")
         try? FileManager.default.createDirectory(atPath: assets, withIntermediateDirectories: true)
         let stem = url.deletingPathExtension().lastPathComponent
@@ -2206,7 +2291,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         }
         let full = (assets as NSString).appendingPathComponent(name)
         do { try FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: full)) } catch { return nil }
-        return "assets/\(name)"
+        return assetRelPath(full, docDir: nil)
     }
 
     // ---- P4-1 导出 HTML：图片嵌入 ----
@@ -2414,6 +2499,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 $0.count == 2 ? (CGFloat($0[0]), CGFloat($0[1])) : nil
             }
             respond(id, NSNull())
+
+        case "setImageDir":
+            // 契约 v31：只记在内存里。真相是渲染层的偏好，壳不持久化
+            imageDirMode = (args.first as? String) == "root" ? "root" : "doc"
+            respond(id, true)
 
         case "setLanguage":
             // 契约 v16：真相在渲染层，壳只是跟着换。菜单栏整个重建（buildMenu 可重入），
@@ -2790,7 +2880,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         case "pasteImage":
             // P2-5：剪贴板里的图落盘到 <docDir>/assets/，只回一个相对路径
             let dirArg = args[0] as? String
-            let baseDir: String = (dirArg?.isEmpty == false ? dirArg! : FileManager.default.currentDirectoryPath)
+            let docDir: String? = dirArg?.isEmpty == false ? dirArg : nil
+            let baseDir = assetsBaseDir(docDir)
             let pb = NSPasteboard.general
             var png: Data? = pb.data(forType: .png)
             if png == nil, let tiff = pb.data(forType: .tiff),
@@ -2811,7 +2902,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             } catch {
                 respond(id, NSNull()); break
             }
-            respond(id, ["relPath": "assets/\(file)"])
+            respond(id, ["relPath": assetRelPath(full, docDir: docDir)])
 
         // ---- 0.2.0 版本历史（契约 v22）----
         // 每次保存到真实路径之后留一份快照。三条约束全在壳侧，渲染层只管发一次请求：
@@ -3329,6 +3420,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             } else {
                 obj["dragStripHit"] = false
             }
+            // 0.4.0 还的第四条账（真打印机）：菜单是原生的，网页那侧看不见 ——
+            // 把「文件」菜单里那几条的键位报上去，让 release.sh 对账：
+            // ⌘P 必须是「打印…」，导出 PDF 让到 ⇧⌘P
+            if let file = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == L("menu.file") })?.submenu {
+                obj["fileMenu"] = file.items.filter { !$0.isSeparatorItem }.map { mi -> [String: Any] in
+                    ["title": mi.title, "key": mi.keyEquivalent,
+                     "shift": mi.keyEquivalentModifierMask.contains(.shift)]
+                }
+            }
             // 0.3.0 T5：位置记忆按工作区分的键（release.sh 拿工作区根的 SHA-256 前 16 位对账）。
             // 报的是**算出来的键**，不是窗口上挂着的名字 —— 自检下压根不挂（见 applyFrameAutosave），
             // 而要守的正是「键是按工作区算的」这件事
@@ -3440,7 +3540,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         await new Promise(r => setTimeout(r, 60))
         const tbBack = getComputedStyle(sb).display
         const counts = {}
-        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-codebar', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub', 'cm-lp-callout', 'cm-lp-callout-note', 'cm-lp-callout-danger', 'cm-lp-callout-mark', 'cm-lp-callout-more'])
+        for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-codebar', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub', 'cm-lp-callout', 'cm-lp-callout-note', 'cm-lp-callout-danger', 'cm-lp-callout-mark', 'cm-lp-callout-more',
+          // 0.4.0 还的第一条账：脚注定义区里的行内语法
+          'cm-lp-seg-strong', 'cm-lp-inline-code'])
           counts[cls] = document.querySelectorAll('.' + cls).length
         // P1-1：KaTeX 字体必须真的加载了（CSP 拦掉的话公式会用系统字体凑合，
         // 肉眼不一定看得出）。fonts.ready 之后任一 KaTeX_* 字体到位即算过
@@ -5109,10 +5211,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(item(L("menu.file.history"), "file:history", key: ""))
         file.addItem(.separator())
         file.addItem(item(L("menu.file.exportHtml"), "file:export-html", key: "e", modifiers: [.command, .shift]))
-        file.addItem(NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)), keyEquivalent: "p"))
+        // 0.4.0 还的第四条账之后 **⌘P 归「打印」**（macOS 的通行键位），导出 PDF 让到 ⇧⌘P。
+        // 从前的安排是「⌘P 直接导出 PDF」，理由是「那才是按 ⌘P 的人想要的」——
+        // 有了真打印机路径之后这条理由不成立了：系统打印面板左下角就有「存为 PDF」，
+        // 而一台真打印机在从前那套里**根本够不着**
+        let pdfItem = NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)),
+                                 keyEquivalent: "p")
+        pdfItem.keyEquivalentModifierMask = [.command, .shift]
+        file.addItem(pdfItem)
         // 0.3.0 T3：三条导出连在一起。不给快捷键 —— ⌘P/⇧⌘E 已经占了两条顺手的键位，
         // 而剩下的空位没有一个是「导出长图」按下去顺理成章的（命令面板里一样找得到）
         file.addItem(item(L("menu.file.exportPng"), "file:export-png", key: ""))
+        file.addItem(.separator())
+        file.addItem(NSMenuItem(title: L("menu.file.print"), action: #selector(printDocument(_:)),
+                                keyEquivalent: "p"))
         file.addItem(.separator())
         // ⌘W 关标签（渲染层管标签表）、⇧⌘W 关窗口 —— macOS 上有标签的应用都是这么分的
         file.addItem(item(L("menu.file.closeTab"), "file:close-tab", key: "w"))
@@ -5338,6 +5450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 「导出为 PDF…」「实际大小」这类要落到**某一个窗口**上的命令：
     /// 菜单是应用级的，动作转给当前 key 窗口
     @objc func exportPDF(_ sender: Any?) { key?.exportPDF(sender) }
+    @objc func printDocument(_ sender: Any?) { key?.printDocument(sender) }
 
     /// 视图菜单的勾选状态。真相同样在渲染层，壳只是跟着显示
     func syncViewFlags(_ flags: [String: Any]) {
