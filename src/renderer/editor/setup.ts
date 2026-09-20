@@ -22,6 +22,7 @@ import { smartPaste } from './paste'
 import { cursiveSearchPanel } from './search-panel'
 import { scrollMarks } from './scroll-marks'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
+import { adoptTableAtCursor } from './live-preview/table'
 import { cursiveMarkdown } from './markdown-lang'
 import { cursiveTheme } from './theme'
 import { writingModes, WRITING_DEFAULT, type WritingModes } from './writing-modes'
@@ -78,6 +79,8 @@ export interface EditorOptions {
   reveal?: RevealScope
   /** 初始是否源代码模式 */
   sourceMode?: boolean
+  /** 初始光标位置（会话恢复用）；超出文档长度会夹回来 */
+  cursor?: number
 }
 
 /**
@@ -107,8 +110,9 @@ export function createState(
   extras: Extension = [],
   options: EditorOptions = {}
 ): EditorState {
-  return EditorState.create({
+  const state = EditorState.create({
     doc,
+    selection: options.cursor ? { anchor: Math.min(options.cursor, doc.length) } : undefined,
     extensions: [
       history(),
       stableNavigation,
@@ -207,4 +211,7 @@ export function createState(
       extras
     ]
   })
+  // 光标一开门就落在某张表里（文档以表格开头 / 会话把它放回表里）：直接进就地编辑，
+  // 否则那张表会回落成管道符源码 —— 见 adoptTableAtCursor
+  return adoptTableAtCursor(state)
 }

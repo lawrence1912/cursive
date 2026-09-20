@@ -1187,19 +1187,20 @@ async function restoreSession(): Promise<void> {
     const doc = await window.api.read(path).catch(() => null)
     if (!doc) continue // 文件没了（改名 / 删了 / 外接盘没挂）就跳过这一条
     const tab = spawnTab(
-      createState(doc.content, listener, { dir: dirname(doc.path), sourceMode }),
+      createState(doc.content, listener, {
+        dir: dirname(doc.path),
+        sourceMode,
+        // 光标要在**建 state 的时候**就给：建完再 update 一次的话，「光标落在表里」
+        // 这件事已经错过了 adoptTableAtCursor，那张表会以管道符源码的样子开门。
+        // 光标夹回文档里由 createState 做：磁盘上这份文件可能在上次之后被别的程序改短了
+        cursor: where.get(path)?.cursor
+      }),
       doc.path,
       doc.fingerprint,
       false
     )
     const st = where.get(path)
-    if (!st) continue
-    tab.scroll = st.scroll
-    // 光标夹回文档里：磁盘上这份文件可能在上次之后被别的程序改短了
-    if (st.cursor) {
-      const at = Math.min(st.cursor, tab.state.doc.length)
-      tab.state = tab.state.update({ selection: { anchor: at } }).state
-    }
+    if (st) tab.scroll = st.scroll
   }
   // 落点：启动那份文档优先，其次是会话里的活动标签，再不行就手上还剩的最后一个
   const target = plan.focus ? tabs.find((t) => t.path === plan.focus)?.id : undefined

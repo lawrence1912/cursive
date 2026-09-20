@@ -223,6 +223,43 @@ export function tableEditAt(state: EditorState): number | null {
   return state.field(tableEditField, false) ?? null
 }
 
+/**
+ * 光标此刻落在哪张表里 → 那张表的起点。两侧都认：落在块首（`from`）、落在块尾
+ * （`to`，也就是末行行尾）都算在表里 —— reveal 是按**行**算的，那两处本来就会回显源码。
+ *
+ * 只解析到光标处：打开一份大文档时这条路走在首屏之前，解析全长要几十毫秒。
+ */
+export function tableAtCursor(state: EditorState): number | null {
+  const head = state.selection.main.head
+  const tree = parsedTree(state, Math.min(head + 1, state.doc.length))
+  for (const side of [1, -1] as const) {
+    if (side < 0 && head === 0) break
+    for (let n: SyntaxNode | null = tree.resolveInner(head, side); n; n = n.parent) {
+      if (n.name === 'Table') return n.from
+    }
+  }
+  return null
+}
+
+/**
+ * **刚打开一份文档时**：光标已经在某张表里就直接进就地编辑态。
+ *
+ * 不这么做的话那张表会回落成 `| --- |` 源码 —— `tableRendered` 的规矩是「没进编辑态
+ * 而光标碰到了就回显」，而「光标碰到」有两条谁都没按过键的路径：
+ *   - **文档以表格开头**：新开的 state 光标就在 0，正好落在块首；
+ *   - **会话恢复**：上次退出时光标停在表里，这次原样放回去。
+ * 两条都不经过点击/方向键那些会发 `setTableEdit` 的入口，于是表格一开门就是源码。
+ *
+ * 只在「文档刚出现」这一刻做。编辑当中光标进表格仍然按原来的规矩走 —— 表格**正在被
+ * 打出来**的那一瞬（`| a | b |` 刚补上分隔行）要留在源码里，Esc 那个逃生口也得留着，
+ * 两者都是「光标在表里但没有编辑态」，只能靠时机区分。
+ */
+export function adoptTableAtCursor(state: EditorState): EditorState {
+  if (state.field(tableEditField, false) === undefined) return state // 源代码模式：没这个字段
+  const at = tableAtCursor(state)
+  return at == null ? state : state.update({ effects: setTableEdit.of(at) }).state
+}
+
 /** 表格此刻是否以渲染态存在（widget 在、没回落源码） */
 export function tableRendered(
   state: EditorState,

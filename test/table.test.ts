@@ -25,7 +25,9 @@ import {
   cellPasteText,
   setTableEdit,
   tableEditAt,
-  tableEditField
+  tableEditField,
+  adoptTableAtCursor,
+  tableAtCursor
 } from '../src/renderer/editor/live-preview/table'
 
 describe('parseTable：GFM 管道表格', () => {
@@ -534,6 +536,63 @@ describe('表格编辑态什么时候退出', () => {
     const state = make()
     const next = state.update(writeCell(state, from, 0, 0, 'aa', 2)!).state
     expect(tableEditAt(next)).toBe(from)
+  })
+})
+
+/**
+ * 「打开就是源码」那个毛病（0.4.0 修）。
+ *
+ * `tableRendered` 的规矩是「没进编辑态、而光标碰到了 → 回显管道符源码」。问题是
+ * 有两条**谁都没按过键**的路径会让光标一开门就在表里：文档**以表格开头**（新 state
+ * 的光标就在 0，正落在块首），以及**会话恢复**（上次停在表里的位置原样放回去）。
+ * 两条都不经过点击/方向键那些会发 `setTableEdit` 的入口，于是整张表以源码开门。
+ *
+ * 修法是只在「文档刚出现」那一刻认一次光标 —— 不能改成「光标进表就进编辑态」：
+ * 表格**正在被打出来**的那一瞬和 **Esc 逃生口**都是「光标在表里但没有编辑态」，
+ * 它们必须留在源码里，跟这条只能靠时机区分（见 docs/table-editing.md 判断 3）。
+ */
+describe('打开文档时光标已经落在表里', () => {
+  const ext = [cursiveMarkdown(), tableEditField]
+  const mk = (doc: string, anchor = 0): EditorState =>
+    EditorState.create({ doc, selection: { anchor }, extensions: ext })
+  const TOP = '| a | b |\n| --- | --- |\n| c | d |\n'
+  const MID = '正文\n\n' + TOP
+
+  it('文档以表格开头 —— 光标默认落在 0，直接进编辑态', () => {
+    const state = adoptTableAtCursor(mk(TOP))
+    expect(tableEditAt(state), '不进的话这张表一开门就是 | --- | 源码').toBe(0)
+  })
+
+  it('会话把光标恢复到表体某一行 —— 同样进编辑态', () => {
+    const state = adoptTableAtCursor(mk(MID, MID.indexOf('| c') + 3))
+    expect(tableEditAt(state)).toBe(MID.indexOf('| a'))
+  })
+
+  it('光标停在末行行尾（块尾边界）也算在表里', () => {
+    const state = adoptTableAtCursor(mk(MID, MID.indexOf('| c | d |') + '| c | d |'.length))
+    expect(tableEditAt(state)).toBe(MID.indexOf('| a'))
+  })
+
+  it('光标在表格外 —— 不碰它', () => {
+    expect(tableEditAt(adoptTableAtCursor(mk(MID, 1)))).toBeNull()
+    expect(tableAtCursor(mk(MID, 1))).toBeNull()
+  })
+
+  it('光标在表格后面那一行 —— 不碰它', () => {
+    const doc = MID + '\n后面\n'
+    expect(tableAtCursor(mk(doc, doc.indexOf('后面') + 1))).toBeNull()
+  })
+
+  it('源代码模式（撤掉了整套扩展、没有这个字段）—— 原样返回，不炸', () => {
+    const bare = EditorState.create({ doc: TOP, extensions: [cursiveMarkdown()] })
+    expect(adoptTableAtCursor(bare)).toBe(bare)
+  })
+
+  it('只认「文档刚出现」那一刻 —— 后来光标走进表里不会自己进编辑态', () => {
+    const state = adoptTableAtCursor(mk(MID, 1))
+    expect(tableEditAt(state)).toBeNull()
+    const moved = state.update({ selection: { anchor: MID.indexOf('| a') + 2 } }).state
+    expect(tableEditAt(moved), 'Esc 逃生口和「正在打表格」都靠这个留在源码里').toBeNull()
   })
 })
 
