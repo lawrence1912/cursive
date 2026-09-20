@@ -117,7 +117,7 @@ run_case() {
         CURSIVE_SMOKE_PNG="$PNG_ENV" \
         ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
-import json, sys, os, re, unicodedata
+import json, sys, os, re, struct, hashlib, unicodedata
 c = json.load(open('/tmp/cursive-shell-check.json'))
 e = json.load(open('/tmp/cursive-shell-e2e.json'))
 r = e['result']; img = r.get('img')
@@ -129,6 +129,12 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       # 兜底才挂上，于是真机上会带出「上次那个文件夹」
       and (e.get('windowRoots') or [''])[0] == '/tmp/cursive-e2e'
       and c.get('sbRoot') == '/tmp/cursive-e2e'
+      # 0.3.0 T5：窗口位置按**工作区**记，键里那串摘要就是工作区根的 SHA-256 前 16 位。
+      # 这里独立算一遍与壳对账 —— 从前所有窗口共用一个 `Main`，只有第一个窗口的位置算数
+      and c.get('frameAutosaveKey') == 'Main-' + hashlib.sha256(b'/tmp/cursive-e2e').hexdigest()[:16]
+      # 而自检下这个名字**不许真的挂上去**：挂了就会把开发机记住的窗口位置改掉，
+      # 更要紧的是自检的窗口大小会变成「上次跑完留下的那个」，视口敏感的断言跟着飘
+      and not c.get('frameAutosaveLive')
       and r.get('autosaved') is True and r.get('reloaded') is True
       and r.get('tabHit') is True    # 文件树藏起来后没有浮层压住第一个标签
       # 文件树藏起来后，红绿灯右边那一截空当还在 = 窗口还拖得动（两侧都藏 + 标签排满时

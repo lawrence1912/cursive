@@ -1954,14 +1954,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         ])
 
         window.delegate = self
-        // 位置记忆只给第一个窗口：autosave name 是全局键，多个窗口共用同一个键会互相覆盖，
-        // 而且新窗口会精确压在旧窗口上。后开的窗口按 macOS 惯例层叠错开
-        if isPrimary {
-            _ = window.setFrameAutosaveName("Main")
-        } else if let last = appDelegate?.windows.last?.window {
-            window.setFrameTopLeftPoint(
-                NSPoint(x: last.frame.minX + 26, y: last.frame.maxY - 26))
-        }
+        applyFrameAutosave(restore: true)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -2080,6 +2073,48 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             self?.pdfPrinter = nil
             then(result)
         }
+    }
+
+    /**
+     * 0.3.0 T5：窗口位置**按工作区记**。
+     *
+     * 从前所有窗口共用一个 `Main`，于是只有第一个窗口的位置算数 —— 而
+     * 「一个窗口 = 一个工作区」是这个应用的分栏前提（⌘⇧O 打开文件夹 = 开新窗口），
+     * 工作区之间切来切去时每个窗口都摆在同一个地方，那条前提只兑现了一半。
+     *
+     * 键按**工作区根**分，与会话恢复（契约 v24）同一个口径；名字里那串摘要走壳里
+     * 唯一那份 `pathKey`（版本历史的目录名也是它）—— 不为这件事再算第二份。
+     * 没有工作区根的（未命名 / 还没挂上树）仍归 `Main`。
+     *
+     * `setFrameAutosaveName` 回 false 只有一种情况：**另一个开着的窗口已经占了这个名字**，
+     * 也就是「同一个工作区开了第二个窗口」。那一种照旧层叠错开 ——
+     * 两个窗口抢同一份位置记忆，结果是互相覆盖 + 后开的精确压在先开的身上。
+     *
+     * `restore` 只在建窗口时为真：工作区是**中途换的**（在一个空窗口里 ⌘⇧O）时，
+     * 把窗口当场挪到「那个工作区上次的位置」太吓人 —— 记下来，下次开它的时候再说。
+     */
+    /// 位置记忆的键：工作区根一份，没有根的（未命名 / 还没挂上树）归 `Main`
+    var frameAutosaveKey: String { treeRoot.map { "Main-" + pathKey($0) } ?? "Main" }
+
+    private func applyFrameAutosave(restore: Bool) {
+        // **自检下既不恢复也不记住**（同 `applyStartupAppearance` 那条规矩）。
+        // 两个理由，第二个是这一轮踩出来的：
+        // ① 无人值守的自检不该把开发机记住的窗口位置改掉；
+        // ② 起点必须确定 —— E2E 里有一批断言是**视口敏感**的（块级装饰只给视口里的块建，
+        //    见 0.2.x 的增量化），窗口一大一小，数出来的东西就不一样。
+        //    这条以前是「碰巧成立」的：所有窗口共用一个 `Main`，而开发机上那个键恰好
+        //    存着 700×500 —— 换台机器（或清掉偏好）跑，自检当场就不是同一个窗口
+        guard !smokeAuto else { return }
+        let name = frameAutosaveKey
+        guard window.setFrameAutosaveName(name) else {
+            if let last = appDelegate?.windows.last?.window, last !== window {
+                window.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + 26, y: last.frame.maxY - 26))
+            }
+            return
+        }
+        // **名字注册了不等于位置回来了**：setFrameUsingName 才是「按这个名字摆回去」那一步，
+        // 没存过就原样不动（返回 false，不必理会）
+        if restore { _ = window.setFrameUsingName(name) }
     }
 
     // ---- 关闭拦截（与 Electron 版行为一致）----
@@ -2419,6 +2454,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             if let picked {
                 treeRoot = picked
                 UserDefaults.standard.set(picked, forKey: "lastFolder")
+                // 0.3.0 T5：工作区换了，位置记忆跟着换一处（不挪窗口，见 applyFrameAutosave）
+                applyFrameAutosave(restore: false)
             }
             respond(id, picked ?? NSNull())
 
@@ -3140,6 +3177,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             } else {
                 obj["dragStripHit"] = false
             }
+            // 0.3.0 T5：位置记忆按工作区分的键（release.sh 拿工作区根的 SHA-256 前 16 位对账）。
+            // 报的是**算出来的键**，不是窗口上挂着的名字 —— 自检下压根不挂（见 applyFrameAutosave），
+            // 而要守的正是「键是按工作区算的」这件事
+            obj["frameAutosaveKey"] = self.frameAutosaveKey
+            obj["frameAutosaveLive"] = self.window.frameAutosaveName
             self.writeJSON(obj, to: "/tmp/cursive-shell-check.json")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runE2E() }
         }
@@ -3258,11 +3300,25 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         }
         // P1-2：mermaid 异步渲染（动态 import + render），多等一会儿
         await new Promise((r) => setTimeout(r, 700))
+        // **先把文末滚进视口再数**（0.3.0 T5 逼出来的）：块级装饰只给视口里的块建
+        // （0.2.x 增量化的设计），而第一张图有多高要看窗口有多宽 —— 窗口一大，
+        // 第二个块就被挤到视口外，数出来是 1。这条断言要的是「两个块都渲染了」，
+        // 不是「它们恰好同屏」。滚完等一轮渲染，数完滚回去（后面还有量位置的探针）
+        {
+          const sc = window.__cursive.view.scrollDOM
+          sc.scrollTop = sc.scrollHeight
+          await new Promise((r) => setTimeout(r, 700))
+        }
         const mermaidEls = [...document.querySelectorAll('.cm-lp-mermaid')]
         const mermaid = {
           count: mermaidEls.length,
           svg: mermaidEls.filter((el) => el.querySelector('svg')).length,
           error: mermaidEls.filter((el) => el.classList.contains('is-error')).length
+        }
+        {
+          const sc = window.__cursive.view.scrollDOM
+          sc.scrollTop = 0
+          await new Promise((r) => setTimeout(r, 200))
         }
         // P1-4 代码块嵌套语法高亮：解析侧（language-data 动态 import 语言包）与
         // 上色侧（theme.ts 的 markdownHighlight）都通了才有颜色，缺任一边都不报错、
