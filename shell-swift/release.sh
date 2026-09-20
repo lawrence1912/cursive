@@ -28,7 +28,7 @@ mkdir -p "$THEMES"
 printf '.cm-content { background: rgb(1, 2, 3); }\n' > "$THEMES/e2e-skin.css"
 rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md \
-   test/fixtures/dialect.md test/fixtures/callout.md "$FIX/"
+   test/fixtures/dialect.md test/fixtures/callout.md test/fixtures/bom.md "$FIX/"
 cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
 # 三张图各守一条链：① 百分号编码的中文文件名；② 尺寸语法 `=宽x高`；
 # ③ 尖括号目的地（文件名带空格时**唯一**的写法）+ 尺寸。②③ 以前在编辑器里从来没生效过
@@ -502,6 +502,10 @@ run_case img.md
 run_case table.md
 run_case kitchen-sink.md
 run_case crlf.md
+# 0.4.0 F2 顺带补的一条：**带 BOM 的文件读进来再存回去，那三个字节还得在**。
+# 这条一直没人守着（bom.md 从来不在用例表里，而那份夹具自己都没有 BOM），
+# 于是壳侧「Foundation 读文件会吃掉 BOM」的洞活了很久 —— 通用断言里的 bytesEqual 就够
+run_case bom.md
 run_case math.md
 run_case mermaid.md
 run_case dialect.md

@@ -1598,6 +1598,8 @@ final class SearchOperation: Operation, @unchecked Sendable {
             if files > maxFiles { truncated = true; break }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
             if size > maxBytes { continue }
+            // 这里**有意**用会吃掉 BOM 的那条读法：搜索报的是行列，而替换是在
+            // `decodeDoc` 之后（同样不含 BOM）的文本上按行列定位的 —— 两边都不含才对得齐
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
 
             var fileHits: [[String: Any]] = []
@@ -2930,8 +2932,31 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
     // ---- 文件读写（types.ts 的 DocPayload 形状）----
 
+    /**
+     * 读一份文档的原文。**自己认 BOM**。
+     *
+     * `String(contentsOfFile:encoding:.utf8)` 会把开头那三个字节当编码标记**吃掉**，
+     * 于是 `decodeDoc` 永远看不到 BOM、指纹里 `bom` 恒为 false ——
+     * 打开一个带 BOM 的文件再保存，那三个字节就没了。**这是红线一（保存零损耗）
+     * 上的一个洞**，而且一直没人发现：`test/textfile.test.ts` 测的是 TS 那份实现，
+     * 壳这边的读盘从来没有被 E2E 覆盖过（`bom.md` 不在用例表里，0.4.0 F2 补上了）。
+     *
+     * **跨文件搜索那一侧仍然读 BOM-less 的文本**（`SearchOperation`）：那边报的是
+     * 行列，而替换是在 `decodeDoc` **之后**的文本上按行列定位的 —— 两边都不含 BOM
+     * 才对得齐。谁要改其中一边，另一边必须一起改。
+     */
+    func readRawDoc(_ path: String) throws -> String {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let hasBOM = data.starts(with: [0xEF, 0xBB, 0xBF])
+        guard let text = String(data: hasBOM ? data.dropFirst(3) : data, encoding: .utf8) else {
+            throw NSError(domain: "cursive.io", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "不是 UTF-8 文本"])
+        }
+        return hasBOM ? "\u{feff}" + text : text
+    }
+
     private func readDoc(_ path: String) throws -> [String: Any] {
-        let raw = try String(contentsOfFile: path, encoding: .utf8)
+        let raw = try readRawDoc(path)
         let (text, fp) = decodeDoc(raw)
         return ["path": path, "content": text, "fingerprint": ["eol": fp.eol, "bom": fp.bom]]
     }
