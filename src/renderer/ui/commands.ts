@@ -53,6 +53,7 @@ const GENERAL: Entry[] = [
   { action: 'file:prev-tab', labelKey: 'cmd.prevTab', hint: '⌃⇧⇥' },
   { action: 'file:history', labelKey: 'cmd.history' },
   { action: 'file:export-html', labelKey: 'cmd.exportHtml', hint: '⇧⌘E' },
+  { action: 'file:export-png', labelKey: 'cmd.exportPng' },
 
   { action: 'edit:find', labelKey: 'cmd.find', hint: '⌘F' },
   { action: 'edit:replace', labelKey: 'cmd.replace', hint: '⌥⌘R' },

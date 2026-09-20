@@ -40,7 +40,7 @@ import { writingModes } from './editor/writing-modes'
 import { applyFormat, formatStateAt } from './editor/fmt'
 import { focusKeepScroll } from './editor/focus'
 import { insertText } from './editor/paste'
-import { exportHtmlDocument } from './export'
+import { exportHtmlDocument, type Typography } from './export'
 import { openReplace, searchStat } from './editor/search-panel'
 import { relativeDir, relativePath } from './ui/file-search'
 import { Sidebar } from './ui/sidebar'
@@ -1255,6 +1255,52 @@ async function exportHtml(): Promise<{ path: string } | null> {
 }
 
 /**
+ * 「有选区就只出选区」那条判断的**唯一一份**（复制为富文本 0.2.0 / 导出长图 0.3.0 共用）。
+ *
+ * 选区那半把选中的 Markdown 现造一个 EditorState 再渲染 —— 导出那条路本来就只认 state，
+ * 于是「整份」与「一段」共用同一个渲染器，没有第二套局部渲染
+ * （P4-1 那条「根本不写第二个解析器」的原则在这里同样成立）。
+ *
+ * `type` 传不传是两条路各自的取舍：**导出物跟随排版设置，剪贴板不跟**
+ * （见 `copyAsHtml` 的注释）。
+ */
+async function exportSelectionOrAll(type?: Typography): Promise<{ html: string; md: string }> {
+  const sel = view.state.selection.main
+  const tab = activeTab()
+  const dir = tab?.path ? dirname(tab.path) : null
+  const md = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
+  const state = sel.empty
+    ? view.state
+    : EditorState.create({ doc: md, extensions: [cursiveMarkdown()] })
+  const doc = await exportHtmlDocument(state, { dir, title: exportStem() }, type)
+  return { html: doc.html, md }
+}
+
+/**
+ * 0.3.0 T3 导出为长图（契约 v28）。
+ *
+ * 进壳的是**同一份导出 HTML**（三条导出的长相必须永远一致），壳那边离屏渲染 + 快门。
+ * 宽度 = 正文栏宽：导出 CSS 的 `--column` 是 rem，而导出物的根字号就是浏览器默认的
+ * 16px —— 这条耦合有 E2E 守着（成图宽度必须正好是它的 2 倍）。
+ */
+async function exportPng(): Promise<void> {
+  const { html } = await exportSelectionOrAll(prefs.values)
+  const width = Math.round(prefs.values.column * 16)
+  const out = await window.api.exportPng(html, `${exportStem()}.png`, width)
+  if (!out) return   // 保存面板点了取消
+  const name = basename(out.path)
+  const [w, h] = out.pixels
+  // 截断了要说清楚**这张图是残的**：一张「看起来完整」的残图比一条报错难发现得多
+  note(
+    out.clipped ? t('note.pngClipped', { name, h }) : t('note.exportedPng', { name, w, h }),
+    {
+      warn: out.clipped,
+      action: { label: t('note.reveal'), run: () => window.api.revealInFinder(out.path) }
+    }
+  )
+}
+
+/**
  * 0.2.0 复制为富文本（契约 v20）。
  *
  * **有选区就只复制选区**：把选中的那段 Markdown 现造一个 EditorState 渲染 ——
@@ -1268,15 +1314,8 @@ async function exportHtml(): Promise<{ path: string } | null> {
  * 比周围都大的字。字族/字号这种「我这台机器上看着舒服」的设定不该跟着剪贴板走。
  */
 async function copyAsHtml(): Promise<void> {
-  const sel = view.state.selection.main
-  const tab = activeTab()
-  const dir = tab?.path ? dirname(tab.path) : null
-  const md = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
-  const state = sel.empty
-    ? view.state
-    : EditorState.create({ doc: md, extensions: [cursiveMarkdown()] })
-  const doc = await exportHtmlDocument(state, { dir, title: exportStem() })
-  await window.api.copyHtml(doc.html, md)
+  const { html, md } = await exportSelectionOrAll()
+  await window.api.copyHtml(html, md)
   // 剪贴板这条路**看不见任何变化**：不说一句的话，「刚才那下到底复制上了没有」
   // 只能靠去别处粘一下才知道
   note(t('note.copiedHtml'))
@@ -1425,6 +1464,9 @@ async function handleMenu(action: MenuAction): Promise<void> {
       }
       break
     }
+    case 'file:export-png':
+      await exportPng()
+      break
     case 'edit:find':
       openSearchPanel(view)
       break

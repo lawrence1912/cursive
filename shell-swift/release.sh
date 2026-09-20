@@ -101,9 +101,14 @@ run_case() {
     # `CURSIVE_SMOKE_UPDATE` 都没有，那时替身回 null，等于这条路彻底不开
     UPDATE_ENV=""
     [ "$1" = "crlf.md" ] && UPDATE_ENV="9.9.9,0.0.0,none,fail"
+    # 0.3.0 T3 导出为长图：只在 img.md 上跑 —— 那份夹具有三张图，
+    # 顺带把「图片一律嵌成 data: URI」（长图指不着本地文件）也走一遍
+    PNG_ENV=""
+    [ "$1" = "img.md" ] && PNG_ENV="/tmp/cursive-e2e/out/img.png"
     CURSIVE_SMOKE=1 CURSIVE_SMOKE_NAME='e2e-新建.md' CURSIVE_SMOKE_RENAME='e2e-改名.md' \
         CURSIVE_SMOKE_HTML="/tmp/cursive-e2e/out/$1.html" CURSIVE_SMOKE_PDF="$PDF_ENV" \
         CURSIVE_SMOKE_DISCARD="$DISCARD_ENV" CURSIVE_SMOKE_UPDATE="$UPDATE_ENV" \
+        CURSIVE_SMOKE_PNG="$PNG_ENV" \
         ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
 import json, sys, os, re, unicodedata
@@ -161,6 +166,24 @@ if sys.argv[1] == 'img.md':
     pp = r.get('pasteProbe') or ''
     ok = ok and pp.startswith('assets/') and os.path.exists(os.path.join('/tmp/cursive-e2e', pp))
     ok = ok and r.get('dropProbe') is True
+    # 0.3.0 T3 导出为长图：菜单 → 同一份导出 HTML → 壳侧离屏渲染 + 快门 → 写盘
+    pg = r.get('pngProbe') or {}
+    ok = ok and not pg.get('err')
+    ok = ok and '长图已导出' in (pg.get('note') or '')
+    png = '/tmp/cursive-e2e/out/img.png'
+    ok = ok and os.path.exists(png)
+    if ok:
+        raw = open(png, 'rb').read()
+        # 直接读 PNG 头（IHDR 的宽高），别信回执里那句话 —— 那句是渲染层说的，
+        # 而这一条要证的是**盘上那张图**真是这么大
+        pw, ph = struct.unpack('>II', raw[16:24])
+        # 宽度 = 正文栏宽 × 2（2 倍图）。这条同时钉死两处耦合：
+        # 导出 CSS 的 `--column` 是 rem × 根字号 16px，以及壳侧那个 PNG_SCALE
+        ok = ok and pw == pg.get('wantWidth', 0) * 2
+        # 高度：一张长图（比宽的多），而且没撞上上限（撞了就是另一条分支，回执会变）
+        ok = ok and ph > pw and ph < 32768
+        # 图片嵌进去了：几张 icon 的 base64 摊开，一张空白页绝到不了这个量
+        ok = ok and len(raw) > 100_000
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
     # P2-6：点单元格 → 表格**留在渲染态**、焦点落进 contenteditable 的格子里

@@ -21,6 +21,12 @@ export type MenuAction =
   | 'file:open-folder'
   // ---- P4-1 导出 HTML ----
   | 'file:export-html'
+  /**
+   * 导出为长图 PNG（0.3.0 T3）。与导出 HTML / PDF 共用**同一份**导出 HTML ——
+   * 三条导出的长相必须永远一致，不另起渲染路径。**有选区只出选区**
+   * （与「复制为富文本」同一条判断）。契约 v28
+   */
+  | 'file:export-png'
   | 'edit:find'
   | 'edit:replace'
   | 'edit:find-next'
@@ -251,6 +257,19 @@ export interface ScratchDoc {
 }
 
 /**
+ * ---- 0.3.0 T3 导出为长图（契约 v28）----
+ * 一张图出来之后的三个数。`clipped` 是唯一需要**说一句**的那个：
+ * 文档比像素上限还长时只出了前面那些，不说的话用户拿到的是一张「看起来完整」的残图。
+ */
+export interface PngExport {
+  path: string
+  /** 成图的像素尺寸（宽 × 高），状态栏那句回执报它 */
+  pixels: [number, number]
+  /** 太长被截了：只出了前面那些 */
+  clipped: boolean
+}
+
+/**
  * ---- 0.3.0 T2 检查更新（契约 v27）----
  * 壳拉回来的那一眼。**三个字段全是壳自己说了算**，网络回来的东西只借道 `latest`：
  * `current` 取自包的 `CFBundleShortVersionString`，`url` 是壳侧拼的常量
@@ -422,6 +441,18 @@ export interface CursiveApi {
    * 本地图片读盘转成 data: URI。**图片字节不过 IPC 桥**（判断 3）——
    * 渲染层只在属性里写清楚去哪儿取。取消或写入失败返回 null。 */
   exportHtml(html: string, defaultName: string): Promise<{ path: string } | null>
+
+  /** ---- 0.3.0 T3 导出为长图（契约 v28）----
+   * 与 `exportHtml` 同一份 HTML 进来，壳侧走**离屏 WKWebView + `takeSnapshot`**
+   * （和 PDF 那条打印路同一个形状：挂一个屏幕外的窗口，等字体与图片就位再按快门）。
+   * 图片一律嵌成 data: URI —— 一张 PNG 指不着本地文件。
+   *
+   * `width` 是**渲染层量好的正文栏宽**（CSS px，同契约 v26 那条「渲染层量、壳照做」）：
+   * 长图的宽度就该是屏幕上正文的宽度，壳自己猜不出来（栏宽是偏好、还跟着窗口变）。
+   * 壳侧仍会夹一次上下界 —— 过窄读不了，过宽发出去没人看。
+   *
+   * 取消保存面板返回 null；成图太长会被截断，那时 `clipped` 为真（不是失败，但要说一句）。 */
+  exportPng(html: string, defaultName: string, width: number): Promise<PngExport | null>
 
   /** ---- P3-7 多窗口（契约 v13）----
    * 开一个新窗口。窗口之间除了 localStorage 与**偏好广播**（契约 v17）全无共享状态 ——
