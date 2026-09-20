@@ -56,6 +56,7 @@ import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
 import { note } from './ui/note'
 import { reorderIds, TabBar } from './ui/tabbar'
+import { checkForUpdate } from './ui/update'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
@@ -1503,6 +1504,10 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'app:preferences':
       prefs.toggle()
+      break
+    case 'app:check-update':
+      // 0.3.0 T2：联网的是壳（页面的 CSP 出不去），这一侧只管比版本与说那句话
+      await checkForUpdate()
       break
     case 'view:toggle-source': {
       sourceMode = !sourceMode

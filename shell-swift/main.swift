@@ -53,6 +53,9 @@ var uiLangIdx = 0
 let SHELL_TEXT: [String: [String]] = [
     // ---- 应用菜单 ----
     "menu.app.about":      ["关于 Cursive", "About Cursive"],
+    // 没有省略号：这个应用里省略号的意思是「点完还有一层界面要你填」（设置…、另存为…），
+    // 而这一条点完只在状态栏回一句话。真要去看新版本，是那句话上那颗按钮的事
+    "menu.app.checkUpdate": ["检查更新", "Check for Updates"],
     "menu.app.settings":   ["设置…", "Settings…"],
     "menu.app.hide":       ["隐藏 Cursive", "Hide Cursive"],
     "menu.app.hideOthers": ["隐藏其他", "Hide Others"],
@@ -297,6 +300,7 @@ let BRIDGE_JS = """
     confirmClose: () => call('confirmClose'),
     confirmDiscard: (name) => call('confirmDiscard', [name]),
     openExternal: (url) => call('openExternal', [url]),
+    checkUpdate: () => call('checkUpdate'),
     pickFolder: () => call('pickFolder'),
     readDir: (path) => call('readDir', [path]),
     createFile: (dir) => call('createFile', [dir]),
@@ -1530,6 +1534,11 @@ var smokeCopyHtml: [Int] = []
 /// 「渲染层把哪条地址交给了系统」—— 尤其是本地文件那半（`file://` 编码对不对）
 var smokeExternal: [String] = []
 
+/// E2E 用（0.3.0 T2 检查更新）：自检下**一个字节都不联网**，按 `CURSIVE_SMOKE_UPDATE`
+/// 里逗号分隔的版本依次作答（用完停在最后一个）。要逗号是因为一轮 E2E 得把**四条**分支
+/// 都走到（有新版本 / 已是最新 / 那边还没发过 release / 没问着），而一个进程只有一份环境变量
+var smokeUpdateCalls = 0
+
 /// E2E 用：`scratchList` 被问过几次 / 一共交出去过几份。「一次性」这条不变量光看一个窗口看不出来
 var scratchQueries = 0
 var scratchHandouts = 0
@@ -2250,6 +2259,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             respond(id, opened)
 
+        case "checkUpdate":
+            checkUpdate(id)
+
         case "pickFolder":
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true
@@ -2705,6 +2717,81 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         let raw = try String(contentsOfFile: path, encoding: .utf8)
         let (text, fp) = decodeDoc(raw)
         return ["path": path, "content": text, "fingerprint": ["eol": fp.eol, "bom": fp.bom]]
+    }
+
+    /// 检查更新要问的仓库。**这一处说了算** —— 问谁、去哪儿看，两处都从它拼
+    private static let updateRepo = "lawrence1912/cursive"
+
+    /**
+     * 0.3.0 T2 检查更新（契约 v27）。**只在用户点那一下联网**，而且只问一句
+     * 「最新那条 release 的 tag 是什么」。不下载、不安装、不碰 /Applications 里的任何东西。
+     *
+     * 三处有意收窄：
+     * ① **响应里只取 `tag_name`** —— 去处是壳自己拼的常量（`releases/latest` 那一页，
+     *    GitHub 自己会转到最新那条），于是「网络说去哪儿就去哪儿」这条路根本不存在；
+     * ② **不带 UA 之外的任何东西**：无 token、无 cookie、不记住谁点过；
+     * ③ **不吃缓存** —— 点「检查更新」要的是此刻的答案，共享缓存会让第二次点击原地复读。
+     *
+     * 用 `dataTask` 而不是 `await URLSession.data(for:)` 是硬约束：x86_64 那一片是
+     * `-runtime-compatibility-version none` 编的，壳里一出现 Swift 并发，
+     * `compile.sh` 那道 guard 就当场拦下（见 ROADMAP 的 T1 —— 这是它挡住的第一件真事）。
+     */
+    private func checkUpdate(_ id: Int) {
+        // 裸二进制（开发构建）没有 Info.plist，读不到就当 0.0.0 ——
+        // 于是开发机上点一下永远是「有新版本」，那句话本来也没说错
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let page = "https://github.com/\(Self.updateRepo)/releases/latest"
+        if smokeAuto {
+            let canned = (ProcessInfo.processInfo.environment["CURSIVE_SMOKE_UPDATE"] ?? "")
+                .split(separator: ",").map(String.init)
+            guard !canned.isEmpty else { respond(id, NSNull()); return }
+            let tag = canned[min(smokeUpdateCalls, canned.count - 1)]
+            smokeUpdateCalls += 1
+            // 两个记号：`fail` = 没问着（断网那一种）；`none` = 问着了但那边一个
+            // release 都没有（真实世界里的 404）—— 这两条分支说的话不一样，E2E 都要走到
+            if tag == "fail" {
+                respond(id, NSNull())
+                return
+            }
+            let latest: Any = tag == "none" ? NSNull() : tag
+            respond(id, ["current": current, "latest": latest, "url": page])
+            return
+        }
+        guard let api = URL(string: "https://api.github.com/repos/\(Self.updateRepo)/releases/latest") else {
+            respond(id, NSNull())
+            return
+        }
+        var req = URLRequest(url: api)
+        req.timeoutInterval = 10
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.httpShouldHandleCookies = false
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+            // 回调在后台线程，而 respond 要走 evaluateJavaScript —— 必须回主线程
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                // 404 = 问着了，只是那边**一个 release 都没有**（打了 tag 不等于发了 release）。
+                // 把它和「连不上」说成同一句话就是在冤枉网络，而这两件事该做的下一步也不同
+                if code == 404 {
+                    self.respond(id, ["current": current, "latest": NSNull(), "url": page])
+                    return
+                }
+                var tag = ""
+                if let data,
+                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                   let t = obj["tag_name"] as? String { tag = t }
+                // 断网 / 超时 / 限流 / 响应里没有 tag：对用户是同一件事（没问着），
+                // 但排查时想知道是哪一种 —— 所以理由只写进 stderr，不进状态栏
+                guard code == 200, !tag.isEmpty, tag.count <= 64 else {
+                    let why = error?.localizedDescription ?? "HTTP \(code)"
+                    FileHandle.standardError.write("[update] 没问着：\(why)\n".data(using: .utf8)!)
+                    self.respond(id, NSNull())
+                    return
+                }
+                self.respond(id, ["current": current, "latest": tag, "url": page])
+            }
+        }.resume()
     }
 
     private func respond(_ id: Int, _ value: Any) {
@@ -4039,6 +4126,48 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             linkProbe = { err: String(e) }
           }
         }
+        // 0.3.0 T2 检查更新：菜单 → 壳 → 状态栏 → 那颗按钮。自检下壳**一个字节都不联网**
+        // （`CURSIVE_SMOKE_UPDATE` 里逗号分隔的版本依次作答），所以这条用例在断网的机器上
+        // 也跑得过 —— E2E 要验的本来就是「这条线通不通」，不是 GitHub 今天在不在
+        let updateProbe = null
+        if (path.indexOf('crlf.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const noteEl = document.getElementById('status-note')
+            noteEl.textContent = ''
+            // ① 有新版本。**先不 await**：`note('正在检查更新…')` 是同步发生的，
+            // 这一读守的是「点完当场有声」——一次往返要过网络，中间静默就是「点了没反应」
+            window.__shellEmit('menu', 'app:check-update')
+            const pendingText = noteEl.textContent
+            await wait(500)
+            const foundText = noteEl.textContent
+            const btn = noteEl.querySelector('.note-act')
+            const foundBtn = btn ? btn.textContent : null
+            // 按下那颗按钮才把 release 页交给系统（自检下只记账，见 smokeExternal）——
+            // 「点一下菜单就跳出浏览器」不是这个应用说话的方式
+            if (btn) btn.click()
+            await wait(300)
+            // ② 同一个进程里再问一次，替身这回回的是当前版本 → 已是最新，且不该有按钮
+            window.__shellEmit('menu', 'app:check-update')
+            await wait(500)
+            const latestText = noteEl.textContent
+            const latestBtn = noteEl.querySelector('.note-act')
+            // ③ 那边还没发过 release（真实世界里的 404）。**不是失败**，所以不该是黄的
+            window.__shellEmit('menu', 'app:check-update')
+            await wait(500)
+            const noneText = noteEl.textContent
+            const noneWarn = noteEl.classList.contains('is-warn')
+            // ④ 没问着（断网那一种）：只有这一句是黄的
+            window.__shellEmit('menu', 'app:check-update')
+            await wait(500)
+            const failText = noteEl.textContent
+            const failWarn = noteEl.classList.contains('is-warn')
+            updateProbe = { pendingText, foundText, foundBtn, latestText, latestBtn: !!latestBtn,
+                            noneText, noneWarn, failText, failWarn }
+          } catch (e) {
+            updateProbe = { err: String(e) }
+          }
+        }
         // P3-7 多窗口：放在**最末尾** —— 新窗口会抢走 key，前面那些量位置/焦点的断言
         // 必须都跑完了。窗口数由壳侧在写 JSON 时补上（网页看不到原生的窗口表）
         // 契约 v14：带文件夹开新窗口（「打开文件夹 = 新窗口」走的就是这条）
@@ -4069,6 +4198,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           treeProbe,
           findProbe,
           linkProbe,
+          updateProbe,
           htmlProbe,
           formatProbe,
           barProbe,
@@ -4353,6 +4483,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu(title: "Cursive")
         appMenu.addItem(NSMenuItem(title: L("menu.app.about"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        // 0.3.0 T2：紧跟「关于」—— 两条都是「这个 app 本身」那一类，
+        // 而 macOS 上找「有没有新版本」的人第一眼就看这儿
+        appMenu.addItem(item(L("menu.app.checkUpdate"), "app:check-update", key: ""))
         appMenu.addItem(.separator())
         appMenu.addItem(item(L("menu.app.settings"), "app:preferences", key: ","))
         appMenu.addItem(.separator())

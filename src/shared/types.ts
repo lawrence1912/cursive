@@ -51,8 +51,22 @@ export type MenuAction =
   | 'view:theme-light'
   | 'view:theme-dark'
   | 'view:theme-sepia'
+  /**
+   * 停用 / 启用自定义皮肤（0.3.0 T4，契约 v29）。**安全出口**：皮肤是叠在内置主题
+   * 后面的一整张 CSS，一条 `.cm-content{display:none}` 就能把编辑器变成一片空白 ——
+   * 而设置面板、命令面板、状态栏全在同一张 CSS 底下，能按到的入口一起没了。
+   * 原生菜单不受页面 CSS 影响，页面花成什么样它都画得出来（判断 1 的直接受益）。
+   * 状态进偏好（不是会话级），否则重开一次又花一次
+   */
+  | 'view:disable-custom-theme'
   | 'view:toggle-dark'
   | 'app:preferences'
+  /**
+   * 检查更新（0.3.0 T2）。走原生菜单而不是设置面板里的一颗按钮：
+   * 「这个 app 有没有新版本」与「我的字号排版」不是同一类事，而应用菜单
+   * 本来就是 macOS 上找它的地方。点一下拉一次 GitHub，结果进状态栏（契约 v27）
+   */
+  | 'app:check-update'
   // ---- P3-2 跨文件搜索 ----
   | 'edit:find-in-files'
   // ---- P2-1 格式化命令（见 fmt.ts）----
@@ -236,6 +250,28 @@ export interface ScratchDoc {
   fp: FileFingerprint
 }
 
+/**
+ * ---- 0.3.0 T2 检查更新（契约 v27）----
+ * 壳拉回来的那一眼。**三个字段全是壳自己说了算**，网络回来的东西只借道 `latest`：
+ * `current` 取自包的 `CFBundleShortVersionString`，`url` 是壳侧拼的常量
+ * （`releases/latest` 那一页，GitHub 自己会转到最新那条）—— 响应里的 `html_url`
+ * 一个字节都不进来，于是「网络说去哪儿就去哪儿」这条路从一开始就不存在。
+ */
+export interface UpdateInfo {
+  /** 这个包自己的版本。开发构建（裸二进制、没有 Info.plist）读不到，回 `0.0.0` */
+  current: string
+  /**
+    * 最新 release 的 tag，`v` 前缀原样带着（剥前缀是比版本那一步的事）。
+    *
+    * **`null` = 问着了，但那边一个 release 都没有**（GitHub 回 404 —— 打了 tag
+    * 不等于发了 release）。它与「没问着」（整个返回 `null`）是两件事：
+    * 说成同一句话就是在冤枉网络，而这个仓库在第一次发版之前一直是这一种。
+    */
+  latest: string | null
+  /** 那个 release 的页面。渲染层只把它交给 `openExternal`，不解析、不拼接 */
+  url: string
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的接口 */
 export interface CursiveApi {
   openDialog(): Promise<DocPayload | null>
@@ -416,6 +452,18 @@ export interface CursiveApi {
    * **不落盘、不回广播** —— 发起窗口已经写过了，回广播则是直接转圈。 */
   syncPrefs(values: PrefValues): void
   onPrefsChanged(fn: (values: PrefValues) => void): () => void
+
+  /** ---- 0.3.0 T2 检查更新（契约 v27）----
+   * **只在用户点那一下联网**：不开机检查、不后台轮询、不记住谁点过 ——
+   * 一个不联网的人用这个 app，应该一个字节都不多背（这条同时写在 README 里）。
+   *
+   * 为什么联网的是壳而不是页面：页面的 CSP 是 `default-src 'self'`，`fetch` 根本出不去，
+   * 而为一颗按钮把整张网页的出网口开开，代价远大于这条通道。壳这一侧只做
+   * 「取一次 + 摘一个 tag」，比版本、措辞、要不要开浏览器全在渲染层。
+   *
+   * 连不上 / 超时 / 限流 / 响应里没有 tag，一律 `null` —— 失败的原因对用户
+   * 是同一件事（没问着），而渲染层照 `warn` 那条路说一句。 */
+  checkUpdate(): Promise<UpdateInfo | null>
 }
 
 /** `sepia` = 护眼（暖纸色），算在浅色一侧：`setAppearance` 给壳的是 `.aqua` */

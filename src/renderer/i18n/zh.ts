@@ -180,7 +180,9 @@ const zh = {
   'cmd.focus': '专注模式',
   'cmd.typewriter': '打字机模式',
   'cmd.toggleDark': '浅色 / 深色对切',
+  'cmd.customOff': '停用 / 启用自定义皮肤',
   'cmd.prefs': '设置…',
+  'cmd.checkUpdate': '检查更新',
 
   // ---------- 版本历史（history.ts）----------
   'hi.title': '版本历史',
@@ -275,6 +277,16 @@ const zh = {
   'note.rolledBack': '已回到这个版本（⌘Z 可撤回）',
   'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
   'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
+
+  // ---------- 检查更新（ui/update.ts，0.3.0 T2）----------
+  // 四句话都落在状态栏。**「正在检查」那句非说不可** —— 这一下要过一次网络，
+  // 慢的时候好几秒，中间什么都不说就是「点了没反应」
+  'up.checking': '正在检查更新…',
+  'up.latest': '已是最新（{version}）',
+  'up.found': '有新版本 {version}（当前 {current}）',
+  'up.view': '去看看',
+  'up.none': 'GitHub 上还没有发布版本',
+  'up.failed': '检查更新失败：连不上 GitHub',
 
   // ---------- 代码块语言条（live-preview/code.ts）----------
   'cd.plain': '纯文本',

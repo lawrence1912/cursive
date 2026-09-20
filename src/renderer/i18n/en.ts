@@ -173,7 +173,9 @@ const en: Record<Key, string> = {
   'cmd.focus': 'Focus Mode',
   'cmd.typewriter': 'Typewriter Mode',
   'cmd.toggleDark': 'Toggle Light / Dark',
+  'cmd.customOff': 'Disable / enable custom theme',
   'cmd.prefs': 'Settings…',
+  'cmd.checkUpdate': 'Check for Updates',
 
   // ---------- Version history ----------
   'hi.title': 'Version History',
@@ -266,6 +268,14 @@ const en: Record<Key, string> = {
   'note.rolledBack': 'Rolled back to this version (⌘Z to undo)',
   'link.unsaved': 'Unsaved document — the relative link {path} has no starting point',
   'link.spaced': 'Spaces in this destination and no file to be seen: write it as <{dest}> or replace the spaces with %20',
+
+  // ---------- 检查更新（ui/update.ts）----------
+  'up.checking': 'Checking for updates…',
+  'up.latest': 'Up to date ({version})',
+  'up.found': 'Version {version} available (you have {current})',
+  'up.view': 'View',
+  'up.none': 'No releases published on GitHub yet',
+  'up.failed': 'Update check failed: could not reach GitHub',
 
   // ---------- 代码块语言条 ----------
   'cd.plain': 'Plain text',

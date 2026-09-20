@@ -70,7 +70,9 @@ const GENERAL: Entry[] = [
   { action: 'view:toggle-focus', labelKey: 'cmd.focus', hint: '⌥⌘F' },
   { action: 'view:toggle-typewriter', labelKey: 'cmd.typewriter', hint: '⌥⌘T' },
   { action: 'view:toggle-dark', labelKey: 'cmd.toggleDark', hint: '⌃⌘D' },
-  { action: 'app:preferences', labelKey: 'cmd.prefs', hint: '⌘,' }
+  { action: 'view:disable-custom-theme', labelKey: 'cmd.customOff' },
+  { action: 'app:preferences', labelKey: 'cmd.prefs', hint: '⌘,' },
+  { action: 'app:check-update', labelKey: 'cmd.checkUpdate' }
 ]
 
 /** 主题四态：名字借设置面板那份，右边一列标「主题」当分类 */

@@ -94,9 +94,16 @@ run_case() {
     # 当场过去而不是把整轮挂起）
     DISCARD_ENV=""
     [ "$1" = "dialect.md" ] && DISCARD_ENV="cancel"
+    # 0.3.0 T2 检查更新：替身**一个字节都不联网**，两个版本依次作答 ——
+    # 依次是「有新版本」（9.9.9）、「已是最新」（0.0.0 = 裸二进制读不到 Info.plist
+    # 时壳回的那个值，正好等于此刻的 current）、「那边还没发过 release」（none，真实
+    # 世界里的 404）、「没问着」（fail，断网那一种）。只装在这一条用例上：别的用例连
+    # `CURSIVE_SMOKE_UPDATE` 都没有，那时替身回 null，等于这条路彻底不开
+    UPDATE_ENV=""
+    [ "$1" = "crlf.md" ] && UPDATE_ENV="9.9.9,0.0.0,none,fail"
     CURSIVE_SMOKE=1 CURSIVE_SMOKE_NAME='e2e-新建.md' CURSIVE_SMOKE_RENAME='e2e-改名.md' \
         CURSIVE_SMOKE_HTML="/tmp/cursive-e2e/out/$1.html" CURSIVE_SMOKE_PDF="$PDF_ENV" \
-        CURSIVE_SMOKE_DISCARD="$DISCARD_ENV" \
+        CURSIVE_SMOKE_DISCARD="$DISCARD_ENV" CURSIVE_SMOKE_UPDATE="$UPDATE_ENV" \
         ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
 import json, sys, os, re, unicodedata
@@ -398,6 +405,30 @@ if sys.argv[1] == 'links.md':
     # 误认比不认更糟（正文里平白多出一条蓝线），但也不能就这么没反应
     ok = ok and (lp.get('spacedNote') or '').startswith('地址里有空格')
     ok = ok and '我的 笔记 没有后缀' in (lp.get('spacedNote') or '')
+if sys.argv[1] == 'crlf.md':
+    # 0.3.0 T2 检查更新：菜单 → 壳（替身不联网）→ 状态栏 → 那颗按钮把 release 页交给系统
+    up = r.get('updateProbe') or {}
+    ok = ok and not up.get('err')
+    # ① 点完**当场**有声：那一下要过网络，中间静默就是「点了没反应」
+    ok = ok and '正在检查更新' in (up.get('pendingText') or '')
+    # ② 有新版本：新旧两个号都在那句话里。`0.0.0` 同时守着「裸二进制读不到 Info.plist
+    # 就回 0.0.0」这条兜底 —— 哪天它变了，这里会第一个响
+    ok = ok and '9.9.9' in (up.get('foundText') or '') and '0.0.0' in (up.get('foundText') or '')
+    # 是一颗按钮，不是直接把浏览器唤起来：点菜单的人想知道的是「有没有」
+    ok = ok and up.get('foundBtn') == '去看看'
+    # 按下之后才交给系统（自检下只记账）。**去处是壳拼的常量**，响应里的 html_url
+    # 一个字节都不进来 —— 这条断言守的就是那件事
+    ok = ok and (e.get('external') or []) == ['https://github.com/lawrence1912/cursive/releases/latest']
+    # ③ 同一进程里再问一次 → 已是最新，而且没有按钮（没什么可去看的）
+    ok = ok and '已是最新' in (up.get('latestText') or '')
+    ok = ok and up.get('latestBtn') is False
+    # ④ 那边还没发过 release：说清楚是「还没有版本」而不是「连不上」，而且**不是黄的**
+    # —— 这一下什么都没出错。这个仓库在第一次发版之前走的就是这条路
+    ok = ok and 'GitHub 上还没有发布版本' in (up.get('noneText') or '')
+    ok = ok and up.get('noneWarn') is False
+    # ⑤ 真·没问着：这一句才是黄的（「没能如愿」用黄色是 note() 的分工）
+    ok = ok and '连不上 GitHub' in (up.get('failText') or '')
+    ok = ok and up.get('failWarn') is True
 if sys.argv[1] == 'mermaid.md':
     # P4-1：图烘成静态 SVG 写进文件（导出物里不留运行时依赖）；非法那块保留源码
     ok = ok and '<figure class="mermaid"' in page and '<svg' in page
