@@ -800,7 +800,8 @@ struct PDFStats {
 /**
  * 把一份自足的 HTML 打印成真分页 PDF。
  *
- * 这条路上有**四条铁律**，每一条都是实测出来的（`printtest` 那轮走查）：
+ * 这条路上有**五条铁律**，每一条都是实测出来的（前四条来自 `printtest` 那轮走查，
+ * 第五条是 0.4.0 加真打印机时撞的）：
  *
  * 1. **必须 `runModal(for:)`，不能 `op.run()`**。`run()` 把主线程堵死，而 WKWebView 的
  *    分页是 web 进程**异步**算完再回报的 —— 回报进不来，`knowsPageRange` 就一直是
@@ -813,6 +814,11 @@ struct PDFStats {
  * 4. **等版面稳定要用 `setTimeout`，不能用 `requestAnimationFrame`**。离屏窗口里
  *    WKWebView 判自己 `visibilityState: 'hidden'`，rAF 一次都不回调，整条流程直接吊死
  *    （P3-8 的打字机滚动踩过同一个坑，见 CONTEXT）。
+ * 5. **要弹面板时，`runModal(for:)` 的宿主必须是看得见的那只窗口**（0.4.0 真打印机）。
+ *    打印面板与进度面板都是 **sheet**，挂在上面那只离屏窗口（x = -30000）上时，
+ *    它们跟着落到屏幕外 —— 人看到的是「⌘P 之后卡住」：模态会话开着，而那张要点的
+ *    面板在屏幕外面。导出那条不弹任何面板，挂哪儿都行；打印这条要把主窗口传进来。
+ *    进度面板一并关掉（系统打印队列里本来就有进度）。
  */
 /// 一条目录项（0.2.0 PDF 书签）。层级与文字都来自渲染层的 `collectHeadings` ——
 /// 与大纲面板、`[TOC]`、锚点补全同一份取数，壳这边不认识 Markdown
@@ -1105,6 +1111,10 @@ enum PDFDestination {
 final class PDFPrinter: NSObject, WKNavigationDelegate {
     private let html: String
     private let dest: PDFDestination
+    /// 打印面板/进度挂在**哪个窗口**上（sheet 的宿主）。
+    /// 导出那条不弹面板，挂自己那只离屏窗口无所谓；**打印那条必须挂到看得见的窗口上** ——
+    /// 挂在离屏窗口上时，面板与进度条都落在屏幕外，人看到的就是「点了 Print 之后卡住」
+    private let host: NSWindow?
     private let out: URL
     private let opts: PDFOptions
     private let outline: [OutlineItem]
@@ -1114,9 +1124,11 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
     /// 真的写进文件的书签条数（E2E 靠它证明这条路没有空跑）
     private var bookmarksWritten = 0
 
-    init(html: String, dest: PDFDestination, opts: PDFOptions, outline: [OutlineItem]) {
+    init(html: String, dest: PDFDestination, opts: PDFOptions, outline: [OutlineItem],
+         host: NSWindow? = nil) {
         self.html = html
         self.dest = dest
+        self.host = host
         // 打印那条不写文件，`out` 只是个占位（下面所有用到它的分支都在 .file 里）
         if case .file(let url) = dest { self.out = url } else { self.out = URL(fileURLWithPath: "/dev/null") }
         self.opts = opts
@@ -1193,14 +1205,17 @@ final class PDFPrinter: NSObject, WKNavigationDelegate {
         let printing: Bool
         if case .printer = dest { printing = true } else { printing = false }
         op.showsPrintPanel = printing
-        op.showsProgressPanel = printing
+        // **进度面板一律不开**：它也是一张 sheet，而这条流程的宿主窗口是离屏的那只时
+        // 它就落在屏幕外 —— 人看到的是「点完 Print 卡住」。打印进度系统队列里本来就有
+        op.showsProgressPanel = false
         // 打印视图默认零尺寸；挂了窗口之后其实不给也行，留着当保险（实测两种都对）
         op.view?.frame = NSRect(origin: .zero,
                                 size: NSSize(width: info.paperSize.width - m * 2,
                                              height: info.paperSize.height - m * 2))
         try? FileManager.default.removeItem(at: out)
-        // 铁律 1 + 3：走 runModal，且在这之前一个字都别问打印视图
-        op.runModal(for: window, delegate: self,
+        // 铁律 1 + 3：走 runModal，且在这之前一个字都别问打印视图。
+        // 宿主窗口：打印那条挂**看得见的那只**（面板是 sheet，挂离屏窗口等于卡住）
+        op.runModal(for: host ?? window, delegate: self,
                     didRun: #selector(printDidRun(_:success:contextInfo:)), contextInfo: nil)
     }
 
@@ -2061,7 +2076,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             guard let self, let html else { return }
             self.fetchOutline { outline in
                 let printer = PDFPrinter(html: self.inlineImages(html, embed: true),
-                                         dest: .printer, opts: PDFOptions(), outline: outline)
+                                         dest: .printer, opts: PDFOptions(), outline: outline,
+                                         host: self.window)
                 self.pdfPrinter = printer
                 printer.run { [weak self] result in
                     self?.pdfPrinter = nil
