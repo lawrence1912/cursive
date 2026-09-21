@@ -4133,8 +4133,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             const wait = (ms) => new Promise(r => setTimeout(r, ms))
             const regexBtn = document.querySelector('.fs-opts button[data-opt="regex"]')
             const regexBefore = regexBtn ? regexBtn.classList.contains('is-on') : null
-            const chip = [...document.querySelectorAll('.cm-lp-fm-tag')]
+            // **先滚回文档顶上，再等那颗药丸画出来。** front matter 在第 1–4 行，而上一条
+            // 折叠探针刚把视口滚到 140 行开外的那张列表 —— CM 只渲染视口（它自己头上那句
+            // 注释说的就是这件事），不滚回去的话 `.cm-lp-fm-tag` 压根不在 DOM 里，
+            // `title` 是 null，红的却是「⌘ 提示没了」这种看着像功能坏了的假象。
+            // 滚动只动 scrollDOM、**不碰光标**：光标一进 front matter，那几行就回显源码，
+            // 药丸自己也没了。等它画出来同样是「等到为止」而不是固定 sleep：一次重绘要
+            // 排到下一帧，而这条链跑到这儿时机器可能正忙
+            const view = window.__cursive.view
+            view.scrollDOM.scrollTop = 0
+            const chipOf = () => [...document.querySelectorAll('.cm-lp-fm-tag')]
               .find((e) => e.textContent.trim() === '测试')
+            for (let w = 0; w < 2000 && !chipOf(); w += 100) await wait(100)
+            const chip = chipOf()
             const title = chip ? chip.title : null
             if (chip) {
               const r = chip.getBoundingClientRect()
@@ -4212,6 +4223,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // 行的层级现在挂在 `--depth` 上（缩进与缩进参考线共用它一个数，见 base.css），
           // 不再是行内 padding-left
           const depthOf = (r) => +(r.style.getPropertyValue('--depth') || 0)
+          /**
+           * **等到它成立，别在固定时刻采一次样**（同自动刷新、同补全那两条）。
+           *
+           * 这一段里三条断言等的都是「下一帧之后才成立」的事：scroll 事件是在
+           * 「更新渲染」那一步派的、自动滚走 requestAnimationFrame、spring 是一发
+           * setTimeout —— 机器一忙，帧就晚，而固定 `sleep(120)` 在忙的机器上必然采空。
+           * 实测：人在旁边正常用电脑时，整条流水线里这两条会红（单跑十次全绿）。
+           */
+          const until = async (fn, cap) => {
+            for (let w = 0; w < (cap || 2000); w += 100) {
+              if (fn()) return true
+              await new Promise((r) => setTimeout(r, 100))
+            }
+            return !!fn()
+          }
           // A1 排序：**在动手建文件之前采一份根目录的顺序** —— 下面几步会新建 / 改名 /
           // 移动 / 删除，采晚了看到的就不是夹具原本的样子
           const rootOrder = [...document.querySelectorAll('.sb-row')]
@@ -4226,11 +4252,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             idle: !sbHead.classList.contains('is-scrolled')
           }
           sbTree.scrollTop = 40
-          await new Promise((r) => setTimeout(r, 120))
-          scrollProbe.on = sbHead.classList.contains('is-scrolled')
+          scrollProbe.on = await until(() => sbHead.classList.contains('is-scrolled'))
           sbTree.scrollTop = 0
-          await new Promise((r) => setTimeout(r, 120))
-          scrollProbe.off = !sbHead.classList.contains('is-scrolled')
+          scrollProbe.off = await until(() => !sbHead.classList.contains('is-scrolled'))
           const rowNamed = (name) => [...document.querySelectorAll('.sb-row')]
             .find((r) => (r.textContent || '').trim() === name)
           const menuItems = () =>
@@ -4302,19 +4326,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             const tb = sbTree.getBoundingClientRect()
             const scrolledFrom = sbTree.scrollTop
             window.dispatchEvent(at('mousemove', tb.left + 40, tb.bottom - 6))
-            await new Promise((r) => setTimeout(r, 300))
-            autoScrolled = sbTree.scrollTop > scrolledFrom
+            autoScrolled = await until(() => sbTree.scrollTop > scrolledFrom)
             // **先把指针挪出热区，滚才会停** —— 不然下面那句重置当场又被滚回去
             window.dispatchEvent(at('mousemove', tb.left + 40, tb.top + 120))
-            await new Promise((r) => setTimeout(r, 80))
+            await new Promise((r) => setTimeout(r, 150))
             sbTree.scrollTop = 0
-            await new Promise((r) => setTimeout(r, 60))
+            await new Promise((r) => setTimeout(r, 150))
             // B4 ② 悬停自动展开（spring-loaded）：停在一个**收起着的**目录上 0.7s
             const wasOpen = rowAt(dirPath).getAttribute('aria-expanded')
             const b0 = rowAt(dirPath).getBoundingClientRect()
             window.dispatchEvent(at('mousemove', b0.left + 40, b0.top + 8))
-            await new Promise((r) => setTimeout(r, 900))
-            sprung = wasOpen === 'false' && rowAt(dirPath).getAttribute('aria-expanded') === 'true'
+            const opened = await until(
+              () => rowAt(dirPath).getAttribute('aria-expanded') === 'true', 3000)
+            sprung = wasOpen === 'false' && opened
             // 展开会把整棵树 replaceChildren，落点高亮跟着被换掉 —— 它必须自己回来，
             // 否则弹开的那一瞬间人就不知道东西会落在哪儿了（**在下一次 mousemove 之前问**）
             dropAfterSpring = !!document.querySelector('.sb-row.is-drop')

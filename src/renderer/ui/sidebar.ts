@@ -117,8 +117,21 @@ export function revealChain(root: string | null, path: string): string[] {
 const DRAG_SLOP = 5
 /** 拖到树的上下边缘这么近（px）就开始自动滚 —— Finder / VS Code 都是这个量级 */
 const DRAG_EDGE = 24
-/** 贴死边缘时一帧滚这么多像素；越靠近热区外沿越慢 */
+/** 贴死边缘时一跳滚这么多像素；越靠近热区外沿越慢 */
 const DRAG_SCROLL_MAX = 14
+/**
+ * 自动滚的节拍（ms）。**有意不用 `requestAnimationFrame`。**
+ *
+ * 一个自维持的 rAF 循环把自己绑在了「这个窗口此刻在不在画帧」上：窗口一被别的窗口
+ * 盖住，WebKit 就一帧都不派（实测自检里 `raf` 计数是 **0**，而同一时刻 700ms 的
+ * setTimeout 照常触发）。真人拖拽时窗口当然在最前面，所以这件事在产品里看不出来 ——
+ * 代价全落在自检上：这条路会变成一条**永远测不到**的功能。16ms 的定时器与一帧同频，
+ * 手感上分不出来，却不挑窗口状态。
+ *
+ * （侧栏改宽度那处仍然用 rAF，那是另一回事：它是拿 rAF **合并**已经来了的 mousemove，
+ * 不派帧就没有帧要合并，天然不需要自己跑起来。）
+ */
+const DRAG_SCROLL_TICK = 16
 /** 拖着东西停在一个收起的目录上这么久，它自己弹开（Finder 的 spring-loaded folders） */
 const SPRING_DELAY = 700
 
@@ -920,7 +933,7 @@ export class Sidebar {
     let dropDir: string | null = null
     /** 指针最后停在哪：自动滚的每一帧都要拿它重判落点（行在指针底下动了） */
     const at = { x: down.clientX, y: down.clientY }
-    let frame = 0
+    let timer = 0
     /** 此刻正在「上弦」的那个收起目录（spring-loaded），换了目标就重新计时 */
     let springAt: string | null = null
     let springTimer = 0
@@ -969,7 +982,7 @@ export class Sidebar {
 
     /** 贴着上下边缘时自己滚。滚不动了（到顶 / 到底）就停手，不空转一帧又一帧 */
     const tick = (): void => {
-      frame = 0
+      timer = 0
       if (!ghost) return
       const box = this.treeEl.getBoundingClientRect()
       const inX = at.x >= box.left && at.x <= box.right
@@ -979,7 +992,7 @@ export class Sidebar {
       this.treeEl.scrollTop = was + by
       if (this.treeEl.scrollTop === was) return
       hover()
-      frame = requestAnimationFrame(tick)
+      timer = window.setTimeout(tick, DRAG_SCROLL_TICK)
     }
 
     const move = (e: MouseEvent): void => {
@@ -996,15 +1009,15 @@ export class Sidebar {
       }
       ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`
       hover()
-      if (!frame) frame = requestAnimationFrame(tick)
+      if (!timer) timer = window.setTimeout(tick, DRAG_SCROLL_TICK)
     }
 
     const up = (): void => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
       clearTimeout(springTimer)
-      if (frame) cancelAnimationFrame(frame)
-      frame = 0
+      clearTimeout(timer)
+      timer = 0
       document.body.classList.remove('is-dragging-row')
       ghost?.remove()
       const target = dropDir
