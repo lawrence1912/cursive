@@ -158,6 +158,7 @@ const TOOL_BTNS: { act: string; name: IconName; labelKey: Key; key?: string; ext
 export class Sidebar {
   readonly el: HTMLElement
   readonly search: FileSearch
+  private readonly headEl: HTMLElement
   private readonly headTitle: HTMLElement
   private readonly treeEl: HTMLElement
   private readonly emptyEl: HTMLElement
@@ -200,6 +201,7 @@ export class Sidebar {
       <div class="sb-resize" title="${t('sb.resize')}" data-i18n-title="sb.resize"></div>
     `
     applyI18n(this.el)
+    this.headEl = this.el.querySelector('.sb-head')!
     this.headTitle = this.el.querySelector('.sb-title')!
     this.treeEl = this.el.querySelector('.sb-tree')!
     this.emptyEl = this.el.querySelector('.sb-empty')!
@@ -221,6 +223,7 @@ export class Sidebar {
     this.treeEl.addEventListener('click', (e) => void this.onRowClick(e))
     this.treeEl.addEventListener('mousedown', (e) => this.onRowMouseDown(e))
     this.treeEl.addEventListener('keydown', (e) => void this.onKeyDown(e))
+    this.treeEl.addEventListener('scroll', () => this.syncScrolled(), { passive: true })
     this.el.addEventListener('contextmenu', (e) => this.onContextMenu(e))
     this.setupResize()
 
@@ -475,7 +478,7 @@ export class Sidebar {
     const searching = this.search.visible
     this.treeEl.hidden = !hasRoot || searching
     this.emptyEl.hidden = hasRoot || searching
-    this.el.querySelector('.sb-head')!.classList.toggle('is-hidden', !hasRoot && !searching)
+    this.headEl.classList.toggle('is-hidden', !hasRoot && !searching)
     this.el.querySelector<HTMLElement>('[data-act="search"]')!.classList.toggle('is-on', searching)
     // 没有展开的目录（或正在搜索、树根本没露面）时「完全折叠」点了也没反应，灰掉它
     this.el.querySelector<HTMLButtonElement>('[data-act="collapse"]')!.disabled =
@@ -487,6 +490,17 @@ export class Sidebar {
     this.appendRows(frag, this.nodes, 0)
     this.treeEl.replaceChildren(frag)
     this.paintCursor()
+    this.syncScrolled()
+  }
+
+  /**
+   * 滚过头的时候给标题下沿补一条发丝线（`.sb-head.is-scrolled`）。
+   *
+   * `render()` 末尾也叫一次：内容变短的那一下（「完全折叠」、删掉一批文件）浏览器会把
+   * `scrollTop` 自己夹回去，线不跟着灭就会僵在一条不再滚动的树上。
+   */
+  private syncScrolled(): void {
+    this.headEl.classList.toggle('is-scrolled', this.treeEl.scrollTop > 0)
   }
 
   private appendRows(parent: DocumentFragment | HTMLElement, nodes: Node[], depth: number): void {
@@ -495,7 +509,9 @@ export class Sidebar {
       const row = document.createElement('div')
       row.className = 'sb-row'
       row.dataset['path'] = entry.path
-      row.style.paddingLeft = `${4 + depth * 16}px`
+      // 缩进本身在 CSS 里算（`padding-left: calc(4px + var(--depth) * var(--tree-indent))`）——
+      // 那个 16px 同时是缩进参考线的周期，放两处写死迟早对不上
+      row.style.setProperty('--depth', String(depth))
       // 读屏要的那三件：这是棵树的一项、在第几层、（目录）此刻是收还是展。
       // `id` 是给 `aria-activedescendant` 指的 —— 见 `paintCursor`
       row.id = `sb-row-${this.rowSeq++}`

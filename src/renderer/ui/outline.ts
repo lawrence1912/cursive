@@ -45,6 +45,8 @@ export class Outline {
   private listEl: HTMLElement
   private emptyEl: HTMLElement
   private filterEl: HTMLInputElement
+  /** 贴着滚动容器上沿的那一条（滚起来给它补发丝线，同侧栏的 `.sb-head`） */
+  private filterBox: HTMLElement
   private levelsEl: HTMLElement
   private dropEl: HTMLElement
 
@@ -85,6 +87,7 @@ export class Outline {
     this.listEl = this.el.querySelector('.ol-list')!
     this.emptyEl = this.el.querySelector('.ol-empty')!
     this.filterEl = this.el.querySelector('input')!
+    this.filterBox = this.el.querySelector('.ol-filter')!
     this.levelsEl = this.el.querySelector('.ol-levels')!
     this.dropEl = this.el.querySelector('.ol-drop')!
     this.maxLevel = this.loadLevel()
@@ -130,6 +133,7 @@ export class Outline {
       if (row) this.actions.jump(Number(row.dataset['pos']))
     })
 
+    this.listEl.addEventListener('scroll', () => this.syncScrolled(), { passive: true })
     this.listEl.addEventListener('contextmenu', (e) => this.onContextMenu(e))
     this.listEl.addEventListener('mousedown', (e) => this.onMouseDown(e))
   }
@@ -306,6 +310,16 @@ export class Outline {
       frag.appendChild(el)
     }
     this.listEl.replaceChildren(this.dropEl, frag)
+    this.syncScrolled()
+  }
+
+  /**
+   * 滚过头的时候给筛选框下沿补一条发丝线 —— 标题行会直接钻到它底下，两块纸之间
+   * 本来没有接缝。`render()` 末尾也叫一次：换一篇文档、收起一节之后内容会变短，
+   * 浏览器把 `scrollTop` 夹回去的那一下不一定有 scroll 事件（同侧栏那条）。
+   */
+  private syncScrolled(): void {
+    this.filterBox.classList.toggle('is-scrolled', this.listEl.scrollTop > 0)
   }
 
   /** 过滤时把命中的那一段套上 <mark>，别让人自己在列表里找 */

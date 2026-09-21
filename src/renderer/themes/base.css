@@ -91,6 +91,9 @@
   --chrome-size: 13px;    /* 树行 / 大纲行 / 标签 */
   --chrome-label: 12px;   /* 面板小标题（大写字距）/ 状态栏 */
   --chrome-row: 30px;     /* 树行 / 大纲行 */
+  /* 文件树每往里一级缩进多少。**它同时是缩进和参考线的周期** —— 参考线正画在
+     父级那颗折叠箭头的中线上，两处写死两个 16 迟早对不上 */
+  --tree-indent: 16px;
   --status-h: 30px;
 }
 
@@ -957,6 +960,10 @@ body.is-resizing {
 .sb-tool:disabled { opacity: 0.35; cursor: default; }
 .sb-tool:disabled:hover { background: transparent; color: var(--mark-idle); }
 .sb-head.is-hidden { display: none; }
+/* 滚起来之后，标题下沿补一条发丝线：`.sb-tree` 是 overflow:auto，第一行会直接钻到
+   文件夹名底下，两块纸之间没有接缝。**只在真滚过之后画** —— 没滚时那条线是多余的墨。
+   用 box-shadow 不用 border-bottom：后者会在切换的那一下把整棵树往下推 1px */
+.sb-head.is-scrolled { box-shadow: 0 1px 0 var(--divider); }
 .sb-title {
   flex: 1;
   min-width: 0;
@@ -981,11 +988,36 @@ body.is-resizing {
 .sb-row {
   display: flex;
   align-items: center;
-  height: var(--chrome-row);
+  /* 行与行之间那 1px **从 margin 挪成了透明 border**：背景铺到 border box，
+     缩进参考线于是跨得过这道缝、连成一条线（留在 margin 里就是每 31px 断一格，
+     远看是条虚线）。box-sizing 是 border-box，所以高度加 1 —— 内容盒仍是 30px，
+     行距仍是 31px，一个像素都没动 */
+  height: calc(var(--chrome-row) + 1px);
+  border-bottom: 1px solid transparent;
+  /* 缩进在这儿算，`appendRows` 只往行上挂一个 `--depth`（4px 是行自己的左内边距） */
+  padding-left: calc(4px + var(--depth, 0) * var(--tree-indent));
   padding-right: 10px;
-  margin: 0 8px 1px;
+  margin: 0 8px;
   cursor: default;
   color: var(--fg);
+  /* 缩进参考线：每往里一级一条淡竖线，**正落在父级那颗折叠箭头的中线上**
+     （4 + 8 = 12px 起，每 var(--tree-indent) 一条）。三层往上时「这一行归谁管」
+     全靠眼睛沿左边缘往上数，一条线就把这件事省了。
+     零 DOM —— 一张背景图，宽度按 --depth 裁：画到本行自己那颗箭头**前一格**为止，
+     所以第 0 层一条都不画、第 2 层正好两条。高亮画在 .sb-item 上（从文字前方起），
+     与这块留白不重叠，两者互不打扰 */
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--divider) 0 1px,
+    transparent 1px var(--tree-indent)
+  );
+  background-position: 12px 0;
+  /* **origin 必须是 border-box**：默认的 padding-box 会让那个 100% 只算到内容盒，
+     底下那 1px 透明 border 照样空着 —— 线还是每 31px 断一格（放大四倍才看得见，
+     但看见了就回不去了） */
+  background-origin: border-box;
+  background-size: calc(var(--depth, 0) * var(--tree-indent)) 100%;
+  background-repeat: no-repeat;
 }
 
 /* 高亮画在 .sb-item 上、不是整行：**从文件名前方起**，跟着层级缩进一起往右挪。
@@ -1636,6 +1668,9 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
 /* `[hidden]` 只是 UA 样式表里的 display:none，压不过上面那条作者写的 display:flex ——
    不补这一条，清空按钮在空筛选框里也一直亮着（截图里抓到的） */
 .ol-clear[hidden] { display: none; }
+/* 同 `.sb-head.is-scrolled`：滚起来之后，标题行会直接钻到筛选框底下 —— 这里贴着
+   滚动容器 `.ol-list` 的是筛选框那一条，所以线画在它身上 */
+.ol-filter.is-scrolled { box-shadow: 0 1px 0 var(--divider); }
 
 .ol-list {
   position: relative; /* 拖拽落点指示线的定位上下文 */

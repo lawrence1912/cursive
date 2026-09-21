@@ -4209,11 +4209,28 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 废纸篓，没必要每个用例都往里扔一个
         let treeProbe = null
         if (path.indexOf('kitchen-sink.md') >= 0) {
+          // 行的层级现在挂在 `--depth` 上（缩进与缩进参考线共用它一个数，见 base.css），
+          // 不再是行内 padding-left
+          const depthOf = (r) => +(r.style.getPropertyValue('--depth') || 0)
           // A1 排序：**在动手建文件之前采一份根目录的顺序** —— 下面几步会新建 / 改名 /
           // 移动 / 删除，采晚了看到的就不是夹具原本的样子
           const rootOrder = [...document.querySelectorAll('.sb-row')]
-            .filter((r) => parseFloat(r.style.paddingLeft || '0') <= 4)
+            .filter((r) => depthOf(r) === 0)
             .map((r) => ({ name: (r.textContent || '').trim(), dir: r.classList.contains('is-dir') }))
+          // B3 滚动发丝线：滚过才画。**夹具这二十来行必须真的滚得动**，
+          // 否则 on/off 两条都是空转 —— 所以把 scrollable 一起报上去当前提
+          const sbTree = document.querySelector('.sb-tree')
+          const sbHead = document.querySelector('.sb-head')
+          const scrollProbe = {
+            scrollable: sbTree.scrollHeight > sbTree.clientHeight + 4,
+            idle: !sbHead.classList.contains('is-scrolled')
+          }
+          sbTree.scrollTop = 40
+          await new Promise((r) => setTimeout(r, 120))
+          scrollProbe.on = sbHead.classList.contains('is-scrolled')
+          sbTree.scrollTop = 0
+          await new Promise((r) => setTimeout(r, 120))
+          scrollProbe.off = !sbHead.classList.contains('is-scrolled')
           const rowNamed = (name) => [...document.querySelectorAll('.sb-row')]
             .find((r) => (r.textContent || '').trim() === name)
           const menuItems = () =>
@@ -4282,13 +4299,22 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             await new Promise((r) => setTimeout(r, 600))
             const landed = rowNamed('e2e-改名')
             // 搬进目录里 = 缩进变深了；顺带证明目标目录被自动展开
-            moved = dropShown && !!landed && parseFloat(landed.style.paddingLeft || '0') > 4
+            moved = dropShown && !!landed && depthOf(landed) > 0
           }
           // 顺手过一遍懒加载展开：目录行读得出子项，子项缩进比父级深。
           // 得在删除之前数 —— 搬进 assets 的那份是当时唯一的子行；树里只放
           // 能打开的文档之后，assets 里的 png 不再进树，删完就数不到东西了
-          const nested = [...document.querySelectorAll('.sb-row')]
-            .some((r) => parseFloat(r.style.paddingLeft || '0') > 4)
+          const nested = [...document.querySelectorAll('.sb-row')].some((r) => depthOf(r) > 0)
+          // B2 缩进参考线：背景宽度按 --depth 裁 —— 根这一层一条都不画，
+          // 第 N 层正好 N 条（周期就是 --tree-indent，所以宽度 = N × 16px）
+          const deepRow = [...document.querySelectorAll('.sb-row')].find((r) => depthOf(r) > 0)
+          const guides = deepRow
+            ? {
+                depth: depthOf(deepRow),
+                size: getComputedStyle(deepRow).backgroundSize,
+                root: getComputedStyle(document.querySelector('.sb-row')).backgroundSize
+              }
+            : null
           const gone = rowNamed('e2e-改名')
           if (gone) {
             await rowContext(gone)
@@ -4328,8 +4354,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
           }
           // P2-9 完全折叠：先确保真有展开的目录，再点工具栏那颗 —— 深缩进的行该一次全收
-          const deep = () => [...document.querySelectorAll('.sb-row')]
-            .filter((r) => parseFloat(r.style.paddingLeft || '0') > 4).length
+          const deep = () => [...document.querySelectorAll('.sb-row')].filter((r) => depthOf(r) > 0).length
           const firstDir = document.querySelector('.sb-row.is-dir')
           if (!deep() && firstDir) {
             firstDir.click()
@@ -4349,7 +4374,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             disabledAfter: collapseBtn ? collapseBtn.disabled : null
           }
           treeProbe = { rootOrder, rootMenu, tools, created, tabQuiet, rowMenu, renamed, moved,
-                        deleted, nested, collapseProbe, autoAdded, autoWaited, autoQuiet, autoGone }
+                        deleted, nested, guides, scrollProbe, collapseProbe,
+                        autoAdded, autoWaited, autoQuiet, autoGone }
           // 截图里留着右键菜单，供目检（captureShot 在探针之后跑）
           const shotRow = document.querySelector('.sb-row')
           if (shotRow) {

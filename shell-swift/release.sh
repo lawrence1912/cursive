@@ -393,6 +393,16 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and at.get('Zebra', -1) > at.get('tabs', -1) >= 0
     # A2 切标签只换一个 class，不重建整棵树（抓着的那行 DOM 还在 = 没走过 replaceChildren）
     ok = ok and tp.get('tabQuiet') is True
+    # B2 缩进参考线：背景宽度按 --depth 裁 —— 根这一层一条都不画，第 N 层正好 N 条
+    # （周期就是 --tree-indent）。缩进本身也是这个数算的，所以这条同时守着「行还缩不缩进」
+    gd = tp.get('guides') or {}
+    ok = ok and gd.get('depth', 0) >= 1 and gd.get('root') == '0px 100%'
+    ok = ok and gd.get('size') == '%dpx 100%%' % (16 * gd.get('depth', 0))
+    # B3 滚起来才有那条发丝线。scrollable 是这条断言的前提 —— 夹具哪天缩到一屏放得下，
+    # on/off 就都成了空转，这里要它自己喊出来
+    sp = tp.get('scrollProbe') or {}
+    ok = ok and sp.get('scrollable') is True and sp.get('idle') is True
+    ok = ok and sp.get('on') is True and sp.get('off') is True
     # 三样都别在磁盘上留下痕迹：新建的、改名的、搬进 assets/ 的
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-新建.md')
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-改名.md')
