@@ -4276,6 +4276,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           let renamed = false
           let moved = false
           let deleted = false
+          // B4 拖拽的两件新事：贴着边缘自己滚 / 停在收起的目录上自己弹开
+          let autoScrolled = null
+          let sprung = null
+          let dropAfterSpring = null
           const row = rowNamed('e2e-新建')
           if (row) {
             await rowContext(row)
@@ -4289,10 +4293,32 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const dirRow = document.querySelector('.sb-row.is-dir')
           if (src && dirRow) {
             const a = src.getBoundingClientRect()
-            const b = dirRow.getBoundingClientRect()
+            const dirPath = dirRow.dataset.path
+            const rowAt = (p) => document.querySelector('.sb-row[data-path="' + p + '"]')
             const at = (t, x, y) => new MouseEvent(t, { bubbles: true, clientX: x, clientY: y, button: 0 })
             src.dispatchEvent(at('mousedown', a.left + 40, a.top + 8))
             window.dispatchEvent(at('mousemove', a.left + 40, a.top + 20))
+            // B4 ① 自动滚：把指针按在树的下边缘不动，几帧之后它该自己往下滚
+            const tb = sbTree.getBoundingClientRect()
+            const scrolledFrom = sbTree.scrollTop
+            window.dispatchEvent(at('mousemove', tb.left + 40, tb.bottom - 6))
+            await new Promise((r) => setTimeout(r, 300))
+            autoScrolled = sbTree.scrollTop > scrolledFrom
+            // **先把指针挪出热区，滚才会停** —— 不然下面那句重置当场又被滚回去
+            window.dispatchEvent(at('mousemove', tb.left + 40, tb.top + 120))
+            await new Promise((r) => setTimeout(r, 80))
+            sbTree.scrollTop = 0
+            await new Promise((r) => setTimeout(r, 60))
+            // B4 ② 悬停自动展开（spring-loaded）：停在一个**收起着的**目录上 0.7s
+            const wasOpen = rowAt(dirPath).getAttribute('aria-expanded')
+            const b0 = rowAt(dirPath).getBoundingClientRect()
+            window.dispatchEvent(at('mousemove', b0.left + 40, b0.top + 8))
+            await new Promise((r) => setTimeout(r, 900))
+            sprung = wasOpen === 'false' && rowAt(dirPath).getAttribute('aria-expanded') === 'true'
+            // 展开会把整棵树 replaceChildren，落点高亮跟着被换掉 —— 它必须自己回来，
+            // 否则弹开的那一瞬间人就不知道东西会落在哪儿了（**在下一次 mousemove 之前问**）
+            dropAfterSpring = !!document.querySelector('.sb-row.is-drop')
+            const b = rowAt(dirPath).getBoundingClientRect()
             window.dispatchEvent(at('mousemove', b.left + 40, b.top + 8))
             const dropShown = !!document.querySelector('.sb-row.is-drop')
             window.dispatchEvent(at('mouseup', b.left + 40, b.top + 8))
@@ -4374,6 +4400,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             disabledAfter: collapseBtn ? collapseBtn.disabled : null
           }
           treeProbe = { rootOrder, rootMenu, tools, created, tabQuiet, rowMenu, renamed, moved,
+                        autoScrolled, sprung, dropAfterSpring,
                         deleted, nested, guides, scrollProbe, collapseProbe,
                         autoAdded, autoWaited, autoQuiet, autoGone }
           // 截图里留着右键菜单，供目检（captureShot 在探针之后跑）

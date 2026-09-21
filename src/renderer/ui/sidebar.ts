@@ -115,6 +115,30 @@ export function revealChain(root: string | null, path: string): string[] {
 
 /** 超过这个位移才算拖拽 —— 否则每次点文件都会被判成一次微小的拖动 */
 const DRAG_SLOP = 5
+/** 拖到树的上下边缘这么近（px）就开始自动滚 —— Finder / VS Code 都是这个量级 */
+const DRAG_EDGE = 24
+/** 贴死边缘时一帧滚这么多像素；越靠近热区外沿越慢 */
+const DRAG_SCROLL_MAX = 14
+/** 拖着东西停在一个收起的目录上这么久，它自己弹开（Finder 的 spring-loaded folders） */
+const SPRING_DELAY = 700
+
+/**
+ * 拖拽中指针停在 `y`，这一帧树该滚多少像素（负 = 往上，0 = 不滚）。
+ *
+ * 一屏只放得下二十来行，而搬文件的落点常常在屏幕外 —— 没有这一下，得先松手、滚、
+ * 再拖一次。**越靠近边缘越快**：贴死了满速，刚进热区只滚 1px，那一档慢但不能是 0
+ * （0 会让人觉得「这里卡住了」，而不是「还没到」）。
+ *
+ * 指针跑到面板外面（`y` 比 `top` 还小）照样按满速算，不跟着距离一路加到天上去 ——
+ * 拖到屏幕最上沿的时候手已经没有更多余量了，速度再涨只会冲过头。
+ */
+export function edgeScroll(y: number, top: number, bottom: number): number {
+  const into = (d: number): number =>
+    Math.ceil((DRAG_SCROLL_MAX * Math.min(Math.max(d, 0), DRAG_EDGE)) / DRAG_EDGE)
+  if (y < top + DRAG_EDGE) return -into(top + DRAG_EDGE - y)
+  if (y > bottom - DRAG_EDGE) return into(y - (bottom - DRAG_EDGE))
+  return 0
+}
 /** 首字母跳：两次按键隔得超过这个数就当是新的一个词（Finder 也是 0.8 秒上下） */
 const TYPEAHEAD_GAP = 800
 
@@ -894,6 +918,12 @@ export class Sidebar {
 
     let ghost: HTMLElement | null = null
     let dropDir: string | null = null
+    /** 指针最后停在哪：自动滚的每一帧都要拿它重判落点（行在指针底下动了） */
+    const at = { x: down.clientX, y: down.clientY }
+    let frame = 0
+    /** 此刻正在「上弦」的那个收起目录（spring-loaded），换了目标就重新计时 */
+    let springAt: string | null = null
+    let springTimer = 0
 
     const paint = (dir: string | null): void => {
       dropDir = dir
@@ -904,7 +934,57 @@ export class Sidebar {
       }
     }
 
+    /**
+     * spring-loaded folders（Finder 同款）：拖着东西在一个**收起着的**目录上停够
+     * `SPRING_DELAY`，它自己弹开。没有这一下，往没展开的子目录里搬文件得先松手、
+     * 展开、再拖一次 —— 而手上正拿着东西。
+     *
+     * **换了目标就重新上弦**：路过不算停留。
+     */
+    const arm = (dir: string | null): void => {
+      if (dir === springAt) return
+      springAt = dir
+      clearTimeout(springTimer)
+      if (!dir) return
+      springTimer = window.setTimeout(() => {
+        // 展开会重画整棵树，落点那一行连同 `.is-drop` 一起被换掉 —— 按路径画回来
+        void this.expandDir(dir).then(() => paint(dropDir))
+      }, SPRING_DELAY)
+    }
+
+    /** 指针底下是谁：画落点，顺带给「停在收起的目录上会自己弹开」上弦 */
+    const hover = (): void => {
+      const over = document.elementFromPoint(at.x, at.y)
+      const overRow = over?.closest<HTMLElement>('.sb-row')
+      const overPath = overRow?.dataset['path'] ?? null
+      // 落在树的空白处 = 落到树根；落在文件上 = 落到它的父目录
+      const dir = this.treeEl.contains(over) ? this.targetDir(overPath) : null
+      // 拖进自己或自己的子孙目录是无效动作，别给出可落的错觉（壳侧还有第二道闸）
+      const ok = dir && dir !== src && !dir.startsWith(`${src}/`) ? dir : null
+      paint(ok)
+      // 只有「指针正压在一个收起着的目录行上」才上弦 —— 压在文件上时落点是它的父目录，
+      // 那一级本来就是展开的，弹开它没有意义
+      arm(ok && ok === overPath && !this.expanded.has(ok) ? ok : null)
+    }
+
+    /** 贴着上下边缘时自己滚。滚不动了（到顶 / 到底）就停手，不空转一帧又一帧 */
+    const tick = (): void => {
+      frame = 0
+      if (!ghost) return
+      const box = this.treeEl.getBoundingClientRect()
+      const inX = at.x >= box.left && at.x <= box.right
+      const by = inX ? edgeScroll(at.y, box.top, box.bottom) : 0
+      if (!by) return
+      const was = this.treeEl.scrollTop
+      this.treeEl.scrollTop = was + by
+      if (this.treeEl.scrollTop === was) return
+      hover()
+      frame = requestAnimationFrame(tick)
+    }
+
     const move = (e: MouseEvent): void => {
+      at.x = e.clientX
+      at.y = e.clientY
       if (!ghost) {
         if (Math.abs(e.clientX - down.clientX) + Math.abs(e.clientY - down.clientY) < DRAG_SLOP) return
         ghost = document.createElement('div')
@@ -915,18 +995,16 @@ export class Sidebar {
         closeMenu()
       }
       ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 8}px)`
-      const over = document.elementFromPoint(e.clientX, e.clientY)
-      const overRow = over?.closest<HTMLElement>('.sb-row')
-      const overPath = overRow?.dataset['path'] ?? null
-      // 落在树的空白处 = 落到树根；落在文件上 = 落到它的父目录
-      const dir = this.treeEl.contains(over) ? this.targetDir(overPath) : null
-      // 拖进自己或自己的子孙目录是无效动作，别给出可落的错觉（壳侧还有第二道闸）
-      paint(dir && dir !== src && !dir.startsWith(`${src}/`) ? dir : null)
+      hover()
+      if (!frame) frame = requestAnimationFrame(tick)
     }
 
     const up = (): void => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
+      clearTimeout(springTimer)
+      if (frame) cancelAnimationFrame(frame)
+      frame = 0
       document.body.classList.remove('is-dragging-row')
       ghost?.remove()
       const target = dropDir

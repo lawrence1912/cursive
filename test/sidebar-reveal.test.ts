@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { revealChain } from '../src/renderer/ui/sidebar'
+import { edgeScroll, revealChain } from '../src/renderer/ui/sidebar'
 
 /**
  * 「让当前文件在树里看得见」要沿途展开哪几级。
@@ -33,5 +33,45 @@ describe('revealChain：沿途要展开哪几级', () => {
 
   it('还没有工作区 = 没得展', () => {
     expect(revealChain(null, '/w/a.md')).toEqual([])
+  })
+})
+
+/**
+ * 拖到树的上下边缘时该滚多快。
+ *
+ * 提成纯函数是因为这条的错法全在**边界**上：热区外沿差一个像素就该是 0（否则树会
+ * 在指针没进热区时自己动），刚进热区那一档不能被取整抹成 0（那会让人觉得卡住了），
+ * 指针跑出面板之后不能跟着距离一路加速（手已经没有余量了，只会冲过头）。
+ * 这三件事在真机上都要拿着鼠标贴着边试半天，而在这儿是三行。
+ */
+describe('edgeScroll：拖到边缘自己滚', () => {
+  const TOP = 100
+  const BOTTOM = 500
+
+  it('中间一带不滚', () => {
+    expect(edgeScroll(300, TOP, BOTTOM)).toBe(0)
+  })
+
+  it('热区外沿正好不滚（差一个像素才开始）', () => {
+    expect(edgeScroll(TOP + 24, TOP, BOTTOM)).toBe(0)
+    expect(edgeScroll(BOTTOM - 24, TOP, BOTTOM)).toBe(0)
+    expect(edgeScroll(TOP + 23, TOP, BOTTOM)).toBe(-1)
+    expect(edgeScroll(BOTTOM - 23, TOP, BOTTOM)).toBe(1)
+  })
+
+  it('贴死边缘满速，上下对称', () => {
+    expect(edgeScroll(TOP, TOP, BOTTOM)).toBe(-14)
+    expect(edgeScroll(BOTTOM, TOP, BOTTOM)).toBe(14)
+  })
+
+  it('指针跑出面板：还是满速，不一路加下去', () => {
+    expect(edgeScroll(TOP - 400, TOP, BOTTOM)).toBe(-14)
+    expect(edgeScroll(BOTTOM + 400, TOP, BOTTOM)).toBe(14)
+  })
+
+  it('越靠近边缘越快（热区里单调）', () => {
+    const speeds = [20, 15, 10, 5, 0].map((d) => -edgeScroll(TOP + d, TOP, BOTTOM))
+    expect(speeds).toEqual([...speeds].sort((a, b) => a - b))
+    expect(new Set(speeds).size).toBeGreaterThan(3)
   })
 })

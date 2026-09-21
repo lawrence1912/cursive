@@ -382,6 +382,10 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and tp.get('rowMenu') == ['新建文件', '新建文件夹', '重命名…', '删除文件', '在 Finder 中显示']
     ok = ok and tp.get('created') is True and tp.get('renamed') is True
     ok = ok and tp.get('moved') is True and tp.get('deleted') is True and tp.get('nested') is True
+    # B4 拖拽两件：贴住下边缘它自己滚；停在收起的目录上 0.7s 它自己弹开，
+    # 而且**弹开之后落点高亮要自己回来**（展开是一次整棵 replaceChildren）
+    ok = ok and tp.get('autoScrolled') is True
+    ok = ok and tp.get('sprung') is True and tp.get('dropAfterSpring') is True
     # A1 排序：目录在前，名字按 Finder 那条比法（`nameOrder`）。裸 `sorted()` 三条全错，
     # 所以三条各钉一个证人 —— 目录混在文件中间 / 第10章跑到第2章前面 / Zebra 被抬到最前
     order = tp.get('rootOrder') or []
