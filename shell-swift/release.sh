@@ -99,6 +99,13 @@ REPFIX
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
 
+# A1 排序的三个证人（目录在前 + Finder 的比法）。`out/` 本来就在（字母序落在中间，
+# 必须被提到所有文件前面），这里再补两类裸 `sorted()` 一定会排错的名字：
+# 数字要按**数值**比（第2 < 第10），大小写**不能分家**（裸码位会把 Zebra 抬到最前）
+printf '# 第2章\n' > "$FIX/第2章.md"
+printf '# 第10章\n' > "$FIX/第10章.md"
+printf '# Zebra\n' > "$FIX/Zebra.md"
+
 run_case() {
     rm -f /tmp/cursive-shell-check.json /tmp/cursive-shell-e2e.json /tmp/cursive-shell-pdf.json
     # 上一个用例的自动保存快照会被这一个当成「待恢复的草稿」开出来，把用例打开的文件
@@ -375,6 +382,17 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and tp.get('rowMenu') == ['新建文件', '新建文件夹', '重命名…', '删除文件', '在 Finder 中显示']
     ok = ok and tp.get('created') is True and tp.get('renamed') is True
     ok = ok and tp.get('moved') is True and tp.get('deleted') is True and tp.get('nested') is True
+    # A1 排序：目录在前，名字按 Finder 那条比法（`nameOrder`）。裸 `sorted()` 三条全错，
+    # 所以三条各钉一个证人 —— 目录混在文件中间 / 第10章跑到第2章前面 / Zebra 被抬到最前
+    order = tp.get('rootOrder') or []
+    at = {x['name']: i for i, x in enumerate(order)}
+    dirs = [i for i, x in enumerate(order) if x['dir']]
+    files = [i for i, x in enumerate(order) if not x['dir']]
+    ok = ok and bool(dirs) and bool(files) and max(dirs) < min(files)
+    ok = ok and at.get('第10章', -1) > at.get('第2章', -1) >= 0
+    ok = ok and at.get('Zebra', -1) > at.get('tabs', -1) >= 0
+    # A2 切标签只换一个 class，不重建整棵树（抓着的那行 DOM 还在 = 没走过 replaceChildren）
+    ok = ok and tp.get('tabQuiet') is True
     # 三样都别在磁盘上留下痕迹：新建的、改名的、搬进 assets/ 的
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-新建.md')
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-改名.md')

@@ -934,6 +934,24 @@ body.is-resizing {
   transition: background-color 120ms ease, color 120ms ease;
 }
 .sb-tool:hover { background: var(--code-bg); color: var(--fg); }
+/* 次要那三颗（新建文件夹 / 完全折叠 / 打开其他文件夹）平时收着，把宽度让给文件夹名。
+   **收着的时候必须真的不占位**（width:0，不是 opacity:0）—— 这条和标签栏那颗关闭 ×
+   正好相反：那里要的是「位置别抖」，这里要的就是把那 72px 还回去（工具栏恒定 124px，
+   侧栏默认 252px 时标题只剩 99px，到下限 180px 只剩 27px）。
+   焦点落进工具栏也算现身：它们收着的时候照样 Tab 得到，看不见的焦点比没有还糟。
+   不加过渡 —— 宽度动画会让文件夹名跟着一帧一帧重排省略号，硬切反而更像「快」 */
+.sb-tool.is-extra {
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+#sidebar:hover .sb-tool.is-extra,
+.sb-tools:focus-within .sb-tool.is-extra {
+  width: 24px;
+  opacity: 1;
+  pointer-events: auto;
+}
 .sb-tool.is-on { background: var(--accent-wash); color: var(--accent); }
 /* 灰态（现在只有「完全折叠」用）：:hover 在 disabled 按钮上照样匹配，得显式压回去 */
 .sb-tool:disabled { opacity: 0.35; cursor: default; }

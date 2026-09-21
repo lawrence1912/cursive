@@ -1581,7 +1581,7 @@ enum DocScan {
     static let skipDirs: Set<String> = ["node_modules", "dist", "out", "build", "vendor", "Pods", ".git"]
     static let exts: Set<String> = ["md", "markdown", "mdown", "mkd", "txt"]
 
-    /// 树根下的全部文档路径，按路径排序。**上限 4000** —— 这一份是一次性整包过桥的
+    /// 树根下的全部文档路径，按 `nameOrder` 排序（与文件树同一条规则）。**上限 4000** —— 这一份是一次性整包过桥的
     /// （判断 3 说的是「图片字节」那种量级，几千条路径约几百 KB，与搜索回推的批次同级），
     /// 但再往上就该改成流式了，所以这里钉一个明确的顶而不是让它无限涨。
     static func list(root: String, limit: Int = 4000) -> [String] {
@@ -1600,8 +1600,21 @@ enum DocScan {
             out.append(url.path)
             if out.count >= limit { break }
         }
-        return out.sorted()
+        return out.sorted(by: nameOrder)
     }
+}
+
+/// 名字与名字之间怎么比 —— **文件树（`readDir`）与快速打开的索引（`DocScan.list`）共用这一条**。
+///
+/// 从前两处都是裸 `sorted()`，那是按 Unicode 码位比，一口气错三处：中文按码位排
+/// （上→北→工→广，而不是拼音 běi→gōng→guǎng→shàng）、数字按字符串排（`第10章`
+/// 跑到 `第2章` 前面）、大小写分家（`README` 排在 `alpha` 前面）。
+/// `localizedStandardCompare` **就是 Finder 自己用的那个 API**，三件一起对，且跟着系统区域走。
+///
+/// 它自带 `forcedOrdering`，只差大小写的同名也有确定次序 —— 这条很要紧：渲染层的
+/// `sameEntries` 是**逐位**比新旧两份清单的，比较器一抖，两次读之间就会白重建一棵树。
+func nameOrder(_ a: String, _ b: String) -> Bool {
+    a.localizedStandardCompare(b) == .orderedAscending
 }
 
 final class SearchOperation: Operation, @unchecked Sendable {
@@ -2655,21 +2668,28 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         case "readDir":
             let path = args[0] as? String ?? ""
             let fm = FileManager.default
-            var entries: [[String: Any]] = []
-            if let names = try? fm.contentsOfDirectory(atPath: path) {
-                for name in names.sorted() where !name.hasPrefix(".") {
-                    var isDir: ObjCBool = false
-                    let p = "\(path)/\(name)"
-                    _ = fm.fileExists(atPath: p, isDirectory: &isDir)
-                    // 文件树只放「能打开的文档」（与 DocScan.exts 同一套白名单）和目录：
-                    // 本编辑器打不开的文件进了树，点了也只是白报一次错
-                    if !isDir.boolValue,
-                       !DocScan.exts.contains((name as NSString).pathExtension.lowercased()) {
-                        continue
-                    }
-                    entries.append(["name": name, "path": p, "isDir": isDir.boolValue])
-                }
+            // **一次批量取属性**：从前是每条一次 `fileExists`，一个 1500 篇的库就是 1500 次
+            // 系统调用。`.skipsHiddenFiles` 顺手把点文件挡掉（原先是手写的 hasPrefix(".")），
+            // 而且连带认了「带隐藏标记但不以点开头」的那些
+            let urls = (try? fm.contentsOfDirectory(at: URL(fileURLWithPath: path),
+                                                    includingPropertiesForKeys: [.isDirectoryKey],
+                                                    options: [.skipsHiddenFiles])) ?? []
+            var rows: [(name: String, isDir: Bool)] = []
+            for url in urls {
+                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                // 文件树只放「能打开的文档」（与 DocScan.exts 同一套白名单）和目录：
+                // 本编辑器打不开的文件进了树，点了也只是白报一次错
+                if !isDir, !DocScan.exts.contains(url.pathExtension.lowercased()) { continue }
+                rows.append((url.lastPathComponent, isDir))
             }
+            // **目录在前，然后按 `nameOrder`**。目录在前不是 Finder 的默认（它默认混排，
+            // 那个开关默认关着），是编辑器惯例（VS Code / Obsidian / Xcode）—— 这棵树是
+            // 导航控件不是文件管理器，目录聚成一堆，层级才扫得出来。
+            // 路径仍然按原样拼：渲染层拿**路径当身份**（`expanded` 集合、`byPath` 索引、
+            // 拖拽落点全是它），换成 `url.path` 会在个别边界上悄悄换一个串
+            let entries: [[String: Any]] = rows
+                .sorted { $0.isDir != $1.isDir ? $0.isDir : nameOrder($0.name, $1.name) }
+                .map { ["name": $0.name, "path": "\(path)/\($0.name)", "isDir": $0.isDir] }
             respond(id, entries)
 
         // ---- P3-1 文件树读写：新建 / 删除 ----
@@ -4189,6 +4209,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 废纸篓，没必要每个用例都往里扔一个
         let treeProbe = null
         if (path.indexOf('kitchen-sink.md') >= 0) {
+          // A1 排序：**在动手建文件之前采一份根目录的顺序** —— 下面几步会新建 / 改名 /
+          // 移动 / 删除，采晚了看到的就不是夹具原本的样子
+          const rootOrder = [...document.querySelectorAll('.sb-row')]
+            .filter((r) => parseFloat(r.style.paddingLeft || '0') <= 4)
+            .map((r) => ({ name: (r.textContent || '').trim(), dir: r.classList.contains('is-dir') }))
           const rowNamed = (name) => [...document.querySelectorAll('.sb-row')]
             .find((r) => (r.textContent || '').trim() === name)
           const menuItems = () =>
@@ -4214,6 +4239,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           document.querySelector('.sb-tool[data-act="new-file"]').click()
           await new Promise((r) => setTimeout(r, 500))
           const created = !!rowNamed('e2e-新建')
+          // A2 切标签**不重建整棵树**：抓住一行 DOM，切回上一个标签，它必须还在文档里
+          // （`render()` 是 replaceChildren，重建过它就不在了 —— 同 autoQuiet 那一手）。
+          // 守的是「`setActive` 只在沿途真展开过目录时才重建」：1500 行的库里那一次
+          // 重建实测建 DOM 8~11ms + 布局 22~23ms，一次切换吃掉两帧。
+          // 顺带证明高亮真的跟着换了（`paintActive`），否则「不重建」等于「不更新」
+          let tabQuiet = null
+          const tabEls = [...document.querySelectorAll('.tab-item')]
+          if (tabEls.length >= 2) {
+            const held = document.querySelector('.sb-row')
+            tabEls[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            await new Promise((r) => setTimeout(r, 300))
+            const on = document.querySelector('.sb-row.is-active')
+            tabQuiet = document.contains(held) && !!on &&
+              (on.textContent || '').trim() === 'kitchen-sink'
+          }
           // 行上右键 = 多出「重命名 / 删除」两项
           let rowMenu = []
           let renamed = false
@@ -4308,8 +4348,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 没得可折了就该灰掉 —— 否则按下去毫无反应，用户分不清是坏了还是本来就折着
             disabledAfter: collapseBtn ? collapseBtn.disabled : null
           }
-          treeProbe = { rootMenu, tools, created, rowMenu, renamed, moved, deleted, nested, collapseProbe,
-                        autoAdded, autoWaited, autoQuiet, autoGone }
+          treeProbe = { rootOrder, rootMenu, tools, created, tabQuiet, rowMenu, renamed, moved,
+                        deleted, nested, collapseProbe, autoAdded, autoWaited, autoQuiet, autoGone }
           // 截图里留着右键菜单，供目检（captureShot 在探针之后跑）
           const shotRow = document.querySelector('.sb-row')
           if (shotRow) {
@@ -4627,12 +4667,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             selection: { anchor: end + 4 },
             userEvent: 'input.type'
           })
-          // **400ms 不是随手写的**（同 listFoldProbe 那条）：CM 的 activateOnTyping 自带
-          // 100ms 延迟，面板还要再画一帧 —— 150ms 单跑够，整条用例链上（前面刚导过一次
-          // HTML、跑完一整套文件树增删）就不够了，rows 会假阴性成 0。
-          // 实测：kitchen-sink 单独跑十次全绿，接在 img/table 后面跑必红
-          await sleep(400)
-          const tip = document.querySelector('.cm-tooltip-autocomplete')
+          // **等它，别在固定时刻采一次样**（同自动刷新那条、同 P0-3 那条）。
+          // CM 的 activateOnTyping 自带 100ms 延迟，面板还要再画一帧，而这条用例链上
+          // 前面刚导过一次 HTML、跑完一整套文件树增删 —— 原先那句固定 `sleep(400)`
+          // 在忙一点的机器上会**随机**采空（实测同一份二进制连跑三次红一次，红出来的
+          // 还是「补全根本没挂上」这种看着很吓人的假象）。顶到上限还没有 = 真的没弹
+          let tip = null
+          let tipWaited = 0
+          while (!tip && tipWaited < 2500) {
+            await sleep(100)
+            tipWaited += 100
+            const box = document.querySelector('.cm-tooltip-autocomplete')
+            if (box && box.querySelectorAll('li').length) tip = box
+          }
           const rows = tip ? tip.querySelectorAll('li').length : 0
           const first = tip ? (tip.querySelector('li') || {}).textContent || '' : ''
           // 原样删回去。文档此后与 `sampled` 逐字节相同，后面哪一次自动保存都无所谓
@@ -4723,7 +4770,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           await sleep(40)
           const hiClosed = hi.hidden
 
-          v020 = { rows, first, restored, cmdAll, cmdHit, cmdClosed, files, fileFirst, fileClosed,
+          v020 = { rows, first, tipWaited, restored, cmdAll, cmdHit, cmdClosed, files, fileFirst, fileClosed,
                    hiRows, hiLines, hiStat, hiClosed,
                    // 0.4.0 F3 的两个新源
                    mathItems, plainItems, linkItems, completeRestored }

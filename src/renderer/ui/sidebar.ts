@@ -42,7 +42,8 @@ export function typeaheadIndex(names: string[], from: number, want: string): num
  * mtime 与大小一概不看：树里画的就是名字和图标这两样。内容变了是**文档**那条监听
  * 的事（`onFileChangedExternal`），两条线各管各的。
  *
- * 两边都按名字排好序（壳侧 `readDir` 出来就是排过的，这棵树从不重排），所以逐位比。
+ * 两边都按同一条规则排好序（壳侧 `readDir` 出来就是排过的 —— **目录在前、名字按 `nameOrder`**，
+ * 这棵树从不重排），所以逐位比。
  */
 export function sameEntries(a: DirEntry[], b: DirEntry[]): boolean {
   if (a.length !== b.length) return false
@@ -92,6 +93,26 @@ export function watchPaths(root: string | null, nodes: Node[]): string[] {
   return dirs.sort()
 }
 
+/**
+ * 「让这个文件在树里看得见」要沿途展开哪几级 —— **从浅到深，不含文件自己那一级**。
+ *
+ * 提成纯函数是为了钉住三处边界：树根之外的路径一级都不展（那是越界，树根同时是
+ * 防穿越守卫之界）；树根下第一级的文件（`/w/a.md`）一级都不用展；而**树根自己永远
+ * 不进 `expanded`** —— 它不是树里的一行，它就是 `nodes` 本身，塞进去会让
+ * 「完全折叠」那颗按钮凭空以为还有的可折。
+ */
+export function revealChain(root: string | null, path: string): string[] {
+  if (!root || !path.startsWith(`${root}/`)) return []
+  const segs = path.slice(root.length + 1).split('/')
+  const out: string[] = []
+  let prefix = root
+  for (const seg of segs.slice(0, -1)) {
+    prefix = `${prefix}/${seg}`
+    out.push(prefix)
+  }
+  return out
+}
+
 /** 超过这个位移才算拖拽 —— 否则每次点文件都会被判成一次微小的拖动 */
 const DRAG_SLOP = 5
 /** 首字母跳：两次按键隔得超过这个数就当是新的一个词（Finder 也是 0.8 秒上下） */
@@ -117,14 +138,21 @@ export interface SidebarHooks {
   pickFolder?: () => void | Promise<void>
 }
 
-/** 工具栏五颗按钮的文案规格（title 带快捷键后缀，所以重翻时走 relabel 而不是 data-i18n） */
-const TOOL_BTNS: { act: string; name: IconName; labelKey: Key; key?: string }[] = [
+/**
+ * 工具栏五颗按钮的文案规格（title 带快捷键后缀，所以重翻时走 relabel 而不是 data-i18n）。
+ *
+ * `extra` = **次要那三颗**：指针进了侧栏、或者焦点落进工具栏才现身（`.is-extra`，
+ * 样式在 base.css）。这块地方是抢来的 —— 工具栏恒定 124px，而实测侧栏在默认的 252px
+ * 时文件夹名只剩 99px、到下限 180px 只剩 27px，而「我在哪个库」是这块面板唯一的定位信息。
+ * 挑这三颗是因为它们都不是唯一入口：新建文件夹 / 完全折叠在右键菜单里，打开其他文件夹有 ⌘⇧O。
+ */
+const TOOL_BTNS: { act: string; name: IconName; labelKey: Key; key?: string; extra?: boolean }[] = [
   { act: 'new-file', name: 'file-plus', labelKey: 'sb.newFile' },
-  { act: 'new-folder', name: 'folder-plus', labelKey: 'sb.newFolder' },
+  { act: 'new-folder', name: 'folder-plus', labelKey: 'sb.newFolder', extra: true },
   // 「完全折叠」排在两个「新建」之后、搜索之前 —— 与 VS Code 资源管理器同序
-  { act: 'collapse', name: 'collapse', labelKey: 'sb.collapseAll' },
+  { act: 'collapse', name: 'collapse', labelKey: 'sb.collapseAll', extra: true },
   { act: 'search', name: 'search', labelKey: 'sb.search', key: '⌘⇧F' },
-  { act: 'open-folder', name: 'folder-open', labelKey: 'sb.openFolder', key: '⌘⇧O' }
+  { act: 'open-folder', name: 'folder-open', labelKey: 'sb.openFolder', key: '⌘⇧O', extra: true }
 ]
 
 export class Sidebar {
@@ -267,23 +295,53 @@ export class Sidebar {
     // 没开过文件夹时，把文档所在目录挂为树根 —— 打开单个 .md 也能立刻看到文件树
     if (path && !this.root) {
       const dir = dirname(path)
-      if (dir) await this.open(dir)
+      if (dir) await this.open(dir) // 它自己画了一次
     }
-    if (path) await this.reveal(path)
-    this.render()
+    /**
+     * **结构没动就不要重建整棵树。** 每切一次标签都会走到这里（`main.ts` 的
+     * `activate`），而 `render()` 是整棵 `replaceChildren` —— 实测 1500 行要
+     * 建 DOM 8~11ms + 布局 22~23ms，一次切换就吃掉两帧（红线三是 16ms）。
+     * 而绝大多数时候变的只是「哪一行是当前文件」这一个 class。
+     */
+    if (path && (await this.reveal(path))) this.render()
+    else this.paintActive()
     this.treeEl.querySelector('.sb-row.is-active')?.scrollIntoView({ block: 'nearest' })
   }
 
-  /** 逐级展开，让这个路径在树里可见。`setActive` 与 `refresh` 共用 */
-  private async reveal(path: string): Promise<void> {
-    if (!this.root || !path.startsWith(`${this.root}/`)) return
-    const rel = path.slice(this.root.length + 1).split('/')
-    let prefix = this.root
-    for (const seg of rel.slice(0, -1)) {
-      prefix = `${prefix}/${seg}`
-      await this.loadChildren(prefix)
-      this.expanded.add(prefix)
+  /**
+   * 逐级展开，让这个路径在树里可见。`setActive` 与 `refresh` 共用。
+   *
+   * **回「树的结构有没有因此变过」**：两件事都算变过 —— 展开了一级（多出一批行），
+   * 或者读进了一级（`watchPaths` 那张监听单子跟着变，得让 `render` 里的 `syncWatch`
+   * 推一次）。只有这两种情况才值得重建。
+   */
+  private async reveal(path: string): Promise<boolean> {
+    let grew = false
+    for (const dir of revealChain(this.root, path)) {
+      // 这一趟会不会真读盘：读过的 `loadChildren` 见 children 非 null 直接回头
+      if (this.byPath.get(dir)?.children === null) grew = true
+      await this.loadChildren(dir)
+      if (!this.expanded.has(dir)) grew = true
+      this.expanded.add(dir)
     }
+    return grew
+  }
+
+  /**
+   * 只把「当前正在编辑的是哪一行」挪个地方。
+   *
+   * `render()` 里另外那几件事（监听单子、空态显隐、「完全折叠」灰不灰）在结构没变时
+   * 结论都不变，所以跳得掉；键盘光标也不归这里 —— 它跟着 `selected` 走，而 `setActive`
+   * 不碰 `selected`（两套光标会立刻打架，见 `paintCursor`）。
+   */
+  private paintActive(): void {
+    for (const row of this.treeEl.querySelectorAll('.sb-row.is-active')) {
+      row.classList.remove('is-active')
+    }
+    if (!this.activePath) return
+    this.treeEl
+      .querySelector(`.sb-row[data-path="${cssEscape(this.activePath)}"]`)
+      ?.classList.add('is-active')
   }
 
   /**
@@ -914,10 +972,11 @@ export class Sidebar {
   }
 }
 
-function toolButton(spec: { act: string; name: IconName; labelKey: Key; key?: string }): string {
+function toolButton(spec: (typeof TOOL_BTNS)[number]): string {
   const label = t(spec.labelKey)
   const hint = spec.key ? `${label} (${spec.key})` : label
-  return `<button class="sb-tool" data-act="${spec.act}" title="${hint}" aria-label="${label}">${icon(spec.name)}</button>`
+  const cls = spec.extra ? 'sb-tool is-extra' : 'sb-tool'
+  return `<button class="${cls}" data-act="${spec.act}" title="${hint}" aria-label="${label}">${icon(spec.name)}</button>`
 }
 
 /** 只用来拼属性选择器；CSS.escape 在 WKWebView 里有，兜底给个手写版 */
