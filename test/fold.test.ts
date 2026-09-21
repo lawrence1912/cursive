@@ -2,12 +2,15 @@ import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 import { collectHeadings } from '../src/renderer/editor/headings'
+import type { EditorView } from '@codemirror/view'
 import {
   foldedSpans,
   sectionAt,
   sectionFolded,
   sectionFoldField,
+  spanAt,
   spanOf,
+  toggleFoldAt,
   toggleSectionFold
 } from '../src/renderer/editor/fold'
 
@@ -223,5 +226,103 @@ describe('sectionAt（命令入口靠它找「本节」）', () => {
   it('第一个标题之前没有节', () => {
     const lead = make('开场白\n\n# 一级\n\n正文\n')
     expect(sectionAt(lead, 1)).toBeNull()
+  })
+})
+
+
+/**
+ * 折叠一条列表（0.4.1）。列表与小节共用同一个 StateField，所以这儿只测「多出来的
+ * 那一半」：范围怎么算、嵌套怎么收、以及**手边最近的那一层说了算** ——
+ * 光标在列表里按折叠键，折的必须是这一条，不是它所在的整节。
+ */
+const LIST = [
+  '# 一级',
+  '',
+  '- 父项',
+  '  - 子项 A',
+  '    - 孙项',
+  '- 另一个父项',
+  '',
+  '收尾正文。',
+  ''
+].join('\n')
+
+/** toggleFoldAt 要一个 view，这儿只借它的 state 与 dispatch */
+function toggleAt(state: EditorState, pos: number): { state: EditorState; moved: boolean } {
+  let next = state
+  const view = {
+    state,
+    dispatch: (spec: Parameters<EditorState['update']>[0]) => {
+      next = state.update(spec).state
+    }
+  } as unknown as EditorView
+  const moved = toggleFoldAt(view, pos)
+  return { state: next, moved }
+}
+
+function itemPos(state: EditorState, text: string): number {
+  const at = state.doc.toString().indexOf(text)
+  return state.doc.lineAt(at).from + (state.doc.lineAt(at).text.length - state.doc.lineAt(at).text.trimStart().length)
+}
+
+describe('折叠一条列表', () => {
+  const state = make(LIST)
+
+  it('从本条首行末尾起 —— 这一条自己永远看得见', () => {
+    const pos = itemPos(state, '- 父项')
+    const span = spanAt(state, pos)!
+    expect(state.doc.sliceString(pos, span.from)).toBe('- 父项')
+  })
+
+  it('**不吃最后那个换行** —— 吃了的话下一条会被吸到折叠行的尾巴上', () => {
+    const span = spanAt(state, itemPos(state, '- 父项'))!
+    expect(state.doc.sliceString(span.to, span.to + 1)).toBe('\n')
+    expect(state.doc.lineAt(span.to + 1).text).toBe('- 另一个父项')
+  })
+
+  it('子项算在自己身上，兄弟不算', () => {
+    const span = spanAt(state, itemPos(state, '- 父项'))!
+    const hidden = state.doc.sliceString(span.from, span.to)
+    expect(hidden).toContain('子项 A')
+    expect(hidden).toContain('孙项')
+    expect(hidden).not.toContain('另一个父项')
+  })
+
+  it('没有子项的一条折不起来（别给把手）', () => {
+    expect(spanAt(state, itemPos(state, '- 另一个父项'))).toBeNull()
+  })
+
+  it('嵌套时只留外层那一条 —— 两条跨行替换重叠 CM 当场报错', () => {
+    const outer = itemPos(state, '- 父项')
+    const inner = itemPos(state, '- 子项 A')
+    const both = fold(fold(state, outer), inner)
+    const spans = foldedSpans(both)
+    expect(spans).toHaveLength(1)
+    expect(spans[0]!.pos).toBe(outer)
+  })
+
+  it('里层的列表项优先于外层的小节：光标在列表里，折的是这一条', () => {
+    const inside = state.doc.toString().indexOf('孙项')
+    const { state: after, moved } = toggleAt(state, inside)
+    expect(moved).toBe(true)
+    // 折的是「子项 A」那一条（孙项最里层那条自己没东西可折，往外退一层）
+    expect(sectionFolded(after, itemPos(state, '- 子项 A'))).toBe(true)
+    expect(sectionFolded(after, headingPos(state, '一级'))).toBe(false)
+  })
+
+  it('光标在标题行上仍然折整节 —— 标题行不在任何列表项里', () => {
+    const h = headingPos(state, '一级')
+    const { state: after, moved } = toggleAt(state, h)
+    expect(moved).toBe(true)
+    expect(sectionFolded(after, h)).toBe(true)
+  })
+
+  it('折起来之后光标被挪到首行上 —— 留在藏起来的正文里会被当场展开', () => {
+    const inside = state.doc.toString().indexOf('孙项')
+    const withCursor = state.update({ selection: { anchor: inside } }).state
+    const { state: after } = toggleAt(withCursor, inside)
+    const span = spanAt(state, itemPos(state, '- 子项 A'))!
+    expect(after.selection.main.head).toBe(span.from)
+    expect(sectionFolded(after, span.pos)).toBe(true)
   })
 })

@@ -72,6 +72,15 @@
   /* 42rem 减去 .cm-content 左右各 32px padding = 608px ≈ 38 个汉字/行，
      落在中文阅读的舒适区（35–40 字）。原 46rem 是 42 字，偏宽 */
   --column: 42rem;
+  /* 正文栏左右的留白。**两处必须是同一个值**：`editor/theme.ts` 拿它做 .cm-content
+     的横向 padding，`live-preview.css` 里的卡片（告示块 / 代码块 / front matter）
+     拿它做负外边距 —— 卡片要铺到这块留白的外沿，否则一选中，多行选区那条带子
+     （CM 画的是 .cm-content 的 padding box）就会从卡片两边各露出一条 */
+  --lp-gutter: 32px;
+  /* 正文缩放（0.4.1，`ui/zoom.ts` 写成 :root 内联样式覆盖）。**只有正文乘它** ——
+     `editor/theme.ts` 拿它乘字号与栏宽，chrome 一律不碰。从前这件事由壳侧的
+     `pageZoom` 做，那是整张网页一起放大：侧栏、标签、状态栏、按钮全跟着变粗 */
+  --zoom: 1;
   --drag-strip: 38px;
 
   /* ---- chrome 统一网格：四块面板此前是四套字号三套行高 ----
@@ -801,6 +810,19 @@ body {
 #status-count:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 /* 有选区时字数条换成「已选 …」，给它一个不喊叫的高亮，免得没注意到读数变了含义 */
 #status-count.is-sel { color: var(--accent); }
+/* 0.4.1 正文缩放的读数。**100% 时整格不露面**（`:empty` + status-bar 是 flex+gap，
+   留一个空 span 就是白占 16px）—— 状态栏这一排读数的规矩是「没话说就别占地方」，
+   而「现在是 100%」正是没话说。缩着的时候它既是读数、也是回到 100% 的那颗按钮 */
+#status-zoom {
+  font-variant-numeric: tabular-nums;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: default;
+}
+#status-zoom:empty { display: none; }
+#status-zoom:hover { background: var(--accent-wash); color: var(--fg); }
+#status-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 /* P3-8 详细统计面板：贴着字数条上方浮出。**不是模态** —— 写作时要能边看边改，
    视觉沿用右键菜单那套圆角 + 毛玻璃 */

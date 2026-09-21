@@ -293,6 +293,27 @@ export class FileSearch {
 
   // ---------- 内部 ----------
 
+  /**
+   * 从外面塞一条查询进来（0.4.1：点 front matter 里的标签）。
+   *
+   * **正则开关跟着一起打开，但不写进偏好** —— 送进来的是一条正则，不开的话它会被
+   * 当成字面量转义掉，搜出来一条都没有，而人看着输入框里明明写着式子；面板上那颗
+   * `.*` 于是要亮着（所见即所搜）。但这一下是**点标签带出来的**，不是人自己按的，
+   * 没有理由改掉他存着的那份默认 —— 下次自己开搜索面板时，开关还是他留下的样子。
+   *
+   * 不走防抖：这不是打字，是一次明确的动作，等 220ms 只会显得慢。
+   */
+  search(query: string, opts?: Partial<SearchOptions>): void {
+    if (opts) {
+      this.opts = { ...this.opts, ...opts }
+      this.syncOpts()
+    }
+    this.input.value = query
+    this.clearBtn.hidden = !query
+    clearTimeout(this.timer)
+    this.run()
+  }
+
   private clear(): void {
     this.input.value = ''
     this.clearBtn.hidden = true

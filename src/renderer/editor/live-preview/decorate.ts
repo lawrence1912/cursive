@@ -1,8 +1,9 @@
 import { type EditorState, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
+import { t } from '../../i18n'
 import { calloutFolded, matchCallout, type CalloutMatch } from '../callout'
-import { sectionFolded, spanOf as foldSpanOf } from '../fold'
+import { itemSpan, sectionFolded, spanOf as foldSpanOf, type FoldSpan } from '../fold'
 import { collectHeadings } from '../headings'
 import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
@@ -53,6 +54,20 @@ const markCache = new Map<string, Decoration>()
  */
 function linkDeco(title: string): Decoration {
   return Decoration.mark({ class: 'cm-lp-link', attributes: { title } })
+}
+/**
+ * 标签那颗药丸（0.4.1）。title 是固定的一句话，所以可以走缓存 ——
+ * 但它随语言变，键里带上当下那句本身，切语言时自然换一份
+ */
+function tagDeco(): Decoration {
+  const title = t('w.tagSearch')
+  let d = markCache.get('fm-tag:' + title)
+  if (!d)
+    markCache.set(
+      'fm-tag:' + title,
+      (d = Decoration.mark({ class: 'cm-lp-fm-tag', attributes: { title } }))
+    )
+  return d
 }
 function markDeco(cls: string): Decoration {
   let d = markCache.get(cls)
@@ -110,17 +125,26 @@ export function buildDecorations(view: EditorView): DecorationSet {
  * 在标题旁边的编辑不会重算它 —— 于是会留下一颗过期的把手。ViewPlugin 每次都按
  * 视口重来一遍，天然不会过期，代价也只有视口这么大。点击那一半在 `FoldHandleWidget`。
  */
-function foldHandle(ctx: Ctx, pos: number): void {
-  const h = collectHeadings(ctx.state).find((x) => x.pos === pos)
-  if (!h) return
-  const span = foldSpanOf(ctx.state, h)
-  if (!span) return // 这一节只有标题行，没东西可折
+/**
+ * 首行末尾那颗折叠把手。**side: -1 是必需的**：折起来之后那条替换装饰正是从
+ * `span.from` 开始的，把手排在它前面才留得住（排后面就被一起替换掉了，
+ * 于是「折起来就再也点不开」）。
+ */
+function foldHandle(ctx: Ctx, span: FoldSpan | null, kind: 'section' | 'item'): void {
+  if (!span) return // 只有首行，没东西可折
   ctx.out.push(
     Decoration.widget({
-      widget: new FoldHandleWidget(sectionFolded(ctx.state, pos)),
+      widget: new FoldHandleWidget(sectionFolded(ctx.state, span.pos), kind),
       side: -1
     }).range(span.from)
   )
+}
+
+/** 标题那一颗 */
+function sectionFoldHandle(ctx: Ctx, pos: number): void {
+  const h = collectHeadings(ctx.state).find((x) => x.pos === pos)
+  if (!h) return
+  foldHandle(ctx, foldSpanOf(ctx.state, h), 'section')
 }
 
 /** 返回 false 表示不再深入这个节点的子树 */
@@ -131,7 +155,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
   switch (node.name) {
     // ---------- 块级：铺行样式 ----------
     case 'Frontmatter':
-      addLines(ctx, node.from, node.to, 'cm-lp-frontmatter')
+      decorateFrontmatter(ctx, node.node)
       return false
 
     case 'ATXHeading1':
@@ -141,7 +165,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
     case 'ATXHeading5':
     case 'ATXHeading6':
       addLines(ctx, node.from, node.to, `cm-lp-h${node.name.slice(-1)}`)
-      foldHandle(ctx, node.from)
+      sectionFoldHandle(ctx, node.from)
       return
 
     case 'Blockquote': {
@@ -344,6 +368,12 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       return false
     }
 
+    // 折叠一条列表（0.4.1）：把手挂在本条首行末尾，与标题那颗同款。
+    // **不 return false** —— 子项、行内语法、复选框全在这个子树里，还得往下走
+    case 'ListItem':
+      foldHandle(ctx, itemSpan(ctx.state, node.node), 'item')
+      return
+
     case 'ListMark': {
       if (revealed) return
       const item = node.node.parent
@@ -455,6 +485,97 @@ function decorateFence(ctx: Ctx, node: SyntaxNode): void {
     )
   if (hideClose && fence.closeFrom !== null && fence.closeTo !== null)
     pushHide(ctx, fence.closeFrom, fence.closeTo)
+}
+
+/**
+ * front matter（0.4.1）。**YAML 那棵树就在 Frontmatter 底下**（`yamlFrontmatter` 把
+ * `Stream > Document > BlockMapping > Pair > Key/Literal/FlowSequence` 整套挂了上来），
+ * 所以这儿不自己解析一行 YAML —— 与表格「片段从文档自己的语法树上采」同一条路。
+ *
+ * 为什么单独一个函数、而不是让主 `visit` 往下走：那台 switch 认的是 Markdown 的节点名，
+ * 放 YAML 的树进去，两套语法从此共用一张表 —— 哪天两边撞上同名节点（`Document`、
+ * `Item`、`Literal` 都是现成的候选）就会串味，而那种串味只在「某种文档」上出现。
+ *
+ * 四件事，全部按行判回显（光标落在哪一行，哪一行就回落成原样的 YAML）：
+ * ① 两条 `---` 收成卡片的上下边（同代码块围栏：直接藏会剩一个空行，所以把空行压成边距）；
+ * ② `key:` 的冒号藏掉、键名单独上样式；
+ * ③ `[a, b, c]` 的方括号与逗号藏掉，每一项做成一颗标签；
+ * ④ 卡片首尾行收圆角。
+ */
+function decorateFrontmatter(ctx: Ctx, node: SyntaxNode): void {
+  const { doc, reveal } = ctx
+  const open = doc.lineAt(node.from)
+  // **`node.to` 落在闭合 `---` 的下一行行首**（front matter 这个节点带着尾换行），
+  // 直接拿它铺行样式会把正文前面那个空行也铺成卡片的一部分 —— 从前看不出来
+  // （没有圆角、底色也就多一条），现在卡片收了圆角，那一条会露在圆角下面
+  const close = doc.lineAt(node.to > node.from ? node.to - 1 : node.to)
+  addLines(ctx, open.from, close.to, 'cm-lp-frontmatter')
+  edgeLine(ctx, open.from, 'cm-lp-fm-open')
+  edgeLine(ctx, close.from, 'cm-lp-fm-close')
+
+  const shown = (from: number, to: number): boolean => !reveal.touches(from, to)
+
+  for (const child of childrenOf(node)) {
+    if (child.name === 'DashLine') {
+      // DashLine 带着行尾那个换行符，藏的时候只藏到行末为止
+      const line = doc.lineAt(child.from)
+      if (!shown(line.from, line.to)) continue
+      edgeLine(ctx, line.from, 'cm-lp-fm-edge')
+      pushHide(ctx, line.from, line.to)
+      continue
+    }
+    if (child.name !== 'Stream') continue
+    for (const pair of pairsOf(child)) decoratePair(ctx, pair, shown)
+  }
+}
+
+/**
+ * 一条 `key: value`。**回显按每个节点自己那一行判**，不按这条 Pair 的首行 ——
+ * 块序列写法（`tags:` 换行再 `- 运维`）的一条 Pair 横跨好几行，按首行判的话，
+ * 光标在 `- 备份` 上时那一行照样是渲染态，改都改不动。
+ */
+function decoratePair(
+  ctx: Ctx,
+  pair: SyntaxNode,
+  shown: (from: number, to: number) => boolean
+): void {
+  const onShownLine = (n: SyntaxNode): boolean => {
+    const line = ctx.doc.lineAt(n.from)
+    return shown(line.from, line.to)
+  }
+  for (let c = pair.firstChild; c; c = c.nextSibling) {
+    if (c.name === 'Key') {
+      if (onShownLine(c)) ctx.out.push(markDeco('cm-lp-fm-key').range(c.from, c.to))
+    } else if (c.name === ':') {
+      // 冒号归标记，键名与值之间那个空格留着当分隔
+      if (onShownLine(c)) pushHide(ctx, c.from, c.to)
+    } else if (c.name === 'FlowSequence' || c.name === 'BlockSequence') {
+      // 两种数组写法同一套长相：`[a, b]` 与「换行 - a / - b」都是一串标签
+      for (let it = c.firstChild; it; it = it.nextSibling) {
+        if (!onShownLine(it)) continue
+        if (it.name === 'Item') {
+          if (it.to > it.from) ctx.out.push(tagDeco().range(it.from, it.to))
+        } else if (it.name === '-') {
+          // 块序列的横杠连着后面那个空格一起藏，缩进留着当层级
+          hideWithTrailingSpace(ctx, it.from, it.to)
+        } else {
+          // `[`、`]`、`,` 是 YAML 的标记，不是内容
+          pushHide(ctx, it.from, it.to)
+        }
+      }
+    }
+  }
+}
+
+function* childrenOf(node: SyntaxNode): Generator<SyntaxNode> {
+  for (let c = node.firstChild; c; c = c.nextSibling) yield c
+}
+
+/** `Stream > Document > BlockMapping > Pair*`，中间两层没有别的分支 */
+function* pairsOf(stream: SyntaxNode): Generator<SyntaxNode> {
+  for (const doc of childrenOf(stream))
+    for (const map of childrenOf(doc))
+      for (const pair of childrenOf(map)) if (pair.name === 'Pair') yield pair
 }
 
 function addLines(ctx: Ctx, from: number, to: number, cls: string): void {

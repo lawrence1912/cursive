@@ -3,9 +3,9 @@ import { applyI18n, onLangChange, t, type Key } from '../i18n'
 import { icon, type IconName } from './icons'
 import { closeMenu, openMenu, type MenuItem } from './menu'
 import { FileSearch } from './file-search'
-import type { DirEntry, ReplaceTarget, SearchHit } from '../../shared/types'
+import type { DirEntry, ReplaceTarget, SearchHit, SearchOptions } from '../../shared/types'
 
-interface Node {
+export interface Node {
   entry: DirEntry
   /** null 表示还没读过这个目录（懒加载） */
   children: Node[] | null
@@ -30,6 +30,66 @@ export function typeaheadIndex(names: string[], from: number, want: string): num
     if (names[at]!.toLowerCase().startsWith(needle)) return at
   }
   return -1
+}
+
+/**
+ * 两份目录内容是不是同一回事 —— **只看名字与是不是目录**。
+ *
+ * 自动刷新（契约 v32）的第一道闸。我们自己的保存是原子写（临时文件 + rename），
+ * 在目录看来就是「条目变了」，于是边打字边自动保存，当前文档那一级每两秒就会报一次。
+ * 不比对就重画的话，等于给每一次自动保存配一次整棵树重建。
+ *
+ * mtime 与大小一概不看：树里画的就是名字和图标这两样。内容变了是**文档**那条监听
+ * 的事（`onFileChangedExternal`），两条线各管各的。
+ *
+ * 两边都按名字排好序（壳侧 `readDir` 出来就是排过的，这棵树从不重排），所以逐位比。
+ */
+export function sameEntries(a: DirEntry[], b: DirEntry[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((x, i) => x.name === b[i]!.name && x.isDir === b[i]!.isDir)
+}
+
+/**
+ * 用新读到的一层换掉旧的一层，**留住还在的那些节点**。
+ *
+ * 整层丢掉重建是错的：`children` 会跟着回到 null，而展开着的子目录正是靠它画的 ——
+ * 在这一级里新建一个文件，能让它下面所有展开着的子树当场空掉一片（而且那份懒加载
+ * 缓存也白丢了，每一级都要重走一趟 IPC）。
+ *
+ * 名字还在、但「文件 ↔ 目录」换了身份的按新的来：那已经不是同一个东西了。
+ */
+export function adoptEntries(old: Node[], fresh: DirEntry[]): Node[] {
+  const was = new Map(old.map((n) => [n.entry.path, n]))
+  return fresh.map((entry) => {
+    const prev = was.get(entry.path)
+    return { entry, children: prev && prev.entry.isDir === entry.isDir ? prev.children : null }
+  })
+}
+
+/**
+ * 盯着谁（契约 v32 的监听单子）：树根 + **所有已经读进来的目录**
+ * （`children` 不是 null 的那些）。
+ *
+ * 不是「展开着的那些」：懒加载读过就不再读第二遍（`loadChildren` 见 children
+ * 非 null 直接回头），而「完全折叠」有意留着这份缓存 —— 跟着 `expanded` 去盯的话，
+ * 收起来的那几级会在背后悄悄过期，下次展开给人看的是旧的一层。
+ * **缓存了谁就盯着谁**，这条规矩没有缝。
+ *
+ * 排过序：调用方拿 `join` 出来的串去重，顺序一抖就会白发一次 IPC。
+ */
+export function watchPaths(root: string | null, nodes: Node[]): string[] {
+  if (!root) return []
+  const dirs = [root]
+  const walk = (list: Node[]): void => {
+    for (const n of list) {
+      if (n.entry.isDir && n.children) {
+        dirs.push(n.entry.path)
+        walk(n.children)
+      }
+    }
+  }
+  walk(nodes)
+  return dirs.sort()
 }
 
 /** 超过这个位移才算拖拽 —— 否则每次点文件都会被判成一次微小的拖动 */
@@ -87,6 +147,10 @@ export class Sidebar {
   private typeahead = { text: '', at: 0 }
   /** 刚结束一次拖拽 —— 紧随其后的 click 不该再把文件打开 */
   private dragged = false
+  /** 已经推给壳的监听单子（去重用：树每动一下 `render` 都会来问一次） */
+  private watching = ''
+  /** 收到了还没消化的目录变更：拖拽期间先攒着，松手再看（契约 v32） */
+  private readonly pendingDirs = new Set<string>()
 
   /** 右键菜单挂在 body 上：.sb-tree 是 overflow:auto，挂在里面会被裁掉 */
 
@@ -249,6 +313,19 @@ export class Sidebar {
     this.render()
   }
 
+  /**
+   * 打开搜索面板并直接搜一条（0.4.1：⌘+点击 front matter 里的标签）。
+   * 面板已经开着也要重搜 —— 连点两颗不同的标签，看到的必须是第二颗的结果。
+   *
+   * 回 false = 这个窗口还没有工作区（搜索没根可扫），由调用方去说那一句。
+   */
+  searchFor(query: string, opts?: Partial<SearchOptions>): boolean {
+    if (!this.root) return false
+    this.openSearch()
+    this.search.search(query, opts)
+    return true
+  }
+
   closeSearch(): void {
     this.search.hide()
     this.el.classList.remove('is-searching')
@@ -335,6 +412,7 @@ export class Sidebar {
   }
 
   private render(): void {
+    this.syncWatch()
     const hasRoot = this.root !== null
     const searching = this.search.visible
     this.treeEl.hidden = !hasRoot || searching
@@ -397,6 +475,75 @@ export class Sidebar {
         this.appendRows(parent, node.children, depth + 1)
       }
     }
+  }
+
+  // ---------- 契约 v32 自动刷新 ----------
+
+  /**
+   * 壳报来：这一级目录的条目变了。**只重读这一级**。
+   *
+   * 不走 `reload()`：那是「根 + 每个展开目录各一次 IPC，还得串着等」，给我们自己
+   * 改完盘用正好，接在一条每两秒就可能来一次的事件上太重。这条路的常态是
+   * 「1 次 IPC + 一次清单比对 + 什么都不画」。
+   */
+  onDirChanged(path: string): void {
+    // 拖拽进行中：树在手底下重建 = 落点高亮被抹掉、拖着的那一行还可能当场消失。
+    // 攒着，松手再说
+    if (document.body.classList.contains('is-dragging-row')) {
+      this.pendingDirs.add(path)
+      return
+    }
+    void this.refreshDir(path)
+  }
+
+  private flushPendingDirs(): void {
+    const paths = [...this.pendingDirs]
+    this.pendingDirs.clear()
+    for (const p of paths) void this.refreshDir(p)
+  }
+
+  private async refreshDir(path: string): Promise<void> {
+    if (path === this.root) {
+      const fresh = await window.api.readDir(path)
+      // **等这趟 IPC 的工夫树可能已经被整个换过**（换根 / reload / 又一次刷新）。
+      // 认准同一棵树再落笔，否则会把旧的一层盖回一棵新树上
+      if (path !== this.root) return
+      if (sameEntries(this.nodes.map((n) => n.entry), fresh)) return
+      this.nodes = adoptEntries(this.nodes, fresh)
+    } else {
+      const node = this.byPath.get(path)
+      // 不在树里 / 还没读进来 = 这一级根本没缓存，读它没有意义（也不该在监听单子里）
+      if (!node?.entry.isDir || !node.children) return
+      const fresh = await window.api.readDir(path)
+      if (this.byPath.get(path) !== node || !node.children) return
+      if (sameEntries(node.children.map((n) => n.entry), fresh)) return
+      node.children = adoptEntries(node.children, fresh)
+    }
+    // 索引整张重建：走掉的那一级连同它的子孙都得从 `byPath` 里消失，
+    // 否则 `expanded` 的清理、`targetDir`、拖拽落点还认得出一个已经不在的路径
+    this.byPath.clear()
+    this.index(this.nodes)
+    for (const p of [...this.expanded]) if (!this.byPath.has(p)) this.expanded.delete(p)
+    // 光标那一行没了：退到它的父目录（那也正是「新建落在哪儿」的答案）。
+    // 不退的话 `cursorRow()` 会回到第 0 行 —— 光标当场跳到树顶
+    if (this.selected && !this.byPath.has(this.selected)) {
+      const parent = dirname(this.selected)
+      this.selected = parent && this.byPath.has(parent) ? parent : null
+    }
+    this.render()
+  }
+
+  /**
+   * 把「要盯着哪几级」推给壳。挂在 `render()` 上是因为那是唯一的收口 ——
+   * 换根 / 展开 / 折叠 / 增删改之后都会走到它，别处再各记一次迟早漏一处。
+   * 单子没变就一个字节都不发（树每动一下这里都会被叫到）。
+   */
+  private syncWatch(): void {
+    const paths = watchPaths(this.root, this.nodes)
+    const key = paths.join('\n')
+    if (key === this.watching) return
+    this.watching = key
+    window.api.watchDirs(paths)
   }
 
   // ---------- P3-1 新建 / 删除 / 重命名 / 移动 ----------
@@ -713,6 +860,9 @@ export class Sidebar {
       if (!ghost) return
       this.dragged = true
       if (target) void this.move(src, target)
+      // 拖着的这一路上攒下来的外部变更，现在补上（`move` 那条自己会 reload，
+      // 撞上了也只是多读一趟 —— `refreshDir` 认节点，盖不回旧的一层）
+      this.flushPendingDirs()
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)

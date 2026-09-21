@@ -53,10 +53,17 @@ export const markdownHighlight = HighlightStyle.define([
   { tag: [t.deleted, t.invalid], color: 'var(--hl-del)' }
 ])
 
+/**
+ * **`--zoom` 只出现在这两处**（0.4.1，`ui/zoom.ts`）：正文字号与正文栏宽。
+ * ⌘+ / ⌘− / 捏合缩的就是这两个数 —— 侧栏、标签、状态栏、格式栏一律不乘它，
+ * 「放大」在这个应用里的意思是「字大一点」，不是「整个界面变粗」。
+ * 栏宽也要乘：不乘的话一行能放下的字数会随缩放缩水（版心是按 38 字定的，
+ * 见 base.css 的 `--column`），而那是排版决定，不该被缩放顺手改掉。
+ */
 const editorTheme = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: 'var(--body-size)',
+    fontSize: 'calc(var(--body-size) * var(--zoom))',
     color: 'var(--fg)',
     backgroundColor: 'var(--bg)'
   },
@@ -68,9 +75,9 @@ const editorTheme = EditorView.theme({
     paddingBottom: '40vh'
   },
   '.cm-content': {
-    maxWidth: 'var(--column)',
+    maxWidth: 'calc(var(--column) * var(--zoom))',
     margin: '0 auto',
-    padding: '48px 32px 0',
+    padding: '48px var(--lp-gutter) 0',
     caretColor: 'var(--fg)'
   },
   // 落点提示（`editor/navigation.ts`）：跳过去的那一行先亮一下，再淡出。

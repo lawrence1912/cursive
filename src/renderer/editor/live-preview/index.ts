@@ -22,6 +22,7 @@ import { calloutFolded, calloutFoldField, toggleCalloutFold } from '../callout'
 import { carryDecorations } from '../carry'
 import { inlineSegments } from '../inline-text'
 import { foldedSpans, sectionFoldField, toggleSectionFold } from '../fold'
+import { followTag } from '../frontmatter'
 import { docDir } from '../doc-dir'
 import { HEADING_RE } from '../headings'
 import { followLink } from '../link'
@@ -107,8 +108,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 )
 
 /**
- * ⌘/Ctrl + 点击 = 跟着链接走。去哪儿由 `editor/link.ts` 判（外部地址给系统、
- * 本地文档开标签、`#锚点` 就地跳），这里只负责把「点在哪个位置上」交出去。
+ * ⌘/Ctrl + 点击 = 跟着链接走，或者**搜一颗标签**（0.4.1）。去哪儿由
+ * `editor/link.ts` 判（外部地址给系统、本地文档开标签、`#锚点` 就地跳）、
+ * front matter 里的标签由 `editor/frontmatter.ts` 翻成一条工作区搜索，
+ * 这里只负责把「点在哪个位置上」交出去。
  *
  * **认的是语法树而不是 `.cm-lp-link` 类**：引用定义 `[id]: 地址` 那一行有意不上色，
  * 但它照样该跟得过去；反过来，类名是装饰层的实现细节，点击不该绑在它身上。
@@ -121,7 +124,10 @@ const openLinkOnClick = EditorView.domEventHandlers({
     if (!(event.metaKey || event.ctrlKey)) return false
     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
     if (pos == null) return false
-    if (!followLink(view, pos, view.state.facet(docDir))) return false
+    // 先问链接，再问标签：两者不可能是同一个位置（一个在正文、一个在 front matter），
+    // 顺序只是省掉一次没必要的树查询
+    if (!followLink(view, pos, view.state.facet(docDir)) && !followTag(view.state, pos))
+      return false
     event.preventDefault()
     return true
   }

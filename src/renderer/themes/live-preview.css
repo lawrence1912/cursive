@@ -2,6 +2,34 @@
    这些类名全部由 live-preview 插件通过装饰器挂上，
    源代码模式把插件撤掉，样式自然全部消失 —— 不需要另写一套。 */
 
+/* ---------- 行级卡片：内边距一律写成 `.cm-line.cm-lp-*` ----------
+
+   `editor/theme.ts` 里有一条 `.cm-line { padding: 0 }`。它经 `EditorView.theme()`
+   生成，选择器带着主题类（`.ͼ1 .cm-line`，特指度 0,2,0）—— 比这份文件里的
+   `.cm-lp-callout`（0,1,0）**高一档**。于是凡是直接写在 `.cm-lp-*` 上的 padding
+   一律落空：告示块、引用、代码块、front matter 的内边距从来没生效过
+   （2026-09-21 实测：`getComputedStyle(.cm-lp-callout).paddingLeft` 是 0px，
+   正文紧贴着左侧那根色条）。加一个 `.cm-line.` 前缀凑成 0,2,0，与主题打平，
+   而这份文件排在 style-mod 注入的那份之后（它插在 head 最前），同分靠后者胜。
+
+   **标题那条 `padding-top: 1.2em` 是有意留着不生效的**：Markdown 里标题上面本来就
+   空着一行，那一行自己就是一个行盒；再加 1.2em 会把行距拉到一屏放不下几段。
+   要「上疏下密」的话，把它也改成 `.cm-line.cm-lp-h1` 就生效了 —— 那是一次版面决定，
+   不是修一个 bug，所以留在这儿等人拍板。
+
+   **横向那一半还要再铺出去**：CM 画多行选区那条带子时，左右边界取的是
+   `.cm-content` 的 padding box **加上第一个 `.cm-line` 的 padding`
+   （`RectangleMarker.forRange`）—— 而这儿的横向留白全在 `.cm-content` 上、
+   行的 padding 是 0，带子于是比卡片宽出一个 `--lp-gutter`。卡片用负外边距铺到
+   同一条边界上，选中时两边就不会各露出一条高亮；内边距再把正文推回原来的位置，
+   所以卡片里的字与正文仍然对齐（借这一下，卡片也终于有了该有的内边距）。 */
+.cm-line.cm-lp-callout,
+.cm-line.cm-lp-code,
+.cm-line.cm-lp-frontmatter {
+  margin-left: calc(-1 * var(--lp-gutter));
+  margin-right: calc(-1 * var(--lp-gutter));
+}
+
 /* ---------- 块级 widget 的上下留白：**只能用 padding，不能用 margin** ----------
 
    CodeMirror 给每个块记高度用的是 `dom.getBoundingClientRect().height`
@@ -70,8 +98,11 @@ body.cursive-em-italic .cm-md-em {
 /* ---------- 引用 ---------- */
 .cm-lp-quote {
   border-left: 2px solid var(--mark-idle);
-  padding-left: 0.9em;
   color: var(--muted);
+}
+/* 引用不铺到栏外（它没有底色，露不出「卡片比选区窄」那条缝），只补内边距 */
+.cm-line.cm-lp-quote {
+  padding-left: 0.9em;
 }
 
 /* ---------- 告示块 Callout（P1-6） ----------
@@ -84,8 +115,11 @@ body.cursive-em-italic .cm-md-em {
   --cal: var(--cal-note);
   background: color-mix(in srgb, var(--cal) 8%, transparent);
   border-left: 3px solid var(--cal);
-  padding-left: 0.85em;
-  padding-right: 0.85em;
+}
+/* 内边距减掉左边那根 3px 色条，卡片里的正文才与卡片外的正文对齐 */
+.cm-line.cm-lp-callout {
+  padding-left: calc(var(--lp-gutter) - 3px);
+  padding-right: var(--lp-gutter);
 }
 .cm-lp-callout-tip { --cal: var(--cal-tip); }
 .cm-lp-callout-warn { --cal: var(--cal-warn); }
@@ -93,20 +127,26 @@ body.cursive-em-italic .cm-md-em {
 .cm-lp-callout-example { --cal: var(--cal-example); }
 .cm-lp-callout-quote { --cal: var(--cal-quote); }
 
-/* 首行就是标题行。光标进来回显 `[!danger]` 源码时这身打扮不变 —— 卡片不该跳动 */
+/* 首行就是标题行。光标进来回显 `[!danger]` 源码时这身打扮不变 —— 卡片不该跳动。
+   四角都收圆（原先只收右边两个）：左边那根色条跟着圆角走，整张才像一张卡，
+   而不是「一条方头竖线后面拖着个圆角块」 */
 .cm-lp-callout-head {
-  padding-top: 0.45em;
-  border-radius: 0 7px 0 0;
+  border-radius: 8px 8px 0 0;
   font-weight: 600;
   color: var(--cal);
 }
+.cm-line.cm-lp-callout-head {
+  padding-top: 0.45em;
+}
 .cm-lp-callout-close {
+  border-radius: 0 0 8px 8px;
+}
+.cm-line.cm-lp-callout-close {
   padding-bottom: 0.5em;
-  border-radius: 0 0 7px 0;
 }
 /* 单行告示块 / 折起来的告示块：首行同时是尾行 */
 .cm-lp-callout-head.cm-lp-callout-close {
-  border-radius: 0 7px 7px 0;
+  border-radius: 8px;
 }
 
 /* CalloutHeadWidget：替换掉 `[!danger]` 那段源码，给出图标（+ 没写标题时的类型名） */
@@ -230,10 +270,13 @@ body.cursive-em-italic .cm-md-em {
   font-family: var(--mono);
   font-size: 0.9em;
   line-height: 1.6;
-  padding-left: 0.9em;
-  padding-right: 0.9em;
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
+}
+/* 同告示块：铺到栏外，内边距再把代码推回正文那一列（减掉左右各 1px 描边） */
+.cm-line.cm-lp-code {
+  padding-left: calc(var(--lp-gutter) - 1px);
+  padding-right: calc(var(--lp-gutter) - 1px);
 }
 /* 代码块底色会遮住 drawSelection 的底层选区，在代码文字上恢复原生高亮。
    !important 用于覆盖 CodeMirror 隐藏原生选区的规则。 */
@@ -249,14 +292,18 @@ body.cursive-em-italic .cm-md-em {
   color: var(--mark-idle);
 }
 .cm-lp-code-open {
-  padding-top: 0.45em;
   border-top: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
 }
+.cm-line.cm-lp-code-open {
+  padding-top: 0.45em;
+}
 .cm-lp-code-close {
-  padding-bottom: 0.55em;
   border-bottom: 1px solid var(--border);
   border-radius: 0 0 8px 8px;
+}
+.cm-line.cm-lp-code-close {
+  padding-bottom: 0.55em;
 }
 /* 未闭合的围栏：首行同时也是尾行，四角都圆 */
 .cm-lp-code-open.cm-lp-code-close {
@@ -266,7 +313,7 @@ body.cursive-em-italic .cm-md-em {
    开围栏那条整行换成语言条，行高跟着条子走；闭围栏那条**没内容了**，
    压成几像素高 —— 它就是卡片的下边距。当年「藏掉会剩一个空行」说的就是
    这一行：解法不是让 ``` 一直露着，而是让这个空行变成边距 */
-.cm-lp-code-open.cm-lp-fence-off {
+.cm-line.cm-lp-code-open.cm-lp-fence-off {
   padding-top: 5px;
   padding-bottom: 2px;
 }
@@ -275,6 +322,8 @@ body.cursive-em-italic .cm-md-em {
      写 0.5em 等于没有内边距（卡片下沿会直接贴着最后一行代码） */
   font-size: 0;
   line-height: 5px;
+}
+.cm-line.cm-lp-code-close.cm-lp-fence-off {
   padding-bottom: 7px;
 }
 
@@ -480,14 +529,57 @@ body.cursive-em-italic .cm-md-em {
   display: none;
 }
 
-/* ---------- front matter ---------- */
+/* ---------- front matter（0.4.1 重做）----------
+   这块东西在文件最上头、每次打开都第一眼看见，从前是一坨等宽的 YAML 源码 ——
+   连那两条 `---` 都占着一整行。现在按「属性表」摆：两条 `---` 收成卡片的上下边，
+   冒号藏掉，键名一列、值一列，数组里的每一项做成一颗标签。
+   **仍然是真文本**：光标落到哪一行，哪一行就原样回落成 YAML，照常改照常存。 */
 .cm-lp-frontmatter {
-  font-family: var(--mono);
-  font-size: 0.82em;
+  font-size: 0.86em;
   color: var(--muted);
   background: var(--code-bg);
-  padding-left: 0.9em;
-  line-height: 1.7;
+  line-height: 1.9;
+}
+.cm-line.cm-lp-frontmatter {
+  padding-left: var(--lp-gutter);
+  padding-right: var(--lp-gutter);
+}
+.cm-line.cm-lp-fm-open { border-radius: 8px 8px 0 0; }
+.cm-line.cm-lp-fm-close { border-radius: 0 0 8px 8px; }
+/* 藏起来的那两条 `---`：同代码块围栏，压成几像素高当卡片的上下边距。
+   一律用 px —— em 拿本元素的字号算，而这里字号正好被压成 0 */
+.cm-line.cm-lp-fm-edge {
+  font-size: 0;
+  line-height: 10px;
+}
+/* 键名单独一列。`inline-block` + `min-width` 是这一列能对齐的唯一办法（每行各是
+   一行真文本，没有表格可用）—— 键名比它长就自己顶开，不截断 */
+.cm-lp-fm-key {
+  display: inline-block;
+  min-width: 5.5em;
+  font-weight: 600;
+}
+/* 键名的**颜色不在这儿定** —— 语法高亮给 YAML 的 Key 上了自己的色，而那是一层
+   更靠里的 span，写在这个类上的 color 盖不过它（试过，计算样式是 --fg、屏幕上还是
+   高亮色）。这样正好：四套主题下的对比度归高亮表管，和代码块里的 YAML 是同一个色 */
+/* 数组里的每一项 = 一颗标签。底色兑得很淡：front matter 整块本来就是背景色上的
+   一张卡，标签再重就抢了正文第一屏的注意力 */
+.cm-lp-fm-tag {
+  padding: 0.1em 0.5em;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+/* 选中要看得见（0.4.1）。**与代码块那条是同一个毛病**：drawSelection 把选区画在
+   `.cm-content` 底下的一层里，而这张卡片自己有底色 —— 选区被整块盖住，拖选经过
+   front matter 时一点反应都没有（标签那颗药丸还多盖一层，是最扎眼的那一处）。
+   所以在文字上恢复原生 `::selection`；后代那条不能省，正是给药丸里的字用的。
+   `!important` 覆盖的是 CM 自己那条「藏掉原生选区」（`.cm-line ::selection` 透明，
+   Prec.highest + !important，只能靠特指度压过去）。 */
+.cm-editor .cm-line.cm-lp-frontmatter::selection,
+.cm-editor .cm-line.cm-lp-frontmatter ::selection {
+  background-color: var(--sel) !important;
 }
 
 /* ---------- 列表 ---------- */

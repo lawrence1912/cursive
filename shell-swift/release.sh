@@ -134,6 +134,7 @@ run_case() {
         ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
     python3 - "$1" <<'PY'
 import json, sys, os, re, struct, hashlib, unicodedata
+px = lambda v: float(str(v or '0').replace('px', '') or 0)
 c = json.load(open('/tmp/cursive-shell-check.json'))
 e = json.load(open('/tmp/cursive-shell-e2e.json'))
 r = e['result']; img = r.get('img')
@@ -308,6 +309,37 @@ if sys.argv[1] == 'table.md':
     # 探针自己收干净了（皮肤退选），否则它会跟着 localStorage 留给后面的用例
     ok = ok and sk.get('cleaned') != 'rgb(1, 2, 3)'
 if sys.argv[1] == 'kitchen-sink.md':
+    # ---- 0.4.1 front matter 属性表 ----
+    # 夹具头上是 `title: 语料文档` + `tags: [markdown, 测试]`。三条各守一段：
+    # 键名两个（title / tags）、标签两颗（数组拆开了才有）、两条 `---` 收成了边
+    #（收不成的话它们各占一整行，卡片顶上凭空多两行等宽的 `---`）
+    ok = ok and r['counts'].get('cm-lp-fm-key', 0) == 2
+    ok = ok and r['counts'].get('cm-lp-fm-tag', 0) == 2
+    # `>= 1` 而不是 2：取数那一刻光标还在文档开头，也就是**停在上面那条 `---` 上** ——
+    # 回显是按行判的，它于是原样露着。下面那条没人碰，收成了边
+    ok = ok and r['counts'].get('cm-lp-fm-edge', 0) >= 1
+    # ---- 0.4.1 ⌘+点击标签 = 拿它搜工作区 ----
+    tp = r.get('tagProbe') or {}
+    ok = ok and not tp.get('err')
+    ok = ok and '⌘' in (tp.get('title') or '')
+    # 送进搜索框的那条式子要一字不差：中文标签靠的就是它（`\b` 那种词边界搜不到）
+    ok = ok and tp.get('query') == '(?<=[\\[,\\s])测试(?=[\\],\\s]|$)'
+    # 开关得亮着（所见即所搜），而且**至少搜到夹具自己**
+    ok = ok and tp.get('regexOn') is True and tp.get('self') is True
+    # 收干净了：面板关掉、文件树回来（后面还有两条探针要用这块地方）
+    ok = ok and tp.get('cleaned') is True
+    # ---- 0.4.1 折叠一条列表 ----
+    lf = r.get('listFoldProbe') or {}
+    ok = ok and not lf.get('err')
+    # 「  - 嵌套项」那一行真的从屏幕上消失了，药丸接上
+    ok = ok and lf.get('before') is True and lf.get('folded') is False
+    ok = ok and (lf.get('pillText') or '').endswith('行')
+    # **折的是父项那一条**：光标落在「- 无序项二」上。落在「- 嵌套项」= 折错了一层，
+    # 落在别处 = 退到整节去了 —— 两种错法只有这一条断言抓得到
+    ok = ok and (lf.get('caretLine') or '').strip() == '- 无序项二'
+    ok = ok and lf.get('back') is True
+    # 红线一：折叠一个字节都不许改文档
+    ok = ok and lf.get('byteSafe') is True
     # P4-1：一份「什么都有」的文档导出后该有的东西（标题锚点 / 表格 / 代码上色 / 公式）
     ok = ok and '<h1 id=' in page and '<table>' in page
     ok = ok and 'class="tok-keyword"' in page and '<math' in page
@@ -347,6 +379,12 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-新建.md')
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-改名.md')
     ok = ok and not os.path.exists('/tmp/cursive-e2e/assets/e2e-改名.md')
+    # 契约 v32 自动刷新：外面往树根里丢了个文件、又把它拿走，树自己跟上；
+    # 而我们自己的原子写（条目清单没变）不该让它重画一次 —— autoQuiet 守的就是那条闸，
+    # 它一旦变 False，就是「边打字边自动保存 = 每两秒重建一次整棵树」回来了
+    ok = ok and tp.get('autoAdded') is True and tp.get('autoGone') is True
+    ok = ok and tp.get('autoQuiet') is True
+    ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-外来.md')
     # P3-2 跨文件搜索：壳侧流式回推 → 结果分组 → 点命中跳到别的文件并选中那一处
     fi = r.get('findProbe') or {}
     ok = ok and fi.get('groups', 0) >= 2 and fi.get('hits', 0) >= 2
@@ -423,6 +461,22 @@ if sys.argv[1] == 'math.md':
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
     m = r.get('math') or {}
     ok = ok and (m.get('inline', 0) >= 2 and m.get('block', 0) >= 2 and m.get('font') is True)
+    # ---- 0.4.1 正文缩放：⌘+ 两下 = 125%，而且**只有正文变大** ----
+    zp = r.get('zoomProbe') or {}
+    ok = ok and not zp.get('err')
+    b, z, rs = zp.get('before') or {}, zp.get('zoomed') or {}, zp.get('reset') or {}
+    # 起点是 100%，状态栏那一格不露面（没话说就别占地方）
+    ok = ok and b.get('zoom') == '1' and b.get('badge') == ''
+    # 正文字号与栏宽都乘了 1.25（栏宽不乘的话，一行能放的字数会随缩放缩水）
+    ok = ok and z.get('zoom') == '1.25' and z.get('badge') == '125%'
+    ok = ok and abs(px(z.get('body')) - px(b.get('body')) * 1.25) < 0.5
+    ok = ok and abs(px(z.get('column')) - px(b.get('column')) * 1.25) < 0.5
+    # **这两条才是这次改动的全部意义**：chrome 一个像素都不许跟着变
+    ok = ok and z.get('status') == b.get('status') and z.get('tree') == b.get('tree')
+    # 点状态栏那一格回到 100%，一切复原（后面按坐标来的断言都指着这一步）
+    ok = ok and rs == b
+    # 壳那边一路没碰 pageZoom（页面看不见它，只有原生报得出来）
+    ok = ok and abs(c.get('pageZoom', 0) - 1) < 1e-6
 if sys.argv[1] == 'dialect.md':
     # P4-1：目录与脚注在导出里是真的锚点
     ok = ok and '<nav class="toc">' in page and '<sup class="footnote-ref"' in page

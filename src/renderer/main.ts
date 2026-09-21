@@ -58,7 +58,9 @@ import { parseGoto } from './ui/goto'
 import { note } from './ui/note'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
+import { Zoom } from './ui/zoom'
 import { toggleFoldAt } from './editor/fold'
+import { tagHost } from './editor/frontmatter'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
@@ -96,6 +98,7 @@ const elPos = document.getElementById('status-pos')!
 const elMode = document.getElementById('status-mode')!
 const elSaved = document.getElementById('status-saved')!
 const elMatch = document.getElementById('status-match')!
+const elZoom = document.getElementById('status-zoom')!
 
 let sourceMode = false
 
@@ -174,6 +177,34 @@ const prefs = new Prefs(() => {
   syncSpell()
 })
 prefs.apply()
+
+/**
+ * 正文缩放（0.4.1）。⌘+ / ⌘− / ⌥⌘0 与捏合都落到这里 —— 壳那边只把动作转过来，
+ * 不再碰 `pageZoom`（见 `ui/zoom.ts`：那是整个界面一起放大）。
+ * 与偏好里的字号是两件事：字号是「我平时看多大」，缩放是「这一阵凑近看看」。
+ */
+const zoom = new Zoom(() => {
+  // 与偏好那份同一个理由：正文字号变了，表格学到的行高、CM 缓存的字符尺寸都过期了
+  forgetRowHeight()
+  view.requestMeasure()
+  syncZoom()
+}, !selfCheck)
+zoom.apply()
+
+/** 状态栏右下那格。**100% 时留空**（CSS 里 `:empty` 整格不占位） */
+function syncZoom(): void {
+  elZoom.textContent = zoom.zoomed ? zoom.label : ''
+}
+
+// 点一下回到 100%（同字数条：mousedown 要 preventDefault，否则焦点与选区一起丢）
+elZoom.addEventListener('mousedown', (e) => e.preventDefault())
+elZoom.addEventListener('click', () => zoom.reset())
+elZoom.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    zoom.reset()
+  }
+})
 
 const sidebar = new Sidebar({
   openFile: (path) => void openPath(path),
@@ -368,7 +399,7 @@ const holes = createHoleReporter({
   }),
   send: (list) => window.api.setTitlebarHoles(list)
 })
-// 窗口宽度变了（含 ⌘+/⌘−/捏合 —— pageZoom 会改 CSS 视口）就得重量一遍
+// 窗口宽度变了就得重量一遍（0.4.1 起缩放只动正文，不再改 CSS 视口，与这条无关）
 window.addEventListener('resize', () => holes.schedule())
 
 syncTitlebar()
@@ -1044,6 +1075,12 @@ async function openDocLink(path: string, slug: string | null): Promise<void> {
 // 编辑器扩展只知道「这条链接通向一份本地文档」，开标签与报错都得回到窗口这一层来做
 linkHost.openDoc = (path, slug) => void openDocLink(path, slug)
 linkHost.note = note
+// 0.4.1：⌘+点击 front matter 里的标签 = 拿它去搜整个工作区。**不建索引**，
+// 走的就是 ⇧⌘F 那条路（见 editor/frontmatter.ts 里为什么只做到这一步）
+tagHost.search = (tag, query) => {
+  if (sidebar.searchFor(query, { regex: true })) note(t('note.tagSearch', { tag }))
+  else note(t('note.tagNoFolder'))
+}
 
 async function save(): Promise<boolean> {
   const res = await window.api.save(docPath, view.state.doc.toString(), fingerprint)
@@ -1596,6 +1633,15 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'app:preferences':
       prefs.toggle()
       break
+    case 'view:zoom-in':
+      zoom.step(1)
+      break
+    case 'view:zoom-out':
+      zoom.step(-1)
+      break
+    case 'view:zoom-reset':
+      zoom.reset()
+      break
     case 'view:toggle-fold':
       // 0.4.0 F1。源代码模式下这套装饰整个撤掉了，说清楚是哪一种「没反应」
       if (sourceMode) note(t('note.foldSource'))
@@ -1656,6 +1702,9 @@ window.api.onPrefsChanged((values) => prefs.adopt(values))
 
 // ---------- P0-3 外部变更 ----------
 window.api.onFileChangedExternal((path) => void handleExternalChange(path))
+// 文件树自动刷新（契约 v32）：壳按目录报，侧栏只重读那一级。
+// 与上面那条各管各的 —— 那条管的是**文档内容**变了，这条管的是**某一级里有什么**变了
+window.api.onDirChanged((path) => sidebar.onDirChanged(path))
 
 async function handleExternalChange(path: string): Promise<void> {
   const t = tabs.find((x) => x.path === path)

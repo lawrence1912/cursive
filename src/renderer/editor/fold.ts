@@ -1,13 +1,20 @@
 import { MapMode, StateEffect, StateField, type EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import { collectHeadings, type Heading } from './headings'
+import { parsedTree } from './syntax'
 
 /**
- * 折叠一节（0.4.0 F1）。
+ * 折叠一节（0.4.0 F1）与折叠一条列表（0.4.1）。
  *
  * 长文里最常用的一种聚焦是「把写完的三节收起来，只留正在写的这一节」。
  * 现有的两条路都不是这件事：**专注模式**压暗的是段落，长度一点没减；
  * **大纲折叠**折的是目录那一侧，正文照旧整篇摊着。
+ *
+ * **两种可折的东西共用同一个 StateField**：一节的身份是标题节点起点，一条列表的
+ * 身份是 `ListItem` 起点，都是「文档里的一个位置」，映射、展开、脏区三套逻辑
+ * 一字不差。分两个字段的话，「落点掉进折叠区就当场展开」那条收口要写两遍，
+ * 而 `live-preview` 的增量重建也要把两份折叠区并起来算 —— 那是两处必然漂移的地方。
  *
  * 三条规矩，都是判断 4（编辑器里的「态」一律不写回文档）的直接后果：
  * - 状态**照抄 `calloutFoldField`**：一个 StateField 存「哪些标题折着」，
@@ -20,14 +27,14 @@ import { collectHeadings, type Heading } from './headings'
  * `end`（大纲、`[TOC]`、章节跟随高亮共用那一份），这里只是把它折起来。
  */
 
-/** 折叠开关，值是标题节点起点 */
+/** 折叠开关，值是标题节点（或 `ListItem` 节点）的起点 */
 export const toggleSectionFold = StateEffect.define<number>()
 
-/** 一节折起来之后真正被藏掉的那一段（标题行**不**在内） */
+/** 折起来之后真正被藏掉的那一段（首行**不**在内） */
 export interface FoldSpan {
-  /** 标题节点起点，也是这条折叠的身份 */
+  /** 标题节点 / `ListItem` 起点，也是这条折叠的身份 */
   pos: number
-  /** 标题行末尾 —— 连着换行符一起藏，下面几行才会并进标题那一行 */
+  /** 首行末尾 —— 连着换行符一起藏，下面几行才会并进首行那一行 */
   from: number
   /** 本节最后一行的行尾（不含它后面那个换行，否则下一个标题会被吸上来） */
   to: number
@@ -84,7 +91,7 @@ export const sectionFoldField = StateField.define<Set<number>>({
   }
 })
 
-/** 这一节此刻折着没有 */
+/** 这一节 / 这一条此刻折着没有 */
 export function sectionFolded(state: EditorState, pos: number): boolean {
   return state.field(sectionFoldField, false)?.has(pos) === true
 }
@@ -101,13 +108,22 @@ export function foldedSpans(state: EditorState): FoldSpan[] {
 
 function spansOf(state: EditorState, set: Set<number>): FoldSpan[] {
   const out: FoldSpan[] = []
-  for (const h of collectHeadings(state)) {
-    if (!set.has(h.pos)) continue
-    const span = spanOf(state, h)
+  // **按文档序遍历**，外层才会排在里层前面 —— 下面那条「外层已经盖住就别再出一条」
+  // 靠的就是这个顺序（标题的外层 pos 更小，父列表项的 pos 也更小）
+  for (const pos of [...set].sort((a, b) => a - b)) {
+    const span = spanAt(state, pos)
     // 外层已经盖住的就别再出一条（里层那条会与外层重叠）
     if (span && !out.some((s) => span.from >= s.from && span.from < s.to)) out.push(span)
   }
   return out
+}
+
+/** `pos` 上那个可折的东西能折起来的那一段：先当标题问一次，再当列表项问一次 */
+export function spanAt(state: EditorState, pos: number): FoldSpan | null {
+  const h = collectHeadings(state).find((x) => x.pos === pos)
+  if (h) return spanOf(state, h)
+  const item = listItemAt(state, pos)
+  return item && item.from === pos ? itemSpan(state, item) : null
 }
 
 /** 一节能折起来的那一段；只有标题行、没有正文就回 null（没东西可折） */
@@ -118,6 +134,31 @@ export function spanOf(state: EditorState, h: Heading): FoldSpan | null {
   // 吸到折叠行的尾巴上。退到前一行的行尾
   const to = state.doc.lineAt(Math.max(head.to, h.end - 1)).to
   return to > head.to ? { pos: h.pos, from: head.to, to } : null
+}
+
+/**
+ * 一条列表项能折起来的那一段：首行之后到本条最后一行。
+ * 只有首行、没有子项 / 续行的（`- 单独一条`）回 null —— 没东西可折。
+ */
+export function itemSpan(state: EditorState, item: SyntaxNode): FoldSpan | null {
+  const head = state.doc.lineAt(item.from)
+  if (item.to <= head.to) return null
+  // 同 spanOf：退一格再取行，免得把本条末尾那个换行也吃进去（下一条会被吸上来）
+  const to = state.doc.lineAt(Math.max(head.to, item.to - 1)).to
+  return to > head.to ? { pos: item.from, from: head.to, to } : null
+}
+
+/** 罩着 `pos` 的 `ListItem`，由内而外。不在列表里就是空的 */
+function itemChain(state: EditorState, pos: number): SyntaxNode[] {
+  const out: SyntaxNode[] = []
+  let node: SyntaxNode | null = parsedTree(state).resolveInner(pos, 1)
+  for (; node; node = node.parent) if (node.name === 'ListItem') out.push(node)
+  return out
+}
+
+/** 最里面那个罩着 `pos` 的 `ListItem` */
+function listItemAt(state: EditorState, pos: number): SyntaxNode | null {
+  return itemChain(state, pos)[0] ?? null
 }
 
 /** 落在 `pos` 上的那一节（嵌套时取最里面那一层）。标题行本身算它自己那一节 */
@@ -131,25 +172,38 @@ export function sectionAt(state: EditorState, pos: number): Heading | null {
 }
 
 /**
- * 折 / 展开 `pos` 落在的那一节。回「有没有动」——
- * 没有标题、或者这一节只有标题行（没东西可折）时不动，调用方据此说一句。
+ * `pos` 上该折的是哪一个 —— **由内而外，最近的那一层说了算**。
  *
- * **折的时候顺手把光标挪到标题行上**：不挪的话光标就留在了刚藏起来的正文里，
+ * 光标停在一条带子项的列表里，人想折的是那一条，不是它所在的整节（同 Obsidian）。
+ * 所以先从最里层的 `ListItem` 往外找第一条折得动的，都找不到才退回小节。
+ * 要折整节就把光标挪到标题行上 —— 标题行不在任何列表项里，这条链是空的。
+ */
+function targetAt(state: EditorState, pos: number): FoldSpan | null {
+  for (const item of itemChain(state, pos)) {
+    const span = itemSpan(state, item)
+    if (span) return span
+  }
+  const h = sectionAt(state, pos)
+  return h ? spanOf(state, h) : null
+}
+
+/**
+ * 折 / 展开 `pos` 落在的那一节或那一条列表。回「有没有动」——
+ * 手边没有折得动的东西时不动，调用方据此说一句。
+ *
+ * **折的时候顺手把光标挪到首行上**：不挪的话光标就留在了刚藏起来的正文里，
  * 而 `sectionFoldField` 那条「落点掉进折叠区就展开」会当场把它又展开 ——
  * 看起来就是「点了没反应」。
  */
 export function toggleFoldAt(view: EditorView, pos: number): boolean {
   const state = view.state
-  const h = sectionAt(state, pos)
-  if (!h) return false
-  const span = spanOf(state, h)
+  const span = targetAt(state, pos)
   if (!span) return false
-  const folding = !sectionFolded(state, h.pos)
-  const head = state.doc.lineAt(h.headEnd)
+  const folding = !sectionFolded(state, span.pos)
   const inside = state.selection.ranges.some((r) => r.to > span.from && r.from <= span.to)
   view.dispatch({
-    effects: toggleSectionFold.of(h.pos),
-    ...(folding && inside ? { selection: { anchor: head.to } } : {})
+    effects: toggleSectionFold.of(span.pos),
+    ...(folding && inside ? { selection: { anchor: span.from } } : {})
   })
   return true
 }

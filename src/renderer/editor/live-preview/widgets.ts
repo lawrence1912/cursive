@@ -1084,11 +1084,15 @@ export class CalloutHeadWidget extends WidgetType {
  * 折着的时候一直亮着（否则那一节看起来就只是「后面没写」）。
  */
 export class FoldHandleWidget extends WidgetType {
-  constructor(readonly folded: boolean) {
+  constructor(
+    readonly folded: boolean,
+    /** 折的是一整节，还是一条列表 —— 只影响那句提示语 */
+    readonly kind: 'section' | 'item' = 'section'
+  ) {
     super()
   }
   eq(other: FoldHandleWidget): boolean {
-    return other.folded === this.folded
+    return other.folded === this.folded && other.kind === this.kind
   }
   override ignoreEvent(): boolean {
     return false
@@ -1096,7 +1100,15 @@ export class FoldHandleWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const el = document.createElement('span')
     el.className = 'cm-lp-fold' + (this.folded ? ' is-folded' : '')
-    const label = t(this.folded ? 'w.unfoldSection' : 'w.foldSection')
+    const label = t(
+      this.kind === 'item'
+        ? this.folded
+          ? 'w.unfoldItem'
+          : 'w.foldItem'
+        : this.folded
+          ? 'w.unfoldSection'
+          : 'w.foldSection'
+    )
     el.setAttribute('aria-label', label)
     el.title = label
     el.innerHTML = icon('chevron')

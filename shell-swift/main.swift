@@ -136,7 +136,7 @@ let SHELL_TEXT: [String: [String]] = [
     "view.source":      ["源代码模式", "Source Mode"],
     "view.focus":       ["专注模式", "Focus Mode"],
     "view.typewriter":  ["打字机模式", "Typewriter Mode"],
-    "view.toggleFold": ["折叠 / 展开本节", "Fold / Unfold Section"],
+    "view.toggleFold": ["折叠 / 展开", "Fold / Unfold"],
     "view.customOff":  ["停用自定义皮肤", "Disable Custom Theme"],
     "view.theme":       ["主题", "Theme"],
     "theme.system":     ["跟随系统", "System"],
@@ -144,9 +144,11 @@ let SHELL_TEXT: [String: [String]] = [
     "theme.dark":       ["深色", "Dark"],
     "theme.sepia":      ["护眼", "Sepia"],
     "theme.toggleDark": ["切换深色", "Toggle Dark"],
-    "view.actualSize":  ["实际大小", "Actual Size"],
-    "view.zoomIn":      ["放大", "Zoom In"],
-    "view.zoomOut":     ["缩小", "Zoom Out"],
+    // 0.4.1 起这三条缩的是**正文**（字号 + 栏宽），不再是整张网页 —— 名字里点明它，
+    // 免得与「窗口 › 缩放」（那条是真的动窗口）混作一谈
+    "view.actualSize":  ["正文实际大小", "Actual Text Size"],
+    "view.zoomIn":      ["放大正文", "Zoom In Text"],
+    "view.zoomOut":     ["缩小正文", "Zoom Out Text"],
     "view.fullScreen":  ["全屏", "Full Screen"],
     // ---- 窗口 ----
     "menu.window":      ["窗口", "Window"],
@@ -228,7 +230,6 @@ func LF(_ key: String, _ args: [String: String]) -> String {
 
 // MARK: - 注入渲染进程的 bridge（atDocumentStart，先于页面脚本）
 
-/// 页面缩放的上下界（⌘+ / ⌘−）。下界再小就点不中按钮了，上界再大正文一行放不下几个字
 /// 主题模式 → 系统外观。**全仓库唯一一份**（`setAppearance` 与启动首帧共用）。
 /// **护眼按浅色算**：它是一张暖色的纸，配深色标题栏与红绿灯是「上半截深、下半截浅」。
 /// 原先它落在 `else` 里跟随系统，于是系统深色 + 护眼正文 = 首帧先黑一下再变纸色。
@@ -257,18 +258,14 @@ func applyStartupAppearance() {
     NSApp.appearance = appearanceFor(mode)
 }
 
-let ZOOM_MIN: CGFloat = 0.5
-let ZOOM_MAX: CGFloat = 3.0
-
-/// 夹住 + 记住的页面缩放。**菜单那三条（⌘+ / ⌘− / ⌘0）与触控板捏合共用这一条** ——
-/// 各写一遍的话迟早有一边忘了夹（连按十下能把界面缩到点不中任何东西）或者忘了记。
-func applyPageZoom(_ webView: WKWebView, _ z: CGFloat) {
-    let clamped = min(max(z, ZOOM_MIN), ZOOM_MAX)
-    // 捏合每秒来几十个事件，值没变就别写 UserDefaults
-    guard abs(webView.pageZoom - clamped) > 0.0001 else { return }
-    webView.pageZoom = clamped
-    UserDefaults.standard.set(Double(clamped), forKey: "pageZoom")
-}
+/**
+ * 捏合一档有多大（0.4.1）。手势的 `magnification` 是这一小段的增量，攒够这个数
+ * 就发一条 `view:zoom-in/out` 给渲染层 —— **档位表、夹住、记住全在那一侧**
+ * （`ui/zoom.ts`），壳这边只负责把手势翻成「上一档 / 下一档」。
+ *
+ * 0.08 是试出来的：再小，一次轻捏就窜过两三档；再大，得用力捏半天才动一格。
+ */
+let PINCH_STEP: CGFloat = 0.08
 
 let BRIDGE_JS = """
 (() => {
@@ -288,7 +285,7 @@ let BRIDGE_JS = """
 (() => {
   const pending = new Map()
   let seq = 0
-  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [], 'file:changed-externally': [], 'image:dropped': [], 'search:hits': [], 'search:done': [], 'prefs:changed': [] }
+  const listeners = { menu: [], 'file:opened': [], 'folder:opened': [], 'file:changed-externally': [], 'dir:changed': [], 'image:dropped': [], 'search:hits': [], 'search:done': [], 'prefs:changed': [] }
 
   function call(method, args = []) {
     return new Promise((resolve, reject) => {
@@ -344,7 +341,8 @@ let BRIDGE_JS = """
     scratchList: () => call('scratchList'),
     scratchClear: (id) => call('scratchClear', [id]),
     confirmReload: (name) => call('confirmReload', [name]),
-    openTabs: (paths) => call('openTabs', [paths])
+    openTabs: (paths) => call('openTabs', [paths]),
+    watchDirs: (paths) => call('watchDirs', [paths])
   }
 
   function subscribe(event, fn) {
@@ -358,6 +356,7 @@ let BRIDGE_JS = """
     onFileOpened: (fn) => subscribe('file:opened', fn),
     onFolderOpened: (fn) => subscribe('folder:opened', fn),
     onFileChangedExternal: (fn) => subscribe('file:changed-externally', fn),
+    onDirChanged: (fn) => subscribe('dir:changed', fn),
     onImageDropped: (fn) => subscribe('image:dropped', fn),
     onSearchHits: (fn) => subscribe('search:hits', fn),
     onSearchDone: (fn) => subscribe('search:done', fn),
@@ -528,6 +527,14 @@ final class MainWebView: WKWebView {
     /// P2-5：Finder 拖入文件（图片落盘 / .md 开新标签）。由 AppDelegate 处理。
     var dropHandler: (([URL]) -> Bool)?
 
+    /// 0.4.1：把一条菜单动作交给页面（眼下只有捏合缩放在用）。
+    /// 走 `WindowController.send` 那条路而不是自己 `evaluateJavaScript` ——
+    /// 「谁在跟页面说话」保持只有一处
+    var menuHandler: ((String) -> Void)?
+
+    /// 捏合攒下的增量，够一档就发一条（见 `PINCH_STEP`）
+    private var pinchAccum: CGFloat = 0
+
     /**
      * 自检期间**吞掉一切真实按键**。
      *
@@ -555,23 +562,29 @@ final class MainWebView: WKWebView {
     }
 
     /**
-     * 触控板捏合缩放（0.2.x）。
+     * 触控板捏合缩放（0.2.x；0.4.1 改成只缩正文）。
      *
-     * ⌘+ / ⌘− / ⌘0 早就有了（而且会记住、会夹住），可在 macOS 上「两指一捏」才是
-     * 最自然的那一下 —— Safari、预览、地图、Finder 全是这个手势，缺了它就会一直
-     * 有人对着屏幕捏一下然后发现没反应。
+     * ⌘+ / ⌘− 早就有了，可在 macOS 上「两指一捏」才是最自然的那一下 ——
+     * Safari、预览、地图、Finder 全是这个手势，缺了它就会一直有人对着屏幕捏一下
+     * 然后发现没反应。
      *
-     * 走 `pageZoom` 而不是 WKWebView 的 `allowsMagnification`：后者是**视觉放大**
-     * （像举个放大镜，正文不重新折行，还会多出一条横向滚动条），而这个应用要的是
-     * 「字变大、版心跟着重排」，与 ⌘+ 完全同一件事。
+     * **不再动 `pageZoom`**（那是整张网页一起放大：侧栏、标签、状态栏、按钮全跟着
+     * 变粗），也不是 `allowsMagnification`（那是举个放大镜，正文不重新折行还多一条
+     * 横向滚动条）。缩放归渲染层（`ui/zoom.ts`：只乘正文字号与栏宽），这里把手势
+     * 攒成「上一档 / 下一档」发过去 —— **与 ⌘+ 走同一条路、同一张档位表**，
+     * 各算各的话状态栏上迟早出现 133.1% 这种读数。
      *
-     * `magnification` 是这一小段手势的**增量**，所以乘上去而不是加上去 ——
-     * 缩放是比例的事，用加法的话在 0.5 和 3.0 两头的手感差得离谱。
+     * `magnification` 是这一小段手势的增量，所以是累加而不是连乘。
      * 自检下不接：探针里有一批按像素来的断言。
      */
     override func magnify(with event: NSEvent) {
         if smokeAuto { return }
-        applyPageZoom(self, pageZoom * (1 + event.magnification))
+        pinchAccum += event.magnification
+        while abs(pinchAccum) >= PINCH_STEP {
+            let up = pinchAccum > 0
+            pinchAccum += up ? -PINCH_STEP : PINCH_STEP
+            menuHandler?(up ? "view:zoom-in" : "view:zoom-out")
+        }
     }
 
     /// 注册文件 URL 拖入（判断 3：渲染层拿不到真实路径，拖拽由壳接管）
@@ -601,7 +614,9 @@ final class MainWebView: WKWebView {
 // 所以窗口拖拽必须用一个透明的原生 NSView 叠在顶部实现。
 // 高度对应 src/renderer/themes/base.css 的 --drag-strip: 38px，改那边记得同步这里。
 final class DragStripView: NSView {
-    /// 只为读 pageZoom —— 页面缩放后 CSS px 不等于点，挖洞区得跟着缩放
+    /// 只为读 pageZoom —— 页面一缩放 CSS px 就不等于点，挖洞区得跟着换算。
+    /// **0.4.1 起壳不再动 pageZoom（缩放只缩正文），这个数于是恒为 1** ——
+    /// 换算留着是因为它是壳侧唯一正确的写法，而不是因为眼下有人会把它变成别的值
     weak var host: WKWebView?
 
     /// 渲染层报上来的放行区段（契约 v26，CSS px 的 `[左, 右]`，见 `ui/drag-holes.ts`）。
@@ -1799,6 +1814,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 外部变更监听：path → DispatchSource
     var watchers: [String: DispatchSourceFileSystemObject] = [:]
     var lastNotify: [String: Date] = [:]
+    /// 文件树的**目录**监听（契约 v32）。与上面那张分开放：那张认的是「打开着的
+    /// 文档」，两张单子各自更新、报的也是两个不同的事件，混在一起就没法各自撤销
+    var dirWatchers: [String: DispatchSourceFileSystemObject] = [:]
+    /// 目录变更的合并窗：从 Finder 拷一批文件进来是一条条到的
+    var dirNotify: [String: DispatchWorkItem] = [:]
 
     var scratchDir: URL { scratchDirURL() }
 
@@ -1830,6 +1850,58 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             watchers.removeValue(forKey: p)
         }
         for p in paths where watchers[p] == nil { watch(p) }
+    }
+
+    /// 契约 v32：盯着一个**目录**（文件树里已经读进来的那些）。
+    ///
+    /// kqueue 在目录上报的是「这一级的**条目**变了」——
+    /// **不递归**（子目录里的动静得由子目录自己那一份去收，所以渲染层报的是一整张单子），
+    /// **也不看文件内容**（原地改写一个已经在的文件不会吵醒它）。唯一的例外是我们
+    /// 自己：`save` 走 `atomically: true` = 临时文件 + rename，那在目录看来就是条目变了
+    /// —— 所以边打字边自动保存，当前文档所在的这一级每两秒就要被吵醒一次。
+    /// **挡在渲染层**（比对条目清单，一样就不重画），这里不猜「是不是我们自己干的」：
+    /// 猜错一次就是丢掉一次真的外部变更。
+    private func watchDir(_ path: String) {
+        dirWatchers[path]?.cancel()
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { dirWatchers.removeValue(forKey: path); return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self, let src = self.dirWatchers[path] else { return }
+            let data = src.data
+            if data.contains(.rename) || data.contains(.delete) {
+                // 这个目录自己没了 / 改了名：fd 不再指着这个路径，重开一次（同文件那条）。
+                // 重开不上就**别报**——它的消失该由父目录那一份去说（那边收到的才是
+                // 「条目变了」），从这儿报等于让渲染层去读一个已经不在的目录
+                self.watchDir(path)
+                guard self.dirWatchers[path] != nil else { return }
+            }
+            // **尾部去抖**（不是头部节流）：拷一批文件是一条条到的，头部节流会把最后
+            // 几条丢掉 —— 那正好是「树停在半路」。静 300ms 才报，这点延迟人看不出来
+            self.dirNotify[path]?.cancel()
+            let job = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.dirNotify.removeValue(forKey: path)
+                self.webView.evaluateJavaScript(
+                    "window.__shellEmit('dir:changed', \(jsonLiteral(path)))")
+            }
+            self.dirNotify[path] = job
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: job)
+        }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        dirWatchers[path] = src
+    }
+
+    private func updateDirWatchers(_ paths: [String]) {
+        let set = Set(paths)
+        for (p, src) in dirWatchers where !set.contains(p) {
+            src.cancel()
+            dirWatchers.removeValue(forKey: p)
+            dirNotify.removeValue(forKey: p)?.cancel()
+        }
+        for p in paths where dirWatchers[p] == nil { watchDir(p) }
     }
     var pdfPrinter: PDFPrinter?
     /// 0.4.0 还的第三条账：图片落到哪个 assets/（"doc" 文档同级 / "root" 工作区根）。
@@ -1964,15 +2036,16 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
         webView = MainWebView(frame: .zero, configuration: config)
-        // 记住的缩放（见 AppDelegate.setZoom）。**自检下一律 1.0** —— 探针里有一批按
-        // 像素来的断言（拖拽条挖洞区、红绿灯对齐、截图目检），带着上次的缩放跑就全飘了
-        if !smokeAuto {
-            let z = UserDefaults.standard.object(forKey: "pageZoom") as? Double
-            if let z, z > 0 { webView.pageZoom = min(max(CGFloat(z), ZOOM_MIN), ZOOM_MAX) }
-        }
+        // 0.4.1：**壳不再碰 `pageZoom`**（它从此恒为 1）。缩放改成只缩正文，归渲染层
+        // （localStorage `cursive.zoom`，见 `ui/zoom.ts`）—— 页面缩放会把侧栏、标签、
+        // 状态栏、按钮一起放大，而人按 ⌘+ 要的只是「字大一点」。
+        // 老版本记在 UserDefaults 里那份就地清掉：留着也没人读了
+        UserDefaults.standard.removeObject(forKey: "pageZoom")
         if let main = webView as? MainWebView {
             main.enableFileDrop()
             main.dropHandler = { [weak self] urls in self?.handleDroppedFiles(urls) ?? false }
+            // 捏合缩放：手势攒够一档，按菜单那条路发给页面
+            main.menuHandler = { [weak self] action in self?.send(action) }
         }
         webView.navigationDelegate = self
         webView.autoresizingMask = [.width, .height]
@@ -2213,6 +2286,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     func windowWillClose(_ notification: Notification) {
         for src in watchers.values { src.cancel() }
         watchers.removeAll()
+        for src in dirWatchers.values { src.cancel() }
+        dirWatchers.removeAll()
+        for job in dirNotify.values { job.cancel() }
+        dirNotify.removeAll()
         appDelegate?.windowClosed(self)
     }
 
@@ -3036,6 +3113,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             if let paths = args[0] as? [String] { updateWatchers(paths) }
             respond(id, NSNull())
 
+        case "watchDirs":
+            // 契约 v32：文件树报上来「树里缓存着哪几级目录」，壳照着这张单子挂 kqueue
+            if let paths = args[0] as? [String] { updateDirWatchers(paths) }
+            respond(id, NSNull())
+
         case "console":
             FileHandle.standardError.write(((args.map { "\($0)" }.joined(separator: " ")) + "\n").data(using: .utf8)!)
 
@@ -3383,6 +3465,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 标签，那儿本来就该漏给 webview（见 `firstDraggableX`）
             if let container = self.webView.superview,
                let strip = container.subviews.compactMap({ $0 as? DragStripView }).first {
+                // 0.4.1：缩放只缩正文，壳不再碰 pageZoom。这条断言守的是「没人偷偷把它
+                // 改回去」—— 页面那侧看不见 pageZoom，只有原生这儿报得出来
+                obj["pageZoom"] = Double(self.webView.pageZoom)
                 let trafficEnd = self.window.standardWindowButton(.zoomButton)?.frame.maxX ?? 69
                 let dragX = strip.firstDraggableX(after: trafficEnd + 4)
                 obj["dragGapX"] = dragX.map(Double.init) ?? -1
@@ -3401,8 +3486,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                     obj["trafficSize"] = "\(zoomBtn.frame.size)"
                 }
                 // 挖洞：这几个点必须漏给 webview，别处照旧归拖拽。
-                // **坐标是 CSS px，得乘 pageZoom 才是点** —— 缩放是记住的（UserDefaults），
-                // 开发机上留着 1.25 倍跑自检的话，不换算这几条会无端变红
+                // **坐标是 CSS px，得乘 pageZoom 才是点**（0.4.1 起壳不动它，恒为 1；
+                // 换算留着的理由同 `DragStripView.host`）
                 let z = self.webView.pageZoom
                 var passes: [(String, CGFloat)] = [
                     ("tbHoleLeft", 91 * z),                        // 文件树开关的圆心
@@ -3558,7 +3643,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         const counts = {}
         for (const cls of ['cm-lp-image', 'cm-lp-checkbox', 'cm-lp-bullet', 'cm-lp-rule', 'cm-lp-tableview', 'cm-lp-mathview', 'cm-lp-math-inline', 'cm-lp-mermaid', 'cm-lp-codebar', 'cm-lp-toc', 'cm-lp-footnote-ref', 'cm-lp-footnote-def', 'cm-lp-emoji', 'cm-lp-highlight', 'cm-lp-sup', 'cm-lp-sub', 'cm-lp-callout', 'cm-lp-callout-note', 'cm-lp-callout-danger', 'cm-lp-callout-mark', 'cm-lp-callout-more',
           // 0.4.0 还的第一条账：脚注定义区里的行内语法
-          'cm-lp-seg-strong', 'cm-lp-inline-code'])
+          'cm-lp-seg-strong', 'cm-lp-inline-code',
+          // 0.4.1 front matter 属性表：键名一列、数组里每项一颗标签、两条 `---` 收成边
+          'cm-lp-fm-key', 'cm-lp-fm-tag', 'cm-lp-fm-edge'])
           counts[cls] = document.querySelectorAll('.' + cls).length
         // P1-1：KaTeX 字体必须真的加载了（CSP 拦掉的话公式会用系统字体凑合，
         // 肉眼不一定看得出）。fonts.ready 之后任一 KaTeX_* 字体到位即算过
@@ -3966,6 +4053,137 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         await new Promise(r => setTimeout(r, 2200))
         const sampled = window.__cursive.view.state.doc.toString()
         await window.api.save(outPath, sampled, doc.fingerprint)
+        // 0.4.1 折叠一条列表。摆在 kitchen-sink.md 上 —— 它有现成的
+        // 「- 无序项二 / 　- 嵌套项」这一对，而 callout.md（foldProbe 那条）一条列表都没有。
+        //
+        // **必须排在这儿**：再往后 treeProbe 会把新建的文件开成活动标签、跨文件搜索
+        // 那条又会跳到 table.md，`window.__cursive.view` 里就不是这份文档了
+        //（第一版排在后面，indexOf('嵌套项') 当场回 -1）。
+        //
+        // **要害是「手边最近的那一层说了算」**：光标放进嵌套项里按菜单，折起来的
+        // 必须是那条父项，不是它所在的整节。只断言「少了几行」的话，折错一层也是绿的
+        let listFoldProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const v = window.__cursive.view
+            // **看「那一行还在不在屏幕上」，不看行数**：这份文档里有表格、公式、
+            // mermaid，光标一进来它们就回显源码，`.cm-line` 的个数当场多出好几条 ——
+            // 第一版拿行数做判据，折叠明明成了，before(24) 却小于 folded(25)
+            const shown = () => [...document.querySelectorAll('.cm-line')]
+              .some((el) => (el.textContent || '').indexOf('嵌套项') >= 0)
+            const docBefore = v.state.doc.toString()
+            const at = docBefore.indexOf('嵌套项')
+            // **scrollIntoView 是必需的**：跑到这儿时前面的探针早把视口滚到别处了
+            // （实测 scrollTop 1907、viewport [585,1006]，而这张列表在 140 上下）。
+            // CM 只渲染视口，光标那一行例外 —— 不滚过来的话，before 靠「光标恰好在
+            // 嵌套项上」侥幸为真，折完光标挪到父项，那一行就再也不渲染，back 永远是假
+            v.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+            await wait(300)
+            const before = shown()
+            window.__shellEmit('menu', 'view:toggle-fold')
+            await wait(300)
+            const folded = shown()
+            // 折的是哪一条：光标要落在**父项**那一行（子项自己没东西可折，由内而外
+            // 退了一层）。落在「- 嵌套项」上就说明压根没退，落在别处 = 退到整节去了
+            const caretLine = v.state.doc.lineAt(v.state.selection.main.head).text
+            const pill = document.querySelector('.cm-lp-section-more')
+            const pillText = pill ? pill.textContent : null
+            // 药丸点一下展开，那一行要回来。**400ms 不是随手写的**：单独跑这一段 300ms
+            // 就够，而在整条探针链里（前面刚 await 过 2.2s 的自动保存 + 一次落盘）
+            // 300ms 时展开还没画完，back 会假阴性一次
+            if (pill) pill.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+            await wait(400)
+            const back = shown()
+            listFoldProbe = { before, folded, back, caretLine, pillText,
+                              byteSafe: v.state.doc.toString() === docBefore }
+          } catch (e) {
+            listFoldProbe = { err: String(e) }
+          }
+        }
+        // 0.4.1 ⌘+点击 front matter 里的标签 = 拿它去搜整个工作区。夹具头上是
+        // `tags: [markdown, 测试]`，点的是**中文那颗** —— 这条路上最容易错的就是它：
+        // 换成 `\\b测试\\b` 的话一条都搜不到（词边界按 \\w 算，中文两侧没有 \\w）。
+        //
+        // 收尾要把面板关掉、正则开关恢复原样：后面还有跨文件搜索、跨文件替换两条
+        // 探针要用这块地方，而开关一旦留在开着，那两条就是在另一种模式下跑的
+        let tagProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const regexBtn = document.querySelector('.fs-opts button[data-opt="regex"]')
+            const regexBefore = regexBtn ? regexBtn.classList.contains('is-on') : null
+            const chip = [...document.querySelectorAll('.cm-lp-fm-tag')]
+              .find((e) => e.textContent.trim() === '测试')
+            const title = chip ? chip.title : null
+            if (chip) {
+              const r = chip.getBoundingClientRect()
+              const at = { bubbles: true, metaKey: true,
+                           clientX: Math.round(r.x + r.width / 2),
+                           clientY: Math.round(r.y + r.height / 2) }
+              chip.dispatchEvent(new MouseEvent('mousedown', at))
+              // **mouseup 不能省**：`pointer-selection.ts` 在 mousedown 上按下
+              // 「手势期间固定回显」的闸，松手才放。只派 mousedown 的话那个闸一直合着，
+              // 而打字机的归位遇到 `pointerSelection` 非空会直接不滚 ——
+              // 表现是几百行之后 writingProbe.ratio 变成 1.98（该是 0.42），
+              // 一条毫不相干的断言替这儿背锅。标签那颗药丸是 mark 不是 widget，
+              // 挡不住那个闸（widget 走的是 `contenteditable=false` 那条豁免）
+              chip.dispatchEvent(new MouseEvent('mouseup', at))
+            }
+            await wait(1500)
+            const input = document.querySelector('.fs-input')
+            const query = input ? input.value : null
+            const regexOn = !!document.querySelector('.fs-opts button[data-opt="regex"].is-on')
+            const files = [...document.querySelectorAll('.fs-file')].map((e) => e.title || '')
+            tagProbe = { title, query, regexOn, hits: files.length,
+                         self: files.some((f) => f.indexOf('kitchen-sink.md') >= 0) }
+            // 收干净：开关退回去（点标签只改这一次搜索，不该改人存着的偏好）、面板关掉
+            if (regexBefore === false && regexOn)
+              document.querySelector('.fs-opts button[data-opt="regex"]').click()
+            await wait(200)
+            // 外层那个 `sb` 是 #sidebar 这个 DOM 元素，不是 Sidebar 实例 —— 要的是后者
+            window.__cursive.sidebar.closeSearch()
+            await wait(200)
+            tagProbe.cleaned = !document.querySelector('.sb-tree').hidden
+          } catch (e) {
+            tagProbe = { err: String(e) }
+          }
+        }
+        // 0.4.1 正文缩放：⌘+ / ⌘− / ⌥⌘0 现在走渲染层，缩的**只有正文**。
+        // 这条探针要守的正是那个「只」字：正文字号与栏宽跟着变，而状态栏、侧栏
+        // 一个像素都不许动 —— 从前走 `pageZoom`，整张网页一起放大，那才是被换掉的行为。
+        //
+        // 摆在 math.md 上：它的断言全是「渲染出来了没有」，不量像素。
+        // **自己收尾复位到 100%**：后面还有一批按坐标来的断言（打字机归位、挖洞区），
+        // 带着 125% 跑就全飘了（同 CONTEXT 里那条「离开取样态的探针都得自己收尾」）
+        let zoomProbe = null
+        if (path.indexOf('math.md') >= 0) {
+          try {
+            const wait = (ms) => new Promise(r => setTimeout(r, ms))
+            const badge = document.getElementById('status-zoom')
+            const fs = (sel) => getComputedStyle(document.querySelector(sel)).fontSize
+            const shot = () => ({
+              zoom: getComputedStyle(document.documentElement).getPropertyValue('--zoom').trim(),
+              body: fs('.cm-editor'),
+              column: getComputedStyle(document.querySelector('.cm-content')).maxWidth,
+              status: fs('#status-bar'),
+              tree: fs('#sidebar'),
+              badge: badge.textContent
+            })
+            const before = shot()
+            window.__shellEmit('menu', 'view:zoom-in')
+            await wait(120)
+            window.__shellEmit('menu', 'view:zoom-in')
+            await wait(220)
+            const zoomed = shot()
+            // 点状态栏那一格 = 回到 100%（缩着的时候它既是读数也是那颗按钮）
+            badge.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            await wait(220)
+            zoomProbe = { before, zoomed, reset: shot() }
+          } catch (e) {
+            zoomProbe = { err: String(e) }
+          }
+        }
         // P3-1 文件树右键新建 / 删除。放在**取样之后**：新建会把新文件开成活动标签，
         // 早一步跑就把 roundtrip 采成空文件了。只对 kitchen-sink 跑 —— 删除是真的进
         // 废纸篓，没必要每个用例都往里扔一个
@@ -4037,6 +4255,38 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             await clickItem('删除文件')
             deleted = !rowNamed('e2e-改名')
           }
+          // 契约 v32 自动刷新：**绕开这棵树**在盘上动手，看树自己跟不跟得上。
+          // `window.api.save` 是直接写盘（原子写，与别的应用保存没有区别），侧栏完全
+          // 不知情 —— 这正是「外部变更」的定义。三件事一起钉：来了要看见、走了要消失、
+          // 而**我们自己的原子写不该让树重画一次**（自噬那条闸，`sameEntries`）
+          const sbRoot = (document.querySelector('.sb-title') || {}).title || ''
+          const outsider = sbRoot + '/e2e-外来.md'
+          let autoAdded = false
+          let autoWaited = 0
+          let autoGone = false
+          let autoQuiet = null
+          if (sbRoot) {
+            await window.api.save(outsider, '# 外来', doc.fingerprint)
+            // **等它，别在固定时刻采一次样**（同 P0-3 那条）：壳侧还有 300ms 合并窗，
+            // 加上一趟 readDir，够不够取决于机器此刻忙不忙。顶到上限 = 真的没跟上
+            while (!autoAdded && autoWaited < 3000) {
+              await new Promise((r) => setTimeout(r, 100)); autoWaited += 100
+              autoAdded = !!rowNamed('e2e-外来')
+            }
+            // 原样再写一遍：目录条目又变了一次（临时文件 + rename），壳一定会报，
+            // 但清单没变 —— 树不该重画。抓住一行 DOM，`render()` 是 replaceChildren，
+            // 重画过它就不在文档里了
+            const held = document.querySelector('.sb-row')
+            await window.api.save(outsider, '# 外来', doc.fingerprint)
+            await new Promise((r) => setTimeout(r, 800))
+            autoQuiet = document.contains(held) && !!rowNamed('e2e-外来')
+            await window.api.trashItem(outsider)
+            let goneWaited = 0
+            while (!autoGone && goneWaited < 3000) {
+              await new Promise((r) => setTimeout(r, 100)); goneWaited += 100
+              autoGone = !rowNamed('e2e-外来')
+            }
+          }
           // P2-9 完全折叠：先确保真有展开的目录，再点工具栏那颗 —— 深缩进的行该一次全收
           const deep = () => [...document.querySelectorAll('.sb-row')]
             .filter((r) => parseFloat(r.style.paddingLeft || '0') > 4).length
@@ -4058,7 +4308,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 没得可折了就该灰掉 —— 否则按下去毫无反应，用户分不清是坏了还是本来就折着
             disabledAfter: collapseBtn ? collapseBtn.disabled : null
           }
-          treeProbe = { rootMenu, tools, created, rowMenu, renamed, moved, deleted, nested, collapseProbe }
+          treeProbe = { rootMenu, tools, created, rowMenu, renamed, moved, deleted, nested, collapseProbe,
+                        autoAdded, autoWaited, autoQuiet, autoGone }
           // 截图里留着右键菜单，供目检（captureShot 在探针之后跑）
           const shotRow = document.querySelector('.sb-row')
           if (shotRow) {
@@ -4376,7 +4627,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             selection: { anchor: end + 4 },
             userEvent: 'input.type'
           })
-          await sleep(150)
+          // **400ms 不是随手写的**（同 listFoldProbe 那条）：CM 的 activateOnTyping 自带
+          // 100ms 延迟，面板还要再画一帧 —— 150ms 单跑够，整条用例链上（前面刚导过一次
+          // HTML、跑完一整套文件树增删）就不够了，rows 会假阴性成 0。
+          // 实测：kitchen-sink 单独跑十次全绿，接在 img/table 后面跑必红
+          await sleep(400)
           const tip = document.querySelector('.cm-tooltip-autocomplete')
           const rows = tip ? tip.querySelectorAll('li').length : 0
           const first = tip ? (tip.querySelector('li') || {}).textContent || '' : ''
@@ -4946,6 +5201,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           findProbe,
           linkProbe,
           foldProbe,
+          listFoldProbe,
+          tagProbe,
+          zoomProbe,
           replaceProbe,
           skinProbe,
           pngProbe,
@@ -5404,10 +5662,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.addItem(item(L("menu.view.palette"), "view:command-palette", key: "p", modifiers: [.command, .shift]))
         view.addItem(.separator())
         for key in ["source", "focus", "typewriter"] { view.addItem(viewFlagItems[key]!) }
-        // 0.4.0 F1：折叠一节。**不带勾** —— 它不是视图开关，是对光标所在那一节的一次动作。
-        // 不给快捷键：⌥⌘← 那一族在 macOS 上没空位，而这件事鼠标（标题行右边那颗把手）
-        // 与命令面板都够得着
-        view.addItem(item(L("view.toggleFold"), "view:toggle-fold", key: ""))
+        // 0.4.0 F1 折叠一节 / 0.4.1 折叠一条列表。**不带勾** —— 它不是视图开关，
+        // 是对光标手边那一层的一次动作（里层的列表项优先于外层的小节）。
+        //
+        // ⌥⌘[ 是 VS Code 的折叠键位，这份菜单里空着；⇧⌘[ 在「格式」里是无序列表，
+        // 差一个修饰键但不同菜单、不同动作，按错了也不会改文档。**一个键管折与展**：
+        // 这条命令本来就是 toggle，再分出一个「展开」键等于让人记两个
+        view.addItem(item(L("view.toggleFold"), "view:toggle-fold", key: "[", modifiers: [.command, .option]))
         view.addItem(.separator())
         let themeRoot = NSMenuItem(title: L("view.theme"), action: nil, keyEquivalent: "")
         let themeMenu = NSMenu(title: L("view.theme"))
@@ -5429,9 +5690,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 摆在原生菜单里是全部要点：页面被皮肤画成一片空白时，它照样在
         view.addItem(viewFlagItems["customOff"]!)
         view.addItem(.separator())
-        view.addItem(NSMenuItem(title: L("view.actualSize"), action: #selector(resetZoom(_:)), keyEquivalent: "0"))
-        view.addItem(NSMenuItem(title: L("view.zoomIn"), action: #selector(zoomIn(_:)), keyEquivalent: "+"))
-        view.addItem(NSMenuItem(title: L("view.zoomOut"), action: #selector(zoomOut(_:)), keyEquivalent: "-"))
+        // 0.4.1 正文缩放：三条都改走渲染层（缩的是正文字号与栏宽，不再是整张网页）。
+        //
+        // **「实际大小」从 ⌘0 挪到 ⌥⌘0**：⌘0 在「格式」菜单里是「正文」，而 AppKit
+        // 按菜单顺序取第一个匹配、格式排在视图前面 —— 这条 ⌘0 从加进来那天起就是
+        // 死键（判断 1 说的正是这件事）。⌘1–⌘6 是六级标题、⌘0 是正文，那一组更该留着
+        view.addItem(item(L("view.actualSize"), "view:zoom-reset", key: "0", modifiers: [.command, .option]))
+        view.addItem(item(L("view.zoomIn"), "view:zoom-in", key: "+"))
+        view.addItem(item(L("view.zoomOut"), "view:zoom-out", key: "-"))
         view.addItem(.separator())
         // ⌃⌘F 是 macOS 全屏的标准键位。写成裸 "f" 的话就是 ⌘F，与编辑菜单的
         // 「查找」撞车 —— AppKit 按菜单顺序取第一个匹配，查找在前，全屏永远轮不到
@@ -5533,19 +5799,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mi.state = order[i] == mode ? .on : .off
         }
     }
-    /// ⌘+ / ⌘− / ⌘0 的页面缩放。**两件事是后补的**：
-    /// ① **记住**（`pageZoom` 进 UserDefaults，新开的窗口照着来）—— 缩放是「我眼睛
-    ///    今天不舒服」这类设定，每开一次应用都要重按一遍毫无道理；
-    /// ② **夹住**（0.5–3.0）—— 原先没有上下界，连按十下 ⌘− 能把界面缩到点不中任何
-    ///    东西，而缩放本身又是唯一能把它调回来的入口。
-    @objc func zoomIn(_ sender: Any?) { key.map { setZoom($0, $0.webView.pageZoom * 1.1) } }
-    @objc func zoomOut(_ sender: Any?) { key.map { setZoom($0, $0.webView.pageZoom / 1.1) } }
-    @objc func resetZoom(_ sender: Any?) { key.map { setZoom($0, 1.0) } }
-
-    private func setZoom(_ wc: WindowController, _ z: CGFloat) {
-        applyPageZoom(wc.webView, z)
-    }
-
 }
 
 // MARK: - 入口
