@@ -27,6 +27,8 @@ const zh = {
   'status.saving': '正在保存…',
   'status.saveFailed': '保存失败',
   'status.retry': '重试',
+  'status.conflict': '外部已修改',
+  'status.viewDiff': '查看差异',
   'status.source': '源代码',
   'status.preview': '预览',
   'status.detailTitle': '点击查看详细统计',
@@ -209,6 +211,17 @@ const zh = {
   'cmd.checkUpdate': '检查更新',
 
   // ---------- 版本历史（history.ts）----------
+  // 第八节 2 外部修改冲突。三颗按钮各自写明**要丢掉什么** —— 这是整块面板的要点：
+  // 从前那个两按钮弹窗里，人不知道自己按下去会失去什么
+  'cf.title': '文件已在外部被修改',
+  'cf.body': '「{name}」在别处被改过，而这个标签里还有没保存的修改。',
+  'cf.hint': '下面是两份的差异：− 是磁盘上那份、+ 是你手上这份',
+  'cf.same': '两份内容一模一样 —— 只是时间戳变了',
+  'cf.reload': '用磁盘那份（丢弃我的修改）',
+  'cf.keep': '保留我的（覆盖磁盘那份）',
+  'cf.saveAs': '另存我的版本…（两份都留着）',
+  'cf.later': '稍后再说',
+  'cf.kept': '磁盘上那一份已存进版本历史，随时找得回来',
   'hi.title': '版本历史',
   'hi.close': '关闭版本历史',
   'hi.versions': '历史版本',

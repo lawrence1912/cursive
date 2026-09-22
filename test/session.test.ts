@@ -177,7 +177,10 @@ describe('视图与标签的归属（别再把空白文档写进别人的文件�
     const at = lines.flatMap((l, i) =>
       l.includes('view.setState(') && !/^\s*(\/\/|\*|\/\*)/.test(l) ? [i] : []
     )
-    expect(at.length).toBeGreaterThanOrEqual(3)
+    // 两处：`activate()` 与外部变更那条 `adoptDisk()`。第八节 2 之前是三处 ——
+    // 外部变更里「干净就静默重载」与「弹窗选了重新载入」各抄了一遍同样的代码，
+    // 现在合成了 adoptDisk 一处（弹窗本身也换成了那块带差异的冲突面板）
+    expect(at.length).toBeGreaterThanOrEqual(2)
     for (const i of at) {
       expect(lines.slice(i, i + 3).join('\n'), `第 ${i + 1} 行之后没有 viewTabId =`).toMatch(
         /viewTabId = /

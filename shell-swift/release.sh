@@ -341,6 +341,24 @@ if sys.argv[1] == 'table.md':
     # 探针自己收干净了（皮肤退选），否则它会跟着 localStorage 留给后面的用例
     ok = ok and sk.get('cleaned') != 'rgb(1, 2, 3)'
 if sys.argv[1] == 'kitchen-sink.md':
+    # ---- 第八节 2：外部修改冲突 ----
+    # 这条路从前一次都没被自检跑过（原生弹窗的 runModal 会把无人值守的自检卡死）。
+    # 只挂在这一条用例上：它要等过整个自动保存窗口，每条都跑就是白花小一分钟
+    cp = r.get('conflictProbe') or {}
+    ok = ok and cp.get('shown') is True
+    # 面板里两份都看得见：− 是磁盘那份、+ 是我这份（从前那个弹窗上人什么都看不见，
+    # 两个按钮却各丢掉一份内容）
+    ok = ok and cp.get('sawDisk') is True and cp.get('sawMine') is True
+    # 状态栏那一格换成了黄色的「外部已修改 · 查看差异」，而且它带着出口
+    ok = ok and cp.get('statusWarn') is True and cp.get('statusAct') is True
+    # **最要紧的一条**：冲突挂着的时候自动保存真的停住了 —— 等过 2 秒防抖窗口，
+    # 磁盘上还是外面那份。这是整条改动里唯一会真丢东西的地方（从前非活动标签
+    # 只挂一个 ⚠，两秒后照样一声不响地盖掉）
+    ok = ok and cp.get('notOverwritten') is True
+    # 点「保留我的」之后盘上才轮到我这份，而磁盘那份已经先进了版本历史
+    ok = ok and cp.get('resolved') is True and cp.get('diskKept') is True
+    # 收干净了：面板关掉（它是 inset:0 的浮层，留着会挡住后面每一条 elementFromPoint）
+    ok = ok and cp.get('closed') is True
     # ---- 0.4.1 front matter 属性表 ----
     # 夹具头上是 `title: 语料文档` + `tags: [markdown, 测试]`。三条各守一段：
     # 键名两个（title / tags）、标签两颗（数组拆开了才有）、两条 `---` 收成了边

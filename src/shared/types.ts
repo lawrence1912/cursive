@@ -505,8 +505,12 @@ export interface CursiveApi {
   /** 单取一份的正文；快照已被清理掉则返回 null */
   snapshotRead(path: string, id: string): Promise<string | null>
 
-  /** 外部修改确认（脏标签收到外部变更时弹）：'reload' 重载 | 'keep' 保留我的版本 */
-  confirmReload(name: string): Promise<'reload' | 'keep'>
+  /**
+   * **`confirmReload` 已于契约 v34 撤掉**（第八节 2）：脏标签收到外部变更时弹的那个
+   * 原生两按钮弹窗（重载 / 保留我的版本）换成了渲染层自己那块带差异的冲突面板
+   * （`ui/conflict.ts`）—— 人得看得见自己按下去会失去什么，而且要有「两份都留着」
+   * 那条路。别顺手加回来：一个 `NSAlert.runModal()` 还会把无人值守的 E2E 卡死。
+   */
   /** 当前打开的全部文档路径（壳侧据此注册外部变更监听） */
   openTabs(paths: string[]): void
   onFileChangedExternal(fn: (path: string) => void): () => void

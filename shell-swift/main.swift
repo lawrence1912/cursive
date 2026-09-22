@@ -189,11 +189,6 @@ let SHELL_TEXT: [String: [String]] = [
     "dlg.trash.ok":      ["移到废纸篓", "Move to Trash"],
     "dlg.rename":        ["重命名", "Rename"],
     "dlg.create":        ["创建", "Create"],
-    "dlg.reload":        ["文件已在外部被修改", "File Modified Externally"],
-    "dlg.reload.body":   ["{name} 在外部被修改，是否重新载入？保留我的版本将放弃磁盘上的改动。",
-                          "“{name}” was modified externally. Reload it? Keeping your version discards the copy on disk."],
-    "dlg.reload.ok":     ["重新载入", "Reload"],
-    "dlg.reload.keep":   ["保留我的版本", "Keep My Version"],
     "export.embedImages":     ["嵌入图片（单文件）", "Embed images (single file)"],
     "export.embedImages.tip": ["把本地图片转成 data: URI 写进同一个文件；不勾则保留相对路径",
                                "Convert local images to data: URIs inside the same file; uncheck to keep relative paths"],
@@ -344,7 +339,6 @@ let BRIDGE_JS = """
     scratchSave: (id, content, fp) => call('scratchSave', [id, content, fp]),
     scratchList: () => call('scratchList'),
     scratchClear: (id) => call('scratchClear', [id]),
-    confirmReload: (name) => call('confirmReload', [name]),
     openTabs: (paths) => call('openTabs', [paths]),
     watchDirs: (paths) => call('watchDirs', [paths])
   }
@@ -3172,16 +3166,6 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             respond(id, true)
 
-        case "confirmReload":
-            let alert = NSAlert()
-            alert.messageText = L("dlg.reload")
-            alert.informativeText = LF("dlg.reload.body",
-                ["name": args[0] as? String ?? L("doc.untitled")])
-            alert.addButton(withTitle: L("dlg.reload.ok"))
-            alert.addButton(withTitle: L("dlg.reload.keep"))
-            let choice = alert.runModal() == .alertFirstButtonReturn ? "reload" : "keep"
-            respond(id, choice)
-
         case "openTabs":
             if let paths = args[0] as? [String] { updateWatchers(paths) }
             respond(id, NSNull())
@@ -3714,6 +3698,64 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           saveProbe = {
             savedText, savedWarn, dirtyText, blankText, tabsOpen, backWaited, writeFail,
             back: !!backText && words(backText) === words(savedText)
+          }
+        }
+        // 第八节 2：外部修改冲突。**这条路从前一次都没被自检跑过** —— 它走的是一个原生
+        // 两按钮弹窗，而 `NSAlert.runModal()` 会把无人值守的自检直接卡死在那儿（探针
+        // 只走得到「干净标签静默重载」那一支）。换成渲染层自己那块带差异的面板之后它
+        // 终于测得到，而要测的正是那件会**真丢东西**的事：冲突挂着的时候，自动保存
+        // 不许把外面那份盖掉。只挂在 kitchen-sink 一条用例上 —— 它要等过整个自动保存
+        // 窗口，每条用例都跑一遍就是白白多花小一分钟
+        let conflictProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          const cwait = (ms) => new Promise(r => setTimeout(r, ms))
+          const cv = window.__cursive.view
+          const panel = () => document.getElementById('conflict')
+          const diskText = (await window.api.read(path)).content + '\nconflict-disk'
+          // **顺序不能反**：先在编辑器里改一笔（这个标签从此是脏的），再从外面改文件。
+          // 自动保存是「停手 2 秒」，文件监听有 0.8 秒节流 —— 这样冲突会在自动保存
+          // 开火之前落下来。`window.api.save` 直接写盘 = 一次真的外部变更（同契约 v32
+          // 那三条用的手法）
+          cv.dispatch({ changes: { from: cv.state.doc.length, insert: '\nconflict-mine' } })
+          await window.api.save(path, diskText, doc.fingerprint)
+          let opened = 0
+          while (opened < 6000 && !(panel() && !panel().hidden)) { await cwait(100); opened += 100 }
+          const el = panel()
+          const diffText = el ? ((el.querySelector('.hi-diff') || {}).textContent || '') : ''
+          const sEl2 = document.getElementById('status-saved')
+          const statusWarn = sEl2.classList.contains('is-warn')
+          const statusAct = !!sEl2.querySelector('button')
+          // **最要紧的一条**：等过自动保存那 2 秒，磁盘上还得是外面那份
+          await cwait(2600)
+          const held = (await window.api.read(path)).content
+          // 「保留我的」：覆盖之前磁盘那份要先进版本历史，之后盘上才轮到我这份
+          const keepBtn = el ? el.querySelector('button[data-pick="keep"]') : null
+          if (keepBtn) keepBtn.click()
+          let settled = 0
+          let after2 = ''
+          while (settled < 6000) {
+            await cwait(200); settled += 200
+            after2 = (await window.api.read(path)).content
+            if (after2.indexOf('conflict-mine') >= 0) break
+          }
+          let diskKept = false
+          const snaps = await window.api.snapshotList(path)
+          for (const sn of snaps.slice(0, 6)) {
+            const txt = await window.api.snapshotRead(path, sn.id)
+            if (txt && txt.indexOf('conflict-disk') >= 0) { diskKept = true; break }
+          }
+          conflictProbe = {
+            shown: !!(el && !el.hidden), opened,
+            // 面板里两份都看得见（− 是磁盘那份、+ 是我这份）
+            sawDisk: diffText.indexOf('conflict-disk') >= 0,
+            sawMine: diffText.indexOf('conflict-mine') >= 0,
+            // 状态栏那一格换成了黄色的「外部已修改 · 查看差异」
+            statusWarn, statusAct,
+            // 自动保存真的停住了：磁盘上还是外面那份，我这份一个字也没盖上去
+            notOverwritten: held.indexOf('conflict-disk') >= 0 && held.indexOf('conflict-mine') < 0,
+            resolved: after2.indexOf('conflict-mine') >= 0,
+            closed: !!(panel() && panel().hidden),
+            diskKept
           }
         }
         const img = document.querySelector('.cm-lp-image img')
@@ -5483,6 +5525,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           v020,
           tabProbe,
           saveProbe,
+          conflictProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
           tbGutter,

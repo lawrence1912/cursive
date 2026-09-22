@@ -53,6 +53,8 @@
 
 - 渲染进程：`src/renderer`，产物 `out/renderer`，纯 CodeMirror 6 —— **构建链里没有 Electron/Node 依赖**，原生能力一律经 `window.api`
 - IPC 契约 = `window.api`（签名见 `src/shared/types.ts` 的 `CursiveApi`），壳侧 1:1 实现：
+  - 契约 v34（第八节 2 外部修改冲突）：**撤掉 `confirmReload(name)`**。脏标签收到外部变更时弹的那个原生两按钮弹窗（重新载入 / 保留我的版本）换成了渲染层自己那块面板（`ui/conflict.ts`）——**差异摆在正中间**（与版本历史共用 `ui/diff-view.ts` 那份版面），三颗按钮各自写明要丢掉什么，另加第三条出路「另存我的版本…」（谁都不丢，也是绝大多数人真正想要的那条）。壳侧那四条 `dlg.reload*` 文案一并撤掉。顺带解开一处死结：`NSAlert.runModal()` 会把无人值守的 E2E 卡死，所以这条路**从前一次都没被自检跑过**，现在 `conflictProbe` 盯着它（包括那件会真丢东西的事：冲突挂着时自动保存不许覆盖）
+  - 契约 v33（0.4.1 全选）：`edit:select-all` 走渲染层（补记）。理由同 ⌘Z 那条 —— WebKit 自己的 SelectAll 只选得到视口那一屏，见下面「⌘A 同样不许交给 WebKit」
   - 契约 v32（0.4.1 文件树自动刷新）：`watchDirs(paths)` + `onDirChanged(path)`。渲染层报上来「树里**缓存着**哪几级目录」（树根 + 每一个已经读进来的目录，`ui/sidebar.ts` 的 `watchPaths`），壳给每一级挂一个 kqueue（`watchDir`，与「打开着的文档」那张 `watchers` **分两张表**放：两边的集合各自更新、报的也是两个事件）；哪一级的**条目**变了就报哪一级的路径回来，渲染层**只重读那一级**（`refreshDir`）—— 不走 `reload()`，那是「根 + 每个展开目录各一次 IPC 还串着等」，接在一条每两秒就可能来一次的事件上太重。四处分寸：① **按「缓存着的」而不是「展开着的」挂监听** —— 懒加载读过的 children 不会再读第二遍，而「完全折叠」有意留着那份缓存，跟着 `expanded` 盯的话，收起来的那几级会在背后悄悄过期，下次展开给人看的是旧的一层；② **300ms 尾部去抖在壳侧**（从 Finder 拷一批文件是一条条到的；用头部节流会把最后几条丢掉 = 树停在半路）；③ **「是不是我们自己写的」不猜** —— 保存走 `atomically: true` = 临时文件 + rename，在目录看来就是条目变了，边打字边自动保存会让当前文档那一级每两秒报一次；挡法是渲染层比对**条目清单**（`sameEntries`，只看名字与是不是目录），一样就连 render 都不做，而**不是**在壳里开一扇「刚写过就不报」的时间窗 —— 那种窗猜错一次就是丢一次真的外部变更；④ 换层走 `adoptEntries`，**留住还在的节点连同它们读好的 children** —— 整层重建会让展开着的子树因为 children 回到 null 而当场空掉一片。kqueue 在目录上**不递归**（子目录的动静只有子目录自己那份收得到，所以报的是一整张单子而不是树根一个点），**也不看文件内容**（原地改写一个已经在的文件不吵醒它）。拖拽期间收到的先攒着（树在手底下重建 = 落点行被换掉、拖着的那行还可能消失），松手补刷
   - 契约 v31（0.4.0 图片落脚）：`setImageDir(mode)` —— 图片落到「文档同级 assets/」还是「工作区根 assets/」。真相在渲染层的偏好（`PrefValues.imageDir`），壳只记在内存里（同主题 / 语言）。**为什么壳非知道不可**：粘贴走 `pasteImage`（渲染层发起），而 Finder 拖入是壳自己接的（`onImageDropped`）——后者压根不经过渲染层。两边各判一次迟早一边落文档同级、一边落工作区根，所以落脚与「回给渲染层的相对路径」都收在壳侧 `assetsBaseDir` / `assetRelPath` 一处（落在工作区根时回的就是 `../assets/x.png`）
   - 契约 v30（0.4.0 F2 跨文件替换）：`replaceInFiles(targets, replacement)` + `undoReplaceInFiles(token)`。**全应用改动面最大的一个动作**（一次改几十个没打开过的文件），四条约束全在壳侧：① **只改清单里这些处**，每一处带着搜到时的原文，逐字比对过才动，有一处对不上就**整份跳过**（文件在搜完之后被改过时，按行列硬改会改到别处去 —— 那是最坏的一种损坏，因为它看起来成功了）；② 指纹原样（走 `decodeDoc`/`encodeDoc`，与保存同一条路）；③ 改之前每个文件先留一份版本历史快照（契约 v22 的 `saveSnapshot`，与 `snapshotSave` 通道共用一份实现）；④ 壳侧留着改前那几份，`undoReplaceInFiles` 原样写回 —— 状态栏那颗 8 秒撤销。行列坐标与 `SearchHit` 同一套（行 1 起、列按 UTF-16 码元），**同一行多处从右往左改**，否则左边改完右边的列号就失效了
@@ -97,7 +99,7 @@
 
 - `CursiveApi` 新增：`scratchSave(id,content,fp)`（无路径文档静默写
   `~/Library/Application Support/cursive/scratch/<id>.json`）、`scratchList()`、
-  `scratchClear(id)`、`confirmReload(name) → 'reload'|'keep'`、`openTabs(paths)`
+  `scratchClear(id)`、~~`confirmReload(name)`~~（契约 v34 撤掉，换成渲染层的冲突面板）、`openTabs(paths)`
   （壳据此注册外部变更监听）；推送通道新增 `file:changed-externally(path)`
 - **崩溃恢复不许抢焦点**：`scratchList()` 是异步的，而 argv/Finder 那份文件是壳轮询 `__cursive` 就绪后推过来的 —— 谁先到都有可能。恢复前先记下「活动标签是否已有路径」，spawnTab 完再 `activate` 回去；另外过滤启动空白页之后必须校正 `activeId`，否则它悬空 → 后续 `activate()` 既不冻结旧 state 也不更新 `docPath`，状态栏会一直挂着一个已经不存在的文件名（真出现过：三个标签 + 状态栏显示另一个文件）
 - 自动保存：停止输入 2s / 切标签 / 失焦时静默落盘，**必须走 encodeDoc 指纹路径**
@@ -105,7 +107,7 @@
 - 外部变更：壳侧 DispatchSource 监听 openTabs 的所有路径；
   **rename/delete 后必须重开重注册**（rename-replace 保存会让 fd 失效，事件只来一次）；
   0.8s 节流。渲染层收到后：与磁盘一致（自己的自动保存触发）→ 忽略；
-  干净 → 静默重载保留滚动/光标；脏 → confirmReload 弹窗；非活动标签脏 → 标记 ⚠ 失效
+  干净 → 静默重载保留滚动/光标（`adoptDisk`，活动与非活动同一条路）；**脏 = 一次冲突**（契约 v34）：磁盘那份记在 `Tab.conflict` 上、那个文件的自动保存当场停下、标签挂 ⚠、状态栏换成「外部已修改 · 查看差异」，正看着的那一份再把差异面板摆出来 —— 从前非活动标签只标一个 ⚠，两秒后的自动保存照样把外部改动一声不响地盖掉
 - 已知坑：Swift 三引号字符串里的 `\n` 是真实换行 —— 拼进 JS 字符串字面量会变成
   跨行语法错误（callAsyncJavaScript 报 "A JavaScript exception occurred" 且
   try/catch 接不住，因为是 parse 错误）。要写 `\\n`
@@ -441,7 +443,7 @@ CURSIVE_DMG=1 ./shell-swift/release.sh  # 同上，额外出 DMG
 4. ~~打包~~ ✅ `./shell-swift/make-app.sh`（加 `CURSIVE_DMG=1` 连 DMG 一起出）：组装 dist/Cursive.app（Info.plist 含 .md 关联 rank=Default + UTImportedTypeDeclarations 补 mdown/mkd 扩展名、NSHighResolutionCapable，icon 用 build/icon.icns）→ ad-hoc 签名 → hdiutil 打 DMG（暂存目录里带 /Applications 软链，挂载后直接拖）。产物 ~9.7MB（P1 起 mermaid + KaTeX 进包，从 3.5MB 涨上来；都是按需动态 import）。已验证：bundle 内 smoke、`open` 启动、`open -a` 带文档启动。注意：壳的 `findRendererRoot()` 三级查找顺序 Bundle Resources → cwd/out/renderer → exe 相对路径
 5. ~~P0-1 最近文件 + Finder 集成~~ ✅ `NSDocumentController` 系统最近列表（打开/保存时 note）、文件菜单「打开最近」10 项 + 清除、Dock 右键；E2E 断言 `recents≥1`
 6. ~~P0-2 自动保存 + 崩溃恢复~~ ✅ 停输入 2s / 切标签 / 失焦静默落盘（走 `encodeDoc` 指纹路径，E2E 断言字节一致）；无路径文档进 scratch，启动恢复为未命名标签；状态栏「已保存 HH:MM」。**坑**：恢复是异步的，不能抢走 argv/Finder 打开的那份焦点，且过滤启动空白页后必须校正 `activeId`（否则状态栏挂一个不存在的文件名）。release.sh 有专门的竞态用例（`CURSIVE_SMOKE_SCRATCH_DELAY`）
-7. ~~P0-3 外部变更监听~~ ✅ 壳侧 `DispatchSource` 监听 openTabs 全部路径，0.8s 节流；**rename/delete 后必须重开重注册**（rename-replace 保存会让 fd 失效）；渲染层干净则静默重载保留滚动光标，脏则 `confirmReload`，非活动脏标签标 ⚠
+7. ~~P0-3 外部变更监听~~ ✅ 壳侧 `DispatchSource` 监听 openTabs 全部路径，0.8s 节流；**rename/delete 后必须重开重注册**（rename-replace 保存会让 fd 失效）；渲染层干净则静默重载保留滚动光标，脏则记成一次冲突（契约 v34，自动保存当场停下），非活动脏标签标 ⚠
 8. ~~P0-4 删除 Electron~~ ✅ 只留 `src/renderer` + `src/shared`；构建链 = 根 `vite.config.ts`；`scripts/make-icon.mjs` 改为纯 `sips`+`iconutil`（不再依赖 Electron）；README / 本节同步。验收：不装 electron 也能 `npm run build` + `release.sh` 全绿
 
 ### 已完成（非 P0 清单，可插队项）

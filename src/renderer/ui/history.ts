@@ -1,6 +1,6 @@
 import type { Snapshot } from '../../shared/types'
-import { collapse, diffLines, diffStat, type DiffRow } from '../editor/diff'
 import { applyI18n, localeOf, t } from '../i18n'
+import { diffView, escapeHtml } from './diff-view'
 import { icon } from './icons'
 
 /**
@@ -178,46 +178,18 @@ export class History {
   }
 
   private paintDiff(oldText: string): void {
-    const rows = diffLines(oldText, this.current)
-    const stat = diffStat(rows)
-    this.emptyEl.hidden = stat.added + stat.removed > 0
+    // 版面归 `diff-view.ts`（外部修改冲突那块面板用的是同一份）—— 这里只管空态那句话
+    const d = diffView(oldText, this.current)
+    this.emptyEl.hidden = d.html !== ''
     if (!this.emptyEl.hidden) {
       this.emptyEl.textContent = t('hi.same')
       this.diffEl.textContent = ''
       return
     }
-    const chunks = collapse(rows)
-    this.diffEl.innerHTML =
-      `<div class="hi-stat">${escapeHtml(t('hi.stat', { added: stat.added, removed: stat.removed }))}</div>` +
-      chunks
-        .map((c) =>
-          c.skipped
-            ? `<div class="hi-skip">${escapeHtml(t('hi.skipped', { n: c.skipped }))}</div>`
-            : c.rows.map(line).join('')
-        )
-        .join('')
+    this.diffEl.innerHTML = d.html
   }
-}
-
-const SIGN: Record<DiffRow['kind'], string> = { same: ' ', add: '+', del: '−' }
-
-function line(r: DiffRow): string {
-  // 空行也要占一行高，否则连续空行处的差异会挤成一条
-  const text = r.text === '' ? '&nbsp;' : escapeHtml(r.text)
-  return (
-    `<div class="hi-line is-${r.kind}">` +
-    `<span class="hi-no">${r.oldLine ?? ''}</span>` +
-    `<span class="hi-no">${r.newLine ?? ''}</span>` +
-    `<span class="hi-sign">${SIGN[r.kind]}</span>` +
-    `<span class="hi-text">${text}</span></div>`
-  )
 }
 
 function kb(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
-}
-
-/** 这里拼的是 innerHTML，而内容是**用户的文档正文** —— 一个字都不能原样放进去 */
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
 }

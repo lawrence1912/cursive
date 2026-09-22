@@ -2248,6 +2248,45 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
   color: var(--mark-idle);
 }
 
+/* ---------- 第八节 2 外部修改冲突（ui/conflict.ts）----------
+   版面整个借版本历史那一套（`.hi-box` / `.hi-diff` / `.hi-foot`）——
+   同一件事（看两份差在哪儿）在这个应用里只有一个长相。这里只补三样：
+   开头那句话、三颗按钮的横排、以及「次要按钮」这一档（历史那边只有一颗主按钮）。 */
+#conflict {
+  position: fixed;
+  inset: 0;
+  z-index: 320; /* 压在版本历史之上：冲突未决时那块面板不该盖住它 */
+}
+.cf-body {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: var(--fg);
+  font-size: var(--chrome-size);
+  line-height: 1.5;
+}
+.cf-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* 次要按钮：同一个形状、同一个尺寸，只是不上强调色 —— 三颗按钮各丢掉一样东西，
+   唯独「另存我的版本」谁都不丢，强调色留给它 */
+.hi-alt {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
+  cursor: default;
+}
+.hi-alt:hover { background: var(--accent-wash); }
+.hi-restore:focus-visible,
+.hi-alt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---------------------------------------------------------------- 减弱动态效果
    系统设置里开了「减弱动态效果」就把过渡关掉。这份界面上的动效全是「顺手」级别的
    —— 悬停变色、折叠箭头转向、关闭键淡入、专注模式压暗 —— 一条都不承载信息，

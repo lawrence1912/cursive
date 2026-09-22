@@ -56,6 +56,7 @@ import {
 } from './ui/session'
 import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
+import type { ConflictChoice } from './ui/conflict'
 import { note } from './ui/note'
 import { newSaveStatus, SAVING_AFTER, saveLabel, type SaveStatus } from './ui/save-state'
 import { reorderIds, TabBar } from './ui/tabbar'
@@ -539,6 +540,15 @@ interface Tab {
   scratchId?: string
   /** 磁盘文件被外部修改且本标签有未保存改动 */
   stale?: boolean
+  /**
+   * 未决的外部修改冲突（第八节 2）：磁盘上那一份**记在这儿**，等人处理。
+   *
+   * 它挂着的时候，这个文件的**自动保存是停的**（`writeOnce` 那道闸）—— 这是整条
+   * 改动里唯一会真丢东西的地方：从前非活动标签只挂一个 ⚠，两秒后的自动保存照样
+   * 把外部改动一声不响地盖掉。记的是**当时读到的那份字节**而不是「去重新读一次」：
+   * 人看见的差异与最后决定要不要丢掉的，必须是同一份
+   */
+  conflict?: { content: string; fingerprint: FileFingerprint }
   /**
    * 这个标签自己的保存状态（第八节 1）。**归标签不归窗口** —— 从前那句
    * 「已保存 10:23」是一个全局变量，后台标签的自动保存会把它刷成此刻，
@@ -1171,6 +1181,8 @@ interface WriteOpts {
   as?: boolean
   /** 自动保存：不脏就不写，**上一次失败了也不写**（见 `writeOnce` 里那段） */
   auto?: boolean
+  /** 冲突已经当面处理过了，别再拦（只有 `resolveConflict` 传它，见第八节 2） */
+  force?: boolean
 }
 
 /**
@@ -1198,6 +1210,13 @@ function writeTab(t: Tab, opts: WriteOpts = {}): Promise<boolean> {
 
 async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   if (t.id === viewTabId) t.state = view.state
+  // **冲突未决就不许覆盖**（第八节 2）。自动保存直接停下；人自己按的 ⌘S 不是一句
+  // 「不行」就完了 —— 把差异摆出来，他真正想要的三条路都在那块面板上（其中「保留我的」
+  // 会接着把这一次写下去）。从前没有这道闸：外面改了文件，两秒后的自动保存就盖掉了
+  if (t.conflict && !opts.force) {
+    if (!opts.auto) void openConflict(t)
+    return false
+  }
   if (opts.auto) {
     if (!isTabDirty(t)) return true
     // **失败之后自动保存就停下**：磁盘满了、外接盘拔了这类毛病不会因为多试几次就好，
@@ -1283,13 +1302,18 @@ let lastSaveSig = ''
  */
 function renderSave(): void {
   const cur = activeTab()
-  const lab = saveLabel(cur?.save ?? newSaveStatus(), cur ? isTabDirty(cur) : false, Date.now())
+  const lab = saveLabel(
+    cur?.save ?? newSaveStatus(),
+    cur ? isTabDirty(cur) : false,
+    Date.now(),
+    cur?.conflict !== undefined
+  )
   // **没变就一个字节都不动**：这条挂在 `syncStatus` 上，于是每敲一个键都会来一次，
   // 而九成九的相邻两次说的是同一句话。语言切换那条路自己会先把它作废（见 onLangChange）
   const sig = `${cur?.id ?? -1}|${lab.kind}|${'at' in lab ? lab.at : ''}|${'reason' in lab ? lab.reason : ''}`
   if (sig === lastSaveSig) return
   lastSaveSig = sig
-  elSaved.classList.toggle('is-warn', lab.kind === 'failed')
+  elSaved.classList.toggle('is-warn', lab.kind === 'failed' || lab.kind === 'conflict')
   elSaved.title = ''
   switch (lab.kind) {
     case 'none':
@@ -1298,6 +1322,17 @@ function renderSave(): void {
     case 'dirty':
       elSaved.textContent = t('status.unsaved')
       break
+    case 'conflict': {
+      // 冲突挂着 = 这个文件一个字节都没在往下写。那颗「查看差异」是唯一的出口，
+      // 所以它**不自己消失**（同「保存失败」那一格）—— 关掉面板不等于解决
+      const tab = cur!
+      elSaved.replaceChildren(
+        document.createTextNode(t('status.conflict')),
+        ' ',
+        saveAct(t('status.viewDiff'), () => void openConflict(tab))
+      )
+      break
+    }
     case 'saving':
       elSaved.textContent = t('status.saving')
       break
@@ -2023,64 +2058,113 @@ async function handleExternalChange(path: string): Promise<void> {
     return
   }
 
-  if (t.id === activeId) {
-    if (!isTabDirty(t)) {
-      // 干净：静默重载，保留滚动与光标
-      const scroll = view.scrollDOM.scrollTop
-      const sel = view.state.selection
-      t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
-      t.savedDoc = t.state.doc
-      t.fp = disk.fingerprint
-      t.stale = false
-      fingerprint = disk.fingerprint
-      view.setState(t.state)
-      viewTabId = t.id
-      view.dispatch({ selection: sel })
-      requestAnimationFrame(() => {
-        view.scrollDOM.scrollTop = scroll
-      })
-      syncMode()
-      syncStatus(true)
-      updateOutline()
-      return
-    }
-    const choice = await window.api.confirmReload(tabTitle(t))
-    if (choice === 'reload') {
-      const scroll = view.scrollDOM.scrollTop
-      const sel = view.state.selection
-      t.state = createState(disk.content, listener, { dir: dirname(path), sourceMode })
-      t.savedDoc = t.state.doc
-      t.fp = disk.fingerprint
-      t.stale = false
-      fingerprint = disk.fingerprint
-      view.setState(t.state)
-      viewTabId = t.id
-      view.dispatch({ selection: sel })
-      requestAnimationFrame(() => {
-        view.scrollDOM.scrollTop = scroll
-      })
-      syncMode()
-      syncStatus(true)
-      updateOutline()
-    }
-    // 'keep'：保留编辑器版本，不做任何事（后续自动保存会覆盖外部改动）
+  // 干净 → 静默换成磁盘那份（活动标签保留滚动与光标）。这一条与活动不活动无关：
+  // 手上没有未保存的改动，就没有任何东西会丢
+  if (!isTabDirty(t)) {
+    adoptDisk(t, disk)
     return
   }
 
-  // 非活动标签：干净就静默换内容，脏则标记失效
-  if (!isTabDirty(t)) {
-    t.state = createState(disk.content, listener, {
-      dir: dirname(path),
-      sourceMode: t.sourceMode
-    })
-    t.savedDoc = t.state.doc
-    t.fp = disk.fingerprint
-    t.stale = false
+  // **脏 = 一次真正的冲突**（第八节 2）。两份内容都有人要，所以这里一个字节都不动，
+  // 只把磁盘那份记在标签上 —— 记下来之后三件事同时成立：那个文件的自动保存停了
+  // （`writeOnce` 的闸）、标签上挂起 ⚠、状态栏那一格换成「外部已修改 · 查看差异」。
+  // **从前这儿是一个原生两按钮弹窗**（重新载入 / 保留我的版本），两处不对：人看不见
+  // 自己按下去会失去什么，而且没有「两份都留着」那条路。更糟的是非活动标签这一支 ——
+  // 从前只标一个 ⚠ 就完了，两秒后的自动保存照样把外部改动**一声不响地**盖掉
+  t.conflict = { content: disk.content, fingerprint: disk.fingerprint }
+  t.stale = true
+  syncStatus(true)
+  // 正看着的那一份就当场把差异摆出来；别的标签留给 ⚠ 与状态栏，不打断手上的活
+  if (t.id === activeId) await openConflict(t)
+}
+
+/**
+ * 把磁盘上那一份换进标签里（0.2.0 就有的那条「静默重载」，第八节 2 收成一处）。
+ *
+ * 光标**走 `createState` 的 `cursor` 而不是建完再 dispatch 一次选区**：磁盘上那份
+ * 可能比手上这份短，`cursor` 那条路会把位置夹回文档里；而且「文档刚出现的那一刻」
+ * 正是 `adoptTableAtCursor` 认表格的时刻（见 `editor/setup.ts`），晚一步整张表就以
+ * 管道符源码开门。
+ */
+function adoptDisk(tab: Tab, disk: DocPayload): void {
+  const live = tab.id === viewTabId
+  const scroll = live ? view.scrollDOM.scrollTop : tab.scroll
+  const head = live ? view.state.selection.main.head : undefined
+  tab.state = createState(disk.content, listener, {
+    dir: dirname(disk.path),
+    sourceMode: live ? sourceMode : tab.sourceMode,
+    ...(head === undefined ? {} : { cursor: head })
+  })
+  tab.savedDoc = tab.state.doc
+  tab.fp = disk.fingerprint
+  tab.stale = false
+  delete tab.conflict
+  if (!live) {
     syncStatus(true)
-  } else {
-    t.stale = true
-    syncStatus(true)
+    return
   }
+  fingerprint = disk.fingerprint
+  view.setState(tab.state)
+  viewTabId = tab.id
+  requestAnimationFrame(() => {
+    view.scrollDOM.scrollTop = scroll
+  })
+  syncMode()
+  syncStatus(true)
+  updateOutline()
+}
+
+/**
+ * 冲突面板（第八节 2）。**动态 import**，同版本历史 —— 两块面板共用那份 diff
+ * 版面，谁先开谁把它带进来。
+ */
+let conflictPanel: import('./ui/conflict').Conflict | null = null
+
+async function openConflict(tab: Tab): Promise<void> {
+  const c = tab.conflict
+  if (!c) return
+  const { Conflict } = await import('./ui/conflict')
+  conflictPanel ??= new Conflict()
+  // 打开的这一刻现取「我手上这份」：从记下冲突到人点开它，中间可能过了很久
+  const mine = (tab.id === viewTabId ? view.state.doc : tab.state.doc).toString()
+  conflictPanel.open({
+    name: tabTitle(tab),
+    disk: c.content,
+    mine,
+    pick: (choice) => void resolveConflict(tab, choice)
+  })
+}
+
+/**
+ * 三条出路，各自丢掉一样东西 —— 而**每一样都有一份后备**：
+ *
+ * · `reload` 丢的是我的改动 —— 可我的改动此前每两秒就落过一次盘，版本历史里有；
+ * · `keep` 丢的是磁盘那份 —— 所以覆盖**之前先把它存进版本历史**（契约 v22），
+ *   那是这条路上唯一一份会凭空消失的内容，两行代码换一条退路；
+ * · `saveAs` 谁都不丢：我的落到新路径上，原文件留给外面那位改。
+ *
+ * 三条都要**先把 `conflict` 摘掉再去写盘** —— `writeOnce` 那道闸认的就是它，
+ * 不摘的话人点一下按钮，面板又弹回来（而人刚刚已经做过决定了）。
+ */
+async function resolveConflict(tab: Tab, choice: ConflictChoice): Promise<void> {
+  const c = tab.conflict
+  if (!c) return
+  if (choice === 'reload') {
+    adoptDisk(tab, { path: tab.path!, content: c.content, fingerprint: c.fingerprint })
+    return
+  }
+  // 另外两条都要真的写一次盘，所以带 `force` 越过那道闸（人刚刚就是在面板上做的决定）。
+  // **冲突到写成了才算解决**：另存为的面板上点了取消、或者那一发写盘坏了，
+  // 它就得原样挂回去 —— 提前摘掉的话，下一次自动保存会直接盖掉磁盘上那份
+  if (choice === 'keep') {
+    // 覆盖之前把磁盘那份留进版本历史（契约 v22）：它是这条路上唯一一份会凭空消失的内容
+    if (tab.path) await keepSnapshot(tab.path, c.content)
+    if (!(await writeTab(tab, { force: true }))) return
+    note(t('cf.kept'))
+  } else if (!(await writeTab(tab, { as: true, force: true }))) return
+  delete tab.conflict
+  tab.stale = false
+  syncStatus(true)
 }
 
 /**

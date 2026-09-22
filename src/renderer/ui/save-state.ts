@@ -25,6 +25,7 @@ export interface SaveStatus {
 /** 状态栏那一格该显示什么。`none` = 什么都不显示（整格让出去，见 `#status-saved:empty`） */
 export type SaveLabel =
   | { kind: 'none' }
+  | { kind: 'conflict' }
   | { kind: 'dirty' }
   | { kind: 'saving' }
   | { kind: 'saved'; at: number }
@@ -47,6 +48,8 @@ export function newSaveStatus(): SaveStatus {
 /**
  * 三样事实 + 脏不脏 → 状态栏那一格。**顺序本身就是产品判断**：
  *
+ * ⓪ **未决的外部修改冲突**排在最前面 —— 它挂着的时候这个文件一个字节都没往下写，
+ *    人最需要知道的就是这个（而且那一格上那颗「查看差异」是唯一的出口）。
  * ① **失败压倒一切**。它一直挂着直到人处理（重试 / 另存为 / 或者下一次成功写盘把它
  *    顶掉）—— 「保存失败」是这条状态栏上唯一一句不该自己消失的话。
  * ② **正在写**（且慢过门槛）。
@@ -56,7 +59,16 @@ export function newSaveStatus(): SaveStatus {
  * ④ 剩下的才是「已保存 HH:MM」，没落过盘就什么都不说（新开一份空白文档的常态，
  *    没必要在角落里挂一句「未保存」吓人 —— 那时 ③ 也不成立，空文档不脏）。
  */
-export function saveLabel(st: SaveStatus, dirty: boolean, now: number): SaveLabel {
+export function saveLabel(
+  st: SaveStatus,
+  dirty: boolean,
+  now: number,
+  /** 这份文档有一个未决的外部修改冲突（第八节 2）。它挂着的时候写盘是停的 */
+  conflict = false
+): SaveLabel {
+  // **排在失败前面**：冲突挂着的时候一次都没往盘上写，所以「为什么没在保存」
+  // 的答案是它，不是上一次那个失败（何况那时候写都没写，谈不上坏）
+  if (conflict) return { kind: 'conflict' }
   if (st.failure !== null) return { kind: 'failed', reason: st.failure }
   if (st.savingSince !== null && now - st.savingSince >= SAVING_AFTER) return { kind: 'saving' }
   if (dirty) return { kind: 'dirty' }
