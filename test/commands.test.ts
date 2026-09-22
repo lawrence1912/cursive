@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { commandItems, splitLabel } from '../src/renderer/ui/commands'
+import { commandItems, selectAllScope, splitLabel } from '../src/renderer/ui/commands'
 import type { MenuAction } from '../src/shared/types'
 
 /**
@@ -124,5 +124,107 @@ describe('撤销这条键盘入口', () => {
     const listed = new Set<string>()
     commandItems((a) => listed.add(a)).forEach((item) => void item.run())
     expect(listed.has('edit:undo') && listed.has('edit:redo')).toBe(true)
+  })
+})
+
+/**
+ * 全选这条键盘入口（0.4.1 修）。
+ *
+ * 与上面撤销那条同一个病灶：「编辑」菜单里那条全选原先挂 AppKit 的 `selectAll:`，
+ * 沿响应链落进 WKWebView，执行的是 **WebKit 自己那条 SelectAll 编辑命令** ——
+ * 它选的是「编辑宿主里渲染出来的内容」，而 CodeMirror 只把**视口那一段**放进 DOM，
+ * 视口外是 `contenteditable=false` 的 `.cm-gap` 占位块，WebKit 规范化选区两头时
+ * 会跳过它们。于是「全选」只选到一屏：实测 829 行 / 19340 字符的文档，真点一次
+ * 「编辑 ▸ 全选」，选区停在 `0…340` —— 正好是那一刻的视口 `0…339`。
+ * 症状是「⌘A 之后复制 / 删除只拿到当前屏幕上的那一段」，而**短文档一切正常**
+ * （一屏装得下 = 视口就是全文），所以它藏得住。
+ *
+ * 所以这条键必须与 ⌘Z / ⌘D 同款：菜单 → `MenuAction` → 渲染层调 CM 的 selectAll。
+ * Swift 那边没有单测，这里直接扫源码把关；「真的选到了全文」由
+ * `release.sh` 里长文档那一条 E2E（`selectAllProbe`）守着。
+ */
+describe('全选这条键盘入口', () => {
+  const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+
+  it('菜单项走 MenuAction，不再是 AppKit 的 selectAll:', () => {
+    expect(swift).toContain('item(L("menu.edit.selectAll"), "edit:select-all", key: "a")')
+    expect(swift).not.toContain('Selector(("selectAll:"))')
+  })
+
+  it('在契约里，也在面板里（漏一条 = 键是死的）', () => {
+    expect(contractActions()).toContain('edit:select-all')
+    const listed = new Set<string>()
+    commandItems((a) => listed.add(a)).forEach((item) => void item.run())
+    expect(listed.has('edit:select-all')).toBe(true)
+  })
+
+  it('长文档那条 E2E 断言还在（只有它证明得了「选的是全文」）', () => {
+    expect(swift).toContain('selectAllProbe')
+    const sh = readFileSync(new URL('../shell-swift/release.sh', import.meta.url), 'utf8')
+    expect(sh).toContain("s.get('coversAll') is True")
+    expect(sh).toContain("s.get('viewportSmaller') is True")
+    // 0.4.1 修：探针从**非编辑控件**上按 ⌘A，全选之后焦点得回到编辑器
+    expect(sh).toContain("s.get('refocused') is True")
+    expect(swift).toContain("document.getElementById('status-count')")
+  })
+})
+
+/**
+ * 全选之后**焦点要回编辑器**（0.4.1 修）。
+ *
+ * 这一句只能扫源码：它的后果发生在渲染层之外 —— ⌘C / ⌘X 走的是原生 `copy:` /
+ * `cut:`（沿响应链落进 WebKit），而 CodeMirror 只在自己是 activeElement 时才把选区
+ * 写进 DOM。焦点留在文件树上的话，人看着整篇都选中了，复制出来是空的。
+ * 真机那半在 `release.sh` 的 `refocused` 上（jsdom 里没有响应链，测不到）。
+ */
+describe('全选之后的焦点', () => {
+  const main = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8')
+  const at = main.indexOf("case 'edit:select-all'")
+  const block = main.slice(at, main.indexOf("case 'edit:find'", at))
+
+  it('整篇那一支收焦点', () => {
+    expect(at).toBeGreaterThan(0)
+    const doc = block.slice(block.indexOf('default:'))
+    expect(doc).toContain('selectAll(view)')
+    expect(doc, 'view.focus() 丢了的话，⌘A 之后复制是空的').toContain('view.focus()')
+  })
+
+  it('表格格子那座孤岛**不**收 —— 焦点一走，整块表当场换回管道符源码', () => {
+    const island = block.slice(block.indexOf("case 'island'"), block.indexOf('default:'))
+    expect(island).toContain("document.execCommand('selectAll')")
+    expect(island).not.toContain('view.focus()')
+  })
+})
+
+/**
+ * ⌘A 落到哪儿（0.4.1）。判断提成了纯函数，所以这六条**一个窗口都不用开** ——
+ * 三个假元素就够。真机那半边（「选到的确实是整篇文档」）在 `release.sh` 的
+ * `selectAllProbe` 里，它必须有真 WKWebView：CodeMirror 只渲染视口这件事，
+ * jsdom 里不存在（没有布局，整篇都在 DOM 里），在那儿测等于没测。
+ */
+describe('全选落到哪儿', () => {
+  const contentDOM = { tagName: 'DIV', isContentEditable: true } as unknown as Element
+  const el = (tag: string, editable = false) =>
+    ({ tagName: tag, isContentEditable: editable }) as unknown as Element
+
+  it('壳自己的输入框 → 只选那一行字', () => {
+    expect(selectAllScope(el('INPUT'), contentDOM)).toBe('field')
+    expect(selectAllScope(el('TEXTAREA'), contentDOM)).toBe('field')
+  })
+
+  it('表格格子那座孤岛 → 只选这一格（它在 contentDOM 里面，不能按「在不在编辑器里」分）', () => {
+    expect(selectAllScope(el('TD', true), contentDOM)).toBe('island')
+  })
+
+  it('编辑器自己 → 整篇文档', () => {
+    expect(selectAllScope(contentDOM, contentDOM)).toBe('doc')
+  })
+
+  it('焦点在文件树 / 大纲那种不可编辑的地方 → 也是整篇文档', () => {
+    expect(selectAllScope(el('DIV'), contentDOM)).toBe('doc')
+  })
+
+  it('没有焦点元素 → 整篇文档（别在这儿抛）', () => {
+    expect(selectAllScope(null, contentDOM)).toBe('doc')
   })
 })

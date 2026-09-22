@@ -17,6 +17,30 @@ import type { PaletteItem } from './palette'
  * 快捷键那一列是**字面量**，不进字典 —— ⌘N 在中英文里都是 ⌘N。
  */
 
+/**
+ * ⌘A 落到哪儿（0.4.1）。
+ *
+ * **提成纯函数是为了不开窗口就能测** —— 同 `revealChain` / `edgeScroll` 那条路子：
+ * 三条分支的判断全在这儿，`handleMenu` 那边只剩「照着做」，于是 `vitest` 里
+ * 拿三个假元素就能把它们钉死，不必起 WKWebView。
+ *
+ * - `field`：壳自己的 `<input>/<textarea>`（搜索、重命名、设置…）—— 该全选那一行字；
+ * - `island`：表格格子那座 contenteditable 孤岛。它**长在 CM 的 contentDOM 里面**，
+ *   所以不能按「在不在编辑器里」分，只能认「是不是 contentDOM 自己」。那儿该全选
+ *   这一格（与 Excel / Notion 一致），交还给浏览器；
+ * - `doc`：其余一律整篇文档，包括焦点在文件树 / 大纲里的时候。**这一支之后调用方要
+ *   把焦点收回编辑器**（0.4.1 修）：⌘C / ⌘X 走的是原生 `copy:`，而 CodeMirror 只在
+ *   自己是 activeElement 时才把选区写进 DOM —— 不收焦点的话，全选之后复制是空的。
+ */
+export type SelectAllScope = 'field' | 'island' | 'doc'
+
+export function selectAllScope(active: Element | null, contentDOM: Element | null): SelectAllScope {
+  const tag = active?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return 'field'
+  if (active && active !== contentDOM && (active as HTMLElement).isContentEditable) return 'island'
+  return 'doc'
+}
+
 interface Entry {
   action: MenuAction
   labelKey: Key
@@ -57,6 +81,7 @@ const GENERAL: Entry[] = [
 
   { action: 'edit:undo', labelKey: 'cmd.undo', hint: '⌘Z' },
   { action: 'edit:redo', labelKey: 'cmd.redo', hint: '⇧⌘Z' },
+  { action: 'edit:select-all', labelKey: 'cmd.selectAll', hint: '⌘A' },
   { action: 'edit:find', labelKey: 'cmd.find', hint: '⌘F' },
   { action: 'edit:replace', labelKey: 'cmd.replace', hint: '⌥⌘R' },
   { action: 'edit:find-next', labelKey: 'cmd.findNext', hint: '⌘G' },

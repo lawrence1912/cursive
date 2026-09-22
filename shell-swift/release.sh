@@ -15,15 +15,27 @@ echo "==> [2/4] 编译原生壳"
 
 echo "==> [3/4] E2E 九用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 FIX=/tmp/cursive-e2e
-SCRATCH="$HOME/Library/Application Support/cursive/scratch"
+# 自检的应用支持目录**整个搬进临时目录**（0.4.1 修）。从前这儿写的是
+# `$HOME/Library/Application Support/cursive/…`，于是跑一轮发布自检要在开发机上
+# `rm -rf` 真实的版本历史、逐用例清空真实的崩溃恢复草稿、往真实的 themes/ 里
+# 丢一张探针皮肤 —— 那都是这台机器上用户自己的东西，而自检要的只是一个**确定的**
+# 起点，跟它在哪儿无关。壳侧认 `CURSIVE_SMOKE_SUPPORT`（只在 CURSIVE_SMOKE 下生效，
+# 见 main.swift 的 supportBaseURL），`test/smoke-harness.test.ts` 扫源码守着这条。
+SUPPORT=/tmp/cursive-e2e-support
+export CURSIVE_SMOKE_SUPPORT="$SUPPORT"
+rm -rf "$SUPPORT"
+# 整轮结束就收走，**成功失败两条路都走这儿** —— 从前那句收皮肤的 rm 挂在末尾，
+# `set -e` 下任何一条断言红了都走不到，于是失败一次就在真实目录里留下一张 e2e-skin.css
+trap 'rm -rf "$SUPPORT"' EXIT
+SCRATCH="$SUPPORT/cursive/scratch"
 mkdir -p "$SCRATCH"
 # 0.2.0 版本历史：整轮开始前清一次。每份夹具各有自己的目录，不清也不会串，
 # 但清了之后「这一轮留下了几份快照」才是确定的数（同上面清 scratch 的道理）
-rm -rf "$HOME/Library/Application Support/cursive/history"
+rm -rf "$SUPPORT/cursive/history"
 # 0.3.0 T4：给「停用自定义皮肤」放一张认得出来的皮肤（.cm-content 染成 rgb(1,2,3)）。
-# **它落在开发机真实的 themes/ 目录里**（皮肤就是从那儿扫的，没有第二条路），
-# 所以整轮末尾要收走；名字带 e2e- 前缀，谁也不会手写这么一个
-THEMES="$HOME/Library/Application Support/cursive/themes"
+# 皮肤是从应用支持目录的 themes/ 扫的（没有第二条路），那个目录此刻已经是临时的那份；
+# 名字仍带 e2e- 前缀 —— 万一哪天这套隔离又被绕过去，一眼认得出是谁留下的
+THEMES="$SUPPORT/cursive/themes"
 mkdir -p "$THEMES"
 printf '.cm-content { background: rgb(1, 2, 3); }\n' > "$THEMES/e2e-skin.css"
 rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
@@ -329,10 +341,20 @@ if sys.argv[1] == 'kitchen-sink.md':
     tp = r.get('tagProbe') or {}
     ok = ok and not tp.get('err')
     ok = ok and '⌘' in (tp.get('title') or '')
-    # 送进搜索框的那条式子要一字不差：中文标签靠的就是它（`\b` 那种词边界搜不到）
-    ok = ok and tp.get('query') == '(?<=[\\[,\\s])测试(?=[\\],\\s]|$)'
+    # 送进搜索框的那条式子要一字不差：中文标签靠的就是它，中间那三支是**同一个值的
+    # 三种 YAML 写法**（裸 / 单引号 / 双引号）—— 别的文件里写成 `["测试"]` 的同一颗
+    # 也得搜得到，而带转义的写法只有「再编码回去」才配得上（0.4.1 修）
+    ok = ok and tp.get('query') == '(?<=[\\[,\\s])(?:测试|\'测试\'|"测试")(?=[\\],\\s]|$)'
     # 开关得亮着（所见即所搜），而且**至少搜到夹具自己**
     ok = ok and tp.get('regexOn') is True and tp.get('self') is True
+    # 0.4.1 修：侧栏藏着的时候点标签，侧栏自己回来、搜索框拿到焦点
+    #（hiddenBefore 证明这条用例还证明得了东西）
+    ok = ok and tp.get('hiddenBefore') is True and tp.get('revealed') is True
+    ok = ok and tp.get('focused') is True
+    # 0.4.1 修：面板一关，那颗 `.*` 回到人自己那套 —— 临时开的开关不许留下。
+    # 基线由探针自己钉成「关」（否则开发机上那位偏好本来是开的，这条恒真等于没测），
+    # prefKept 则守着「探针跑完，他那位偏好原样还在」
+    ok = ok and tp.get('restored') is True and tp.get('prefKept') is True
     # 收干净了：面板关掉、文件树回来（后面还有两条探针要用这块地方）
     ok = ok and tp.get('cleaned') is True
     # ---- 0.4.1 折叠一条列表 ----
@@ -647,7 +669,9 @@ if sys.argv[1] == 'crlf.md':
     # 撤销那一份：**逐字节回到改之前**
     ok = ok and rd('rep-undo.md') == '# 撤销\n\n这里有一个 待撤销 的词。\n'.encode()
     # 每个被改的文件改前都留了一份历史版本（8 秒那颗撤销过期之后唯一的退路）
-    hist = os.path.expanduser('~/Library/Application Support/cursive/history')
+    # 历史落在**自检专用的那份支持目录**里（脚本头上 export、壳侧 supportBaseURL 认）。
+    # 这条顺带守着隔离本身：哪天壳又把它写回真实目录，这里当场就空了
+    hist = os.path.join(os.environ['CURSIVE_SMOKE_SUPPORT'], 'cursive', 'history')
     for name in ('rep-lf.md', 'rep-crlf.md', 'rep-bom.md'):
         key = hashlib.sha256(('/tmp/cursive-e2e/' + name).encode()).hexdigest()[:16]
         snaps = [f for f in os.listdir(os.path.join(hist, key))
@@ -692,7 +716,7 @@ print('# 长文档（真分页用）\n')
 for i in range(200):
     print('第 %d 段。' % (i + 1) + '中文正文内容，用来把文档撑到好几页。' * 2 + '\n')
 LONG
-rm -f /tmp/cursive-shell-pdf.json
+rm -f /tmp/cursive-shell-pdf.json /tmp/cursive-shell-e2e.json
 CURSIVE_SMOKE=1 CURSIVE_SMOKE_PDF="$FIX/out/long.pdf" ./shell-swift/cursive-shell "$FIX/long.md" 2>/dev/null
 python3 - <<'PAGED'
 import json, os, sys
@@ -714,6 +738,31 @@ print(('PASS ' if ok else 'FAIL ') + 'PDF 真分页 + 书签 '
                                    'headings', 'bookmarks', 'bookmarksReadBack')}))
 sys.exit(0 if ok else 1)
 PAGED
+
+# 0.4.1 修：**⌘A 的去路**。全选原先挂 AppKit 的 `selectAll:`，沿响应链落进 WebKit
+# 自己那条 SelectAll —— 它只认「编辑宿主里**渲染出来**的那部分」，而 CodeMirror 只把
+# 视口那一段放进 DOM。于是长文档按一次全选只选到一屏，⌘A 之后复制 / 删除只拿得到
+# 当前屏幕上的那一段（实测 19340 字符的文档选到 0…340）。
+# **挂在这份夹具上是有理由的**：八个用例的文档都一屏装得下，视口就是全文，
+# 在那儿怎么选都对 —— 这条只有长文档看得见，而长文档只有这一份
+python3 - <<'SELALL'
+import json, sys
+e = json.load(open('/tmp/cursive-shell-e2e.json'))
+# 探针的返回值整个装在 `result` 里（壳侧 `out["result"] = v`），顶层只有
+# source / windows / scratch* 那几个壳自己补的键 —— 读错一层不会报错，
+# 只会永远拿到空字典，于是这条断言恒红。`test/smoke-harness.test.ts` 对着账
+r = e['result']
+s = r.get('selectAllProbe') or {}
+ok = s.get('coversAll') is True
+# 视口确实比全文小，这条用例才证明得了东西（理由见 main.swift 里那段注释）
+ok = ok and s.get('viewportSmaller') is True
+# 0.4.1：焦点先挪到状态栏那颗字数上（awayOK 证明这条用例还证明得了东西），
+# 全选之后必须收回编辑器 —— 否则 ⌘C 走原生 copy: 拿到的是空的
+ok = ok and s.get('awayOK') is True and s.get('refocused') is True
+print(('PASS ' if ok else 'FAIL ') + '全选选的是全文 '
+      + str({k: s.get(k) for k in ('from', 'to', 'docLen', 'viewport', 'awayOK', 'refocused')}))
+sys.exit(0 if ok else 1)
+SELALL
 
 # 崩溃恢复不许抢焦点：种一份 scratch 草稿，再把 scratchList 的应答拖慢到 1.2s，
 # 逼出「文件先到、恢复后到」那条顺序 —— 正常顺序下 scratchList 几毫秒就回来，测不到。
@@ -742,9 +791,7 @@ sys.exit(0 if ok else 1)
 RECOVERY
 rm -f "$SCRATCH"/*.json
 
-# 0.3.0 T4 的那张探针皮肤收走：它落在开发机真实的 themes/ 目录里，
-# 留着的话这台机器的 Cursive 下次启动就多一张来路不明的皮肤
-rm -f "$THEMES/e2e-skin.css"
+# 探针皮肤不必单独收：整个 $SUPPORT 是临时的，退出时那条 trap 一起端走
 
 echo "==> [4/4] 打包"
 ./shell-swift/make-app.sh

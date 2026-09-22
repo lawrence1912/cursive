@@ -177,6 +177,7 @@ const zh = {
   'cmd.exportPng': '导出为长图…',
   'cmd.undo': '撤销',
   'cmd.redo': '重做',
+  'cmd.selectAll': '全选',
   'cmd.find': '查找…',
   'cmd.replace': '查找并替换…',
   'cmd.findNext': '查找下一个',

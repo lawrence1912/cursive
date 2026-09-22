@@ -43,6 +43,26 @@ export type MenuAction =
    */
   | 'edit:undo'
   | 'edit:redo'
+  /**
+   * 全选（0.4.1 修，契约 v33）。**必须走这条通道，不能再挂 AppKit 的 `selectAll:`。**
+   *
+   * 与上面那条 `edit:undo` 是同一个病灶：`selectAll:` 沿响应链落进 WKWebView，
+   * 执行的是 **WebKit 自己那条 SelectAll 编辑命令** —— 它选的是「编辑宿主里
+   * 渲染出来的内容」，而 CodeMirror 只把**视口那一段**放进 DOM，视口外的部分是
+   * `contenteditable=false` 的 `.cm-gap` 占位块。WebKit 把选区两头规范化到
+   * 可见位置时会跳过它们，于是「全选」只选到了一屏。
+   *
+   * 实测（829 行 / 19340 字符，1080×720 窗口，真点「编辑 ▸ 全选」菜单）：
+   * 选区停在 `0…340`，而 `doc.length` 是 `19340` —— 正好是那一刻的视口 `0…339`。
+   * 症状是「⌘A 之后复制 / 删除只拿到当前屏幕上的那一段」，文档越长丢得越多，
+   * 而**短文档一切正常**（一屏装得下 = 视口就是全文），所以它藏得住。
+   *
+   * 现在与 ⌘Z / ⌘D 同款（判断 1）：菜单 → 这个 action → CM 的 `selectAll`。
+   * 两条下放：焦点在壳自己的输入框（搜索、重命名…）里时该全选那一行字；
+   * 焦点在表格格子那座 contenteditable 孤岛里时该全选那一格 —— 与 Excel /
+   * Notion 一致，真选了全文，接着一敲键就把整篇文档换掉了。
+   */
+  | 'edit:select-all'
   | 'edit:find'
   | 'edit:replace'
   | 'edit:find-next'

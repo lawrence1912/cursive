@@ -170,6 +170,7 @@ const en: Record<Key, string> = {
   'cmd.exportPng': 'Export as Image…',
   'cmd.undo': 'Undo',
   'cmd.redo': 'Redo',
+  'cmd.selectAll': 'Select all',
   'cmd.find': 'Find…',
   'cmd.replace': 'Find and Replace…',
   'cmd.findNext': 'Find Next',

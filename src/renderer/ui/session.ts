@@ -134,3 +134,39 @@ export function planRestore(saved: Session, openPaths: readonly string[], launch
     focus: launched ? null : ((saved.tabs[saved.active] ?? saved.tabs[0])?.path ?? null)
   }
 }
+
+/**
+ * 恢复跑完了，到底要不要切标签（0.4.1 修）。回 `null` = **一个都别动**。
+ *
+ * 恢复是异步的：每读一个文件都让出一次事件循环，而第一份文件在第一轮就接管了启动
+ * 那个空白标签、当场进了视图。这段时间人完全可能已经在打字了 —— 于是末尾那一次
+ * `activate` 有两种错法，都是「聪明反被聪明误」：
+ *
+ * ① **落点就是当前这个标签**：`activate` 里「先拿视图当它的内容存下来」那句被
+ *    `cur.id !== id` 挡着（同一个 id 走不到），紧接着 `view.setState(tab.state)`
+ *    就用读盘时那份把人敲进去的字整个盖掉，光标与滚动位置一并回到会话里那个值。
+ *    而这一步本来就没什么可切的 —— 那次接管的 activate 已经把落点摆好了。
+ * ② **人动过文档，落点却是别的标签**：字不会丢（切走时会存下来），但人会被从
+ *    正在打字的那个标签上拽开。会话恢复是**背景行为**，同「别把刚双击打开的那份
+ *    挤下去」是一条规矩的两半。
+ * ③ **人自己切过标签**：同上一条，只是他表达意图的方式是点了一下标签栏而不是打字。
+ *
+ * **两个信号都必须是「抹不平」的那种**：`typed` 从前是拿 `tab.state.doc` 与视图里
+ * 那份一比 —— 可自动保存（停手 2s）与切标签都会把 `tab.state` 重新同步成视图那份，
+ * 一比又相等了，人打过的字于是「不算数」。所以改成**计数**（编辑发生过就再也回不去）
+ * 与**身份比对**（活动标签还是不是恢复自己摆上去的那个），两者都不随时间复原。
+ */
+export function restoreFocus(opts: {
+  /** 会话算出来的落点；null = 没有落点（文件没了 / 一个都没开出来） */
+  focus: number | null
+  /** 此刻的活动标签 */
+  active: number
+  /** 这段时间里人往文档里敲过字吗 */
+  typed: boolean
+  /** 这段时间里人自己切过标签吗（活动标签已经不是恢复摆上去的那个了） */
+  moved: boolean
+}): number | null {
+  if (opts.focus === null || opts.focus === opts.active) return null
+  if (opts.typed || opts.moved) return null
+  return opts.focus
+}

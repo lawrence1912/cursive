@@ -102,6 +102,31 @@ type Status =
   | { kind: 'hits'; truncated: boolean }
 
 /**
+ * 人点了一颗开关（0.4.1 修）。回「他那套」与「临时那套」各自的新值。
+ *
+ * **翻的是他此刻看得见的那一颗**，不是 `opts` 里那一位 —— 那颗 `.*` 亮着往往是因为
+ * 这一次的标签搜索临时把它打开了（`once`），他再点一下要的显然是「关掉」。
+ * 翻 `opts` 的话：`false` 翻成 `true`，按钮纹丝不动（生效值还是 true），
+ * 而 `regex: true` 还顺手写进了他的偏好 —— 一次点击，两件事都反了。
+ *
+ * **只作废这一颗的临时值**，别的留着：点「Aa」是想再加一条大小写敏感，
+ * 不是想把那条正则退回字面量（整条式子当场一个都搜不到，才叫莫名其妙）。
+ */
+export function toggleOpt(
+  opts: SearchOptions,
+  once: Partial<SearchOptions> | null,
+  key: keyof SearchOptions
+): { opts: SearchOptions; once: Partial<SearchOptions> | null } {
+  const seen = { ...opts, ...once }[key]
+  const rest: Partial<SearchOptions> = { ...once }
+  delete rest[key]
+  return {
+    opts: { ...opts, [key]: !seen },
+    once: Object.keys(rest).length ? rest : null
+  }
+}
+
+/**
  * P3-2 跨文件搜索面板（占侧边栏，与文件树二选一显示）。
  *
  * **搜索本身在壳里跑**（契约 v11）：渲染层递归 `readDir` 会让 IPC 往返爆炸。
@@ -118,7 +143,20 @@ export class FileSearch {
   private readonly listEl: HTMLElement
 
   private root: string | null = null
+  /** **人自己按出来的那套开关**。只有那个 `.fs-opts` 点击处理器改得了它，落偏好的也是它 */
   private opts: SearchOptions = { caseSensitive: false, wholeWord: false, regex: false }
+  /**
+   * 这一次搜索**临时**生效的开关（0.4.1 修）：点 front matter 里的标签带出来的
+   * 那条正则要开 `regex`、关 `wholeWord`，但那一下是**点标签带出来的，不是人按的** ——
+   * 不能改掉他存着的那套。从前是直接 `this.opts = {...this.opts, ...opts}` 合进去：
+   * 关掉面板也不还原，而且他下一次随手点任何一颗开关，`saveOpts()` 就把混进去的
+   * `regex:true` 一起写进了偏好。
+   *
+   * 生效到**面板关掉 / 清空 / 他自己动开关**为止；打字不作废 —— 那条式子就摆在
+   * 搜索框里等人接着改（见 `editor/frontmatter.ts` 的 `tagQuery`），改一个字就
+   * 按字面量重搜等于把这条路废了。
+   */
+  private once: Partial<SearchOptions> | null = null
   private token = 0
   private groups: Group[] = []
   private total = 0
@@ -211,7 +249,9 @@ export class FileSearch {
       const btn = (e.target as Element).closest<HTMLElement>('button[data-opt]')
       if (!btn) return
       const key = btn.dataset['opt'] as keyof SearchOptions
-      this.opts = { ...this.opts, [key]: !this.opts[key] }
+      const next = toggleOpt(this.opts, this.once, key)
+      this.opts = next.opts
+      this.once = next.once
       this.saveOpts()
       this.syncOpts()
       this.run()
@@ -282,6 +322,9 @@ export class FileSearch {
 
   hide(): void {
     this.el.hidden = true
+    // 临时那套不跨越一次开关：下次自己开搜索面板，开关还是他留下的样子
+    this.once = null
+    this.syncOpts()
     this.cancel()
   }
 
@@ -304,10 +347,8 @@ export class FileSearch {
    * 不走防抖：这不是打字，是一次明确的动作，等 220ms 只会显得慢。
    */
   search(query: string, opts?: Partial<SearchOptions>): void {
-    if (opts) {
-      this.opts = { ...this.opts, ...opts }
-      this.syncOpts()
-    }
+    this.once = opts ?? null
+    this.syncOpts()
     this.input.value = query
     this.clearBtn.hidden = !query
     clearTimeout(this.timer)
@@ -315,6 +356,8 @@ export class FileSearch {
   }
 
   private clear(): void {
+    this.once = null
+    this.syncOpts()
     this.input.value = ''
     this.clearBtn.hidden = true
     this.reset()
@@ -372,6 +415,11 @@ export class FileSearch {
     btn.textContent = left ? t('fs.replaceAllN', { n: left }) : t('fs.replaceAll')
   }
 
+  /** 此刻真正生效的那套：人自己的 + 这一次临时的 */
+  private effectiveOpts(): SearchOptions {
+    return { ...this.opts, ...this.once }
+  }
+
   private run(): void {
     clearTimeout(this.timer)
     this.reset()
@@ -384,7 +432,7 @@ export class FileSearch {
       return
     }
     this.setStatus({ kind: 'searching' })
-    window.api.searchFiles(this.token, this.root, query, this.opts)
+    window.api.searchFiles(this.token, this.root, query, this.effectiveOpts())
   }
 
   private setStatus(status: Status): void {
@@ -472,8 +520,9 @@ export class FileSearch {
   }
 
   private syncOpts(): void {
+    const eff = this.effectiveOpts()
     for (const btn of this.el.querySelectorAll<HTMLElement>('.fs-opts button')) {
-      const on = this.opts[btn.dataset['opt'] as keyof SearchOptions]
+      const on = eff[btn.dataset['opt'] as keyof SearchOptions]
       btn.classList.toggle('is-on', on)
       btn.setAttribute('aria-pressed', String(on))
     }

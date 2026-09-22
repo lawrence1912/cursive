@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   normalizeZoom,
@@ -76,5 +77,38 @@ describe('zoomLabel', () => {
     expect(zoomLabel(0.67)).toBe('67%')
     expect(zoomLabel(1.25)).toBe('125%')
     expect(zoomLabel(3)).toBe('300%')
+  })
+})
+
+/**
+ * 捏合手势那半（0.4.1 修）住在壳里：`MainWebView.magnify(with:)` 把
+ * `event.magnification` 攒起来，够一档就发一条 `view:zoom-in/out` —— 与 ⌘+ 走同一条路、
+ * 同一张档位表（上面那几条测的就是那张表）。
+ *
+ * 会错的是**账本的生命周期**：累加器从前一路加下去不清零，上一次捏了半档、没够着
+ * 阈值的余量留给了下一次 —— 表现是「轻轻捏一下没反应，隔一会儿再轻轻捏一下，
+ * 字突然跳了一档」。这是 Swift，node 里跑不起来，所以扫源码把两头那两次清零钉住。
+ */
+describe('捏合的余量不许跨手势', () => {
+  const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+  const at = swift.indexOf('override func magnify(with event: NSEvent)')
+  const body = swift.slice(at, swift.indexOf('\n    }', at))
+
+  it('手势开始时从零起算', () => {
+    expect(at).toBeGreaterThan(0)
+    expect(body).toContain('if event.phase.contains(.began) { pinchAccum = 0 }')
+  })
+
+  it('手离开（或被系统打断）也不留账', () => {
+    expect(body).toMatch(/\.isDisjoint\(with: \[\.ended, \.cancelled\]\)[\s\S]*pinchAccum = 0/)
+  })
+
+  it('这个累加器只有这一个函数动得了 —— 别处再加一处就又漏了', () => {
+    const lines = swift
+      .split('\n')
+      .filter((l) => /pinchAccum\s*(\+?=)/.test(l) && !/^\s*(\/\/|\/\/\/)/.test(l))
+    expect(lines.length).toBe(4)
+    const fn = body.split('\n').filter((l) => /pinchAccum\s*(\+?=)/.test(l))
+    expect(fn.length).toBe(4)
   })
 })

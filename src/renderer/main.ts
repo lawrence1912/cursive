@@ -2,7 +2,7 @@ import './themes/base.css'
 import './themes/live-preview.css'
 // katex 的 CSS 不在这里 —— 它跟着 JS 一起躺在懒加载的 editor/live-preview/katex.ts 里（P4-6②）
 
-import { redo, undo } from '@codemirror/commands'
+import { redo, selectAll, undo } from '@codemirror/commands'
 import { findNext, findPrevious, openSearchPanel, selectNextOccurrence } from '@codemirror/search'
 import { EditorView } from '@codemirror/view'
 import { EditorState, type Text, type TransactionSpec } from '@codemirror/state'
@@ -50,6 +50,7 @@ import {
   loadSession,
   packSession,
   planRestore,
+  restoreFocus,
   saveSession,
   type SessionTab
 } from './ui/session'
@@ -64,7 +65,8 @@ import { tagHost } from './editor/frontmatter'
 import { Outline } from './ui/outline'
 import { FormatBar, FORMAT_BAR_SPACE, FORMAT_BAR_COLLAPSED_SPACE } from './ui/format-bar'
 import { icon, type IconName } from './ui/icons'
-import { commandItems } from './ui/commands'
+import { saveDirtyTabs } from './ui/closing'
+import { commandItems, selectAllScope } from './ui/commands'
 import { openMenu, type MenuItem } from './ui/menu'
 import { Palette, type PaletteItem, type PaletteQuery } from './ui/palette'
 import { Prefs } from './ui/prefs'
@@ -102,8 +104,24 @@ const elZoom = document.getElementById('status-zoom')!
 
 let sourceMode = false
 
+/**
+ * 文档被改过多少次（0.4.1 修）。**只增不减**，谁也抹不平它 —— 会话恢复靠它判断
+ * 「这段时间里人打过字没有」。从前那个判断是拿 `tab.state.doc` 与视图里那份一比，
+ * 可自动保存（停手 2s）与切标签都会把 `tab.state` 同步成视图那份，一比又相等了，
+ * 人打过的字于是不算数。计数没有这个毛病：发生过就是发生过
+ */
+let docEdits = 0
+
+/**
+ * 标签被激活过多少次（0.4.1 修）。同样**只增不减** —— 会话恢复靠它判断
+ * 「这段时间里人自己切过标签没有」。**不能拿「活动标签是不是还是那个」比对**：
+ * 切走再切回来（A → B → A）身份一模一样，痕迹却抹掉了，而人明明动过手
+ */
+let activations = 0
+
 const listener = EditorView.updateListener.of((u) => {
   if (u.docChanged) {
+    docEdits += 1
     syncStatus()
     scheduleCount()
     scheduleAutosave()
@@ -538,8 +556,24 @@ function tabTitle(tab: Tab): string {
   return tab.path ? basename(tab.path).replace(/\.(md|markdown)$/i, '') : t('app.untitled')
 }
 
+/**
+ * 视图里此刻装的是**哪个标签**的 state（0.4.1 修）。
+ *
+ * 从前这件事是「推」出来的：凡是 `t.id === activeId` 就假定视图里装的是它。
+ * 那个假定破过一次，代价是一整份文件 —— 会话恢复用 `spawnTab(focus=false)`
+ * 接管启动那个空白标签时只换了标签的 state/path，**视图还停在空白文档上**，
+ * 而 `activeId` 一直指着它；随后 `activate(别的标签)` 那句 `cur.state = view.state`
+ * 就把空白文档当成了这份文件的内容，静默落盘写成 0 字节
+ * （2026-09-22 真丢了文件：会话里排第一、又不是活动标签的那一份）。
+ *
+ * 现在它是**记下来的**：只有这三处 `view.setState` 能改它，凡是要拿视图当某个
+ * 标签的内容，一律先问它。`activeId` 管的是「哪个标签是当前的」，与「视图里装着谁」
+ * 是两件事 —— 绝大多数时候相同，而出事的正是不同的那一瞬。
+ */
+let viewTabId: number | null = null
+
 function isTabDirty(t: Tab): boolean {
-  const doc = t.id === activeId ? view.state.doc : t.state.doc
+  const doc = t.id === viewTabId ? view.state.doc : t.state.doc
   return !doc.eq(t.savedDoc)
 }
 
@@ -617,7 +651,12 @@ function spawnTab(
   state: EditorState,
   path: string | null,
   fp: FileFingerprint,
-  focus = true
+  focus = true,
+  /**
+   * 恢复出来的滚动位置。**必须在这儿给**：接管空白页那一次 `activate` 就在下面几行，
+   * 而调用方拿到返回值才写得上 `tab.scroll` —— 晚一步，那次 activate 把视图滚到 0
+   */
+  scroll = 0
 ): Tab {
   // 启动时的空白首标签直接复用，避免「打开一个文件却多出一个空标签」
   const pristine = tabs.find(
@@ -628,10 +667,16 @@ function spawnTab(
     pristine.path = path
     pristine.fp = fp
     pristine.savedDoc = state.doc
-    if (focus) activate(pristine.id)
+    pristine.scroll = scroll
+    // **背景接管也要走 activate**（0.4.1 修）：`focus=false` 是为了省掉会话恢复里
+    // 那 N-1 次白做的 `view.setState`，但被接管的要是**当前这个空白标签**，
+    // 不换视图就等于让 `activeId` 指着新文件、视图里却还是那份空白文档 ——
+    // 接下来任何一次落盘都会把空白当成它的内容写进去（见 `viewTabId` 那段）。
+    // 这一次 activate 至多发生一次（空白标签只有一个），省下的那 N-1 次还在
+    if (focus || pristine.id === activeId) activate(pristine.id)
     return pristine
   }
-  const t: Tab = { id: nextId++, path, fp, state, savedDoc: state.doc, scroll: 0, sourceMode }
+  const t: Tab = { id: nextId++, path, fp, state, savedDoc: state.doc, scroll, sourceMode }
   tabs.push(t)
   if (focus) activate(t.id)
   return t
@@ -664,19 +709,22 @@ function markFirstPaint(): void {
 function activate(id: number): void {
   const cur = tabs.find((t) => t.id === activeId)
   if (cur && cur.id !== id) {
-    cur.state = view.state
-    cur.scroll = view.scrollDOM.scrollTop
+    // 只有视图里装的确实是它，才能拿视图当它的内容（见 `viewTabId`）
+    if (cur.id === viewTabId) cur.state = view.state
+    if (cur.id === viewTabId) cur.scroll = view.scrollDOM.scrollTop
     cur.sourceMode = sourceMode
     void flushTabAutosave(cur)
   }
   // 局部变量不能再叫 t —— 会遮住 i18n 的 t()，下面那句 `t('app.untitled')` 就成了「调用一个 Tab」
   const tab = tabs.find((x) => x.id === id)
   if (!tab) return
+  activations += 1
   activeId = id
   docPath = tab.path
   fingerprint = tab.fp
   sourceMode = tab.sourceMode
   view.setState(tab.state)
+  viewTabId = tab.id
   requestAnimationFrame(() => {
     view.scrollDOM.scrollTop = tab.scroll
   })
@@ -705,7 +753,7 @@ function activate(id: number): void {
 async function closeTab(id: number, discard = false): Promise<boolean> {
   const t = tabs.find((x) => x.id === id)
   if (!t) return false
-  if (t.id === activeId) t.state = view.state
+  if (t.id === viewTabId) t.state = view.state
 
   if (!discard && isTabDirty(t)) {
     const choice = await window.api.confirmDiscard(tabTitle(t))
@@ -1078,7 +1126,17 @@ linkHost.note = note
 // 0.4.1：⌘+点击 front matter 里的标签 = 拿它去搜整个工作区。**不建索引**，
 // 走的就是 ⇧⌘F 那条路（见 editor/frontmatter.ts 里为什么只做到这一步）
 tagHost.search = (tag, query) => {
-  if (sidebar.searchFor(query, { regex: true })) note(t('note.tagSearch', { tag }))
+  // 侧栏藏着的时候也得看得见结果（0.4.1 修）：搜索面板占的就是侧栏那块地方，
+  // 不请回来的话面板开在一个 `display:none` 的子树里 —— 人点了一颗标签，
+  // 除了状态栏那一句回执之外什么都没发生。**必须在 searchFor 之前**：
+  // 它会给搜索框上焦点，而 display:none 的东西聚不上。
+  // 没有工作区时不请（那时 searchFor 回 false）—— 不为一次落空的搜索弹侧栏
+  if (sidebar.treeRoot && !sidebar.visible) toggleSidebar()
+  // `regex` 开、`wholeWord` **明确关**：那条式子自带前后界（`(?<=[\[,\s])…`），
+  // 而整词是在整条式子外面裹一对 `\b` —— 裹上之后 `c++`、`C#` 这类以非词字符
+  // 收尾的标签一条都匹配不到（尾巴上的 `\b` 落在 `+` 与 `,` 之间，两边都不是词字符）。
+  // 两个开关都是**这一次**的，不进他存着的偏好（见 `ui/file-search.ts` 的 `once`）
+  if (sidebar.searchFor(query, { regex: true, wholeWord: false })) note(t('note.tagSearch', { tag }))
   else note(t('note.tagNoFolder'))
 }
 
@@ -1209,6 +1267,11 @@ function flushSession(): void {
  */
 async function restoreSession(): Promise<void> {
   if (selfCheck) return
+  // **基线在第一个 await 之前就记下**：下面问工作区根是一趟 IPC 往返，读会话是一次
+  // localStorage —— 这段时间编辑器已经装着文档、也已经有焦点了，人完全可能正在打字。
+  // 记晚一步，那几个字就被算进基线里，末尾照样把他拽走（0.4.1 修的第三版）
+  const editsBefore = docEdits
+  const actsBefore = activations
   sessionRoot = await window.api.workspaceRoot()
   if (!sessionRoot) return
   const saved = loadSession(sessionStore, sessionRoot)
@@ -1220,9 +1283,15 @@ async function restoreSession(): Promise<void> {
     keep !== null
   )
   const where = new Map(saved.tabs.map((t) => [t.path, t]))
+  /**
+   * 恢复**自己**激活过几次。接管启动空白页那一次会当场 `activate`，至多发生一次
+   * （空白标签只有一个）—— 末尾拿总数减掉它，剩下的就是人自己切的
+   */
+  let selfActs = 0
   for (const path of plan.open) {
     const doc = await window.api.read(path).catch(() => null)
     if (!doc) continue // 文件没了（改名 / 删了 / 外接盘没挂）就跳过这一条
+    const st = where.get(path)
     const tab = spawnTab(
       createState(doc.content, listener, {
         dir: dirname(doc.path),
@@ -1230,19 +1299,35 @@ async function restoreSession(): Promise<void> {
         // 光标要在**建 state 的时候**就给：建完再 update 一次的话，「光标落在表里」
         // 这件事已经错过了 adoptTableAtCursor，那张表会以管道符源码的样子开门。
         // 光标夹回文档里由 createState 做：磁盘上这份文件可能在上次之后被别的程序改短了
-        cursor: where.get(path)?.cursor
+        cursor: st?.cursor
       }),
       doc.path,
       doc.fingerprint,
-      false
+      false,
+      // 滚动位置也在这儿给：第一份文件会就地接管启动那个空白标签并**当场**进视图，
+      // 返回之后再写 `tab.scroll` 就晚了一步（那次 activate 已经把视图滚到 0）
+      st?.scroll ?? 0
     )
-    const st = where.get(path)
-    if (st) tab.scroll = st.scroll
+    // 接管空白页那一次会当场 activate；别的都开在背景里，不动活动标签
+    if (tab.id === activeId) selfActs += 1
   }
   // 落点：启动那份文档优先，其次是会话里的活动标签，再不行就手上还剩的最后一个
   const target = plan.focus ? tabs.find((t) => t.path === plan.focus)?.id : undefined
   const focus = keep ?? target ?? (tabs.length ? tabs[tabs.length - 1]!.id : null)
-  if (focus !== null && tabs.some((t) => t.id === focus)) activate(focus)
+  // **这段时间里人可能已经动过手了**（0.4.1 修）：读文件是异步的，每读一个让出一次
+  // 事件循环，而第一份文件在第一轮就接管了空白标签、进了视图。要不要切、切到哪儿归
+  // `restoreFocus` 判断（三种错法都写在它那儿）。这里只负责把两个**抹不平**的信号
+  // 交给它：打过字（计数只增不减）、换过标签（活动标签已经不是恢复摆的那个了）。
+  // 拿「`tab.state` 与视图里那份一不一样」当信号是不行的 —— 自动保存与切标签都会
+  // 把两者重新同步，人打过的字于是不算数
+  const next = restoreFocus({
+    focus: focus !== null && tabs.some((t) => t.id === focus) ? focus : null,
+    active: activeId,
+    typed: docEdits !== editsBefore,
+    // 总激活次数减掉恢复自己那次 —— 多出来的每一次都是人自己点的
+    moved: activations - actsBefore > selfActs
+  })
+  if (next !== null) activate(next)
   else syncStatus(true)
 }
 
@@ -1259,7 +1344,7 @@ function scheduleAutosave(): void {
 
 /** 静默落盘一个标签：有路径走 save，无路径进 scratch */
 async function flushTabAutosave(t: Tab): Promise<void> {
-  if (t.id === activeId) t.state = view.state
+  if (t.id === viewTabId) t.state = view.state
   if (!isTabDirty(t)) return
   if (t.path) {
     const content = t.state.doc.toString()
@@ -1507,14 +1592,41 @@ async function handleMenu(action: MenuAction): Promise<void> {
       cycleTab(-1)
       break
     case 'file:save-and-close': {
-      // 关窗语义：所有脏标签都落盘；任何一个被取消就中止关闭
+      // 关窗语义：所有脏标签都落盘；任何一个被取消就中止关闭。
+      // 循环本身在 `ui/closing.ts`（提出去是为了能测那三件时序上的事）
       const cur = activeTab()
-      if (cur) cur.state = view.state
-      for (const t of tabs.filter((x) => isTabDirty(x))) {
-        const res = await window.api.save(t.path, t.state.doc.toString(), t.fp)
-        if (!res) return
-        t.savedDoc = t.state.doc
+      if (cur && cur.id === viewTabId) cur.state = view.state
+      let saved = 0
+      let done = false
+      try {
+        done = await saveDirtyTabs(
+          tabs.filter((x) => isTabDirty(x)),
+          { save: window.api.save, scratchClear: (id) => void window.api.scratchClear(id) },
+          (tb) => tb.state.doc.toString(),
+          (tb, path) => {
+            saved += 1
+            tb.savedDoc = tb.state.doc
+            // 活动标签要是刚在保存面板里拿到路径，`docPath` 也得跟上 ——
+            // 下一句 syncStatus 报的就是它
+            if (tb.id === activeId) docPath = path
+            // 写进真实路径就留一份快照（契约 v22，同 `save()` 与自动保存那两条路）
+            void keepSnapshot(path, tb.state.doc.toString())
+          }
+        )
+      } finally {
+        // **没存完就一定要重新同步脏状态**：壳侧那个 dirty 是一个全局位，前面几次
+        // 成功保存已经把它清零了（`main.swift` 的 save 分支）—— 不同步的话，下一次
+        // 关窗 `windowShouldClose` 直接放行，剩下那几个标签的改动一声不响地没了。
+        // **走 finally 而不是 `if (!done)`**：取消（`save` 回 null）只是两条路里的一条，
+        // 另一条是**写盘失败**（壳侧 reject：磁盘满、外接盘拔了、权限没了）——
+        // 那时 `await` 直接抛出去，`if` 那一支根本执行不到，而壳那边已经是「干净」了。
+        // 异常照旧往上抛（不吞），控制台要看得见是哪一份写坏了
+        if (!done) {
+          if (saved) markSaved() // 一个都没存成就别亮「已保存 HH:MM」，那是句假话
+          syncStatus(true)
+        }
       }
+      if (!done) return
       window.api.confirmClose()
       break
     }
@@ -1551,6 +1663,31 @@ async function handleMenu(action: MenuAction): Promise<void> {
       // 抢焦点会把整块表当场换回管道符源码。撤销本来也不需要焦点，
       // 事务自带 scrollIntoView，改到哪儿看得见
       ;(action === 'edit:undo' ? undo : redo)(view)
+      break
+    }
+    case 'edit:select-all': {
+      // 为什么全选也得走菜单这条路，见 `MenuAction` 里 'edit:select-all' 那段；
+      // 「落到哪儿」的判断在 `selectAllScope`（提成纯函数是为了不开窗口就能测）
+      const el = document.activeElement
+      switch (selectAllScope(el, view.contentDOM)) {
+        case 'field':
+          ;(el as HTMLInputElement | HTMLTextAreaElement).select()
+          break
+        case 'island':
+          // 表格格子那座 contenteditable 孤岛：交还给浏览器选这一格，**别抢焦点** ——
+          // 焦点一走，那块表当场换回管道符源码
+          document.execCommand('selectAll')
+          break
+        default:
+          selectAll(view)
+          // **这一支要抢焦点**（0.4.1 修）：选区是状态、焦点不是 —— 撤销那条因此
+          // 不抢。可 ⌘C / ⌘X 走的是原生 `copy:` / `cut:`（沿响应链落进 WebKit，
+          // 根本不经渲染层），而 CodeMirror **只在自己是 activeElement 时**才把选区
+          // 写进 DOM。焦点留在文件树 / 大纲 / 状态栏上的话，⌘A 之后那一下复制
+          // 拿到的是空的，而人明明看见整篇都选中了。
+          // 上面那条「抢焦点会掀翻表格」只对孤岛成立，它已经提前走掉了
+          view.focus()
+      }
       break
     }
     case 'edit:find':
@@ -1717,7 +1854,7 @@ async function handleExternalChange(path: string): Promise<void> {
     syncStatus(true)
     return
   }
-  const curText = t.id === activeId ? view.state.doc.toString() : t.state.doc.toString()
+  const curText = t.id === viewTabId ? view.state.doc.toString() : t.state.doc.toString()
   // 与磁盘一致 → 是我们自己的自动保存触发的监听事件，忽略
   if (encode(curText, t.fp) === encode(disk.content, disk.fingerprint)) {
     t.stale = false
@@ -1736,6 +1873,7 @@ async function handleExternalChange(path: string): Promise<void> {
       t.stale = false
       fingerprint = disk.fingerprint
       view.setState(t.state)
+      viewTabId = t.id
       view.dispatch({ selection: sel })
       requestAnimationFrame(() => {
         view.scrollDOM.scrollTop = scroll
@@ -1755,6 +1893,7 @@ async function handleExternalChange(path: string): Promise<void> {
       t.stale = false
       fingerprint = disk.fingerprint
       view.setState(t.state)
+      viewTabId = t.id
       view.dispatch({ selection: sel })
       requestAnimationFrame(() => {
         view.scrollDOM.scrollTop = scroll

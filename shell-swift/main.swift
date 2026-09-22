@@ -532,7 +532,9 @@ final class MainWebView: WKWebView {
     /// 「谁在跟页面说话」保持只有一处
     var menuHandler: ((String) -> Void)?
 
-    /// 捏合攒下的增量，够一档就发一条（见 `PINCH_STEP`）
+    /// 捏合攒下的增量，够一档就发一条（见 `PINCH_STEP`）。
+    /// **一次手势一本账**：`magnify(with:)` 在手势开始与结束时各清一次零，
+    /// 不清的话不足一档的余量会泄漏到下一次捏合（0.4.1 修）
     private var pinchAccum: CGFloat = 0
 
     /**
@@ -579,12 +581,19 @@ final class MainWebView: WKWebView {
      */
     override func magnify(with event: NSEvent) {
         if smokeAuto { return }
+        // **每一次手势各算各的**（0.4.1 修）：这个累加器从前一路加下去不清零，
+        // 上一次捏了半档、没够着阈值的那点余量会留给下一次 —— 表现是「轻轻捏一下
+        // 没反应，隔一会儿再轻轻捏一下，字突然跳了一档」，而人根本不觉得自己捏够了。
+        // 两头各清一次：`.began` 管「这一次从零起算」，`.ended` / `.cancelled`
+        // 管「手离开了就不留账」（手势被系统打断时只来后者）
+        if event.phase.contains(.began) { pinchAccum = 0 }
         pinchAccum += event.magnification
         while abs(pinchAccum) >= PINCH_STEP {
             let up = pinchAccum > 0
             pinchAccum += up ? -PINCH_STEP : PINCH_STEP
             menuHandler?(up ? "view:zoom-in" : "view:zoom-out")
         }
+        if !event.phase.isDisjoint(with: [.ended, .cancelled]) { pinchAccum = 0 }
     }
 
     /// 注册文件 URL 拖入（判断 3：渲染层拿不到真实路径，拖拽由壳接管）
@@ -1743,6 +1752,9 @@ var recoverableScratch: Set<String> = []
 /// `CURSIVE_SMOKE_DISCARD`）、**不碰剪贴板**、以及 `MainWebView` 里**吞掉真实按键**。
 /// 全局而不是某个类的私有属性 —— `MainWebView` 也要用，而它不是 `WindowController`
 let smokeAuto = ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil
+/// `CURSIVE_SMOKE_QUIET=1`：自检时**不抢前台**（0.4.1）。只在自检下有意义，理由见
+/// `makeKeyAndOrderFront` 那一处；`release.sh` 不许设它。
+let smokeQuiet = smokeAuto && ProcessInfo.processInfo.environment["CURSIVE_SMOKE_QUIET"] != nil
 
 /// E2E 用（0.2.0 复制为富文本）：自检下不写剪贴板，只记下 [html 长度, 纯文本长度]
 var smokeCopyHtml: [Int] = []
@@ -1766,10 +1778,31 @@ var smokeUpdateCalls = 0
 var scratchQueries = 0
 var scratchHandouts = 0
 
+/// 应用支持目录的根（`~/Library/Application Support`）。`scratch` / `history` / `themes`
+/// 三个目录全从这儿长出来，所以换根只有这一处。
+///
+/// **自检出口 `CURSIVE_SMOKE_SUPPORT=<目录>`**：`release.sh` 从前是直接拿开发机上
+/// 真实的那三个目录当试验田 —— 整轮开始前 `rm -rf history/`、每个用例清一次
+/// `scratch/*.json`、往 `themes/` 里丢一张探针皮肤。跑一次自检就把这台机器上
+/// 真实的版本历史删光了，而那是用户自己的东西（**这条早于 0.4.1 就在**）。
+/// 现在自检整个搬到临时目录里去，真实目录一个字节都不碰。
+///
+/// **只在 `CURSIVE_SMOKE` 下认**：正式启动时设了这个变量也当没看见 —— 平时能把
+/// 数据目录换掉的口子，迟早会有人在真实文档上误触一次。
+func supportBaseURL() -> URL {
+    if smokeAuto, let dir = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SUPPORT"],
+       !dir.isEmpty {
+        let url = URL(fileURLWithPath: dir, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+}
+
 /// 无路径文档的暂存目录（崩溃恢复）。窗口与 AppDelegate 都要够得着，所以摆在文件级
 func scratchDirURL() -> URL {
     let fm = FileManager.default
-    let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let base = supportBaseURL()
     let dir = base.appendingPathComponent("cursive/scratch", isDirectory: true)
     // 改名 typmd → cursive：旧目录还在、新的还没建过，就把崩溃恢复的暂存整个挪过来
     let legacy = base.appendingPathComponent("typmd", isDirectory: true)
@@ -2097,7 +2130,23 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         window.delegate = self
         applyFrameAutosave(restore: true)
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // **`CURSIVE_SMOKE_QUIET=1`：自检时不抢前台**（0.4.1）。
+        //
+        // 抢前台本来有两个用处：① 挡住「人在旁边打字把夹具改花」那类不可复现的失败
+        // （另一半是 keyDown / performKeyEquivalent 里那两句吞键，见那段注释）；
+        // ② 让 `:focus` 匹配、让 WebKit 正常派帧。
+        //
+        // 安静模式把 ① 换了个更省事的办法 —— 窗口根本不是 key，人的按键落在人自己
+        // 的 app 里，压根到不了这儿；代价是 ② **整个没有**：窗口一被挡住 WebKit
+        // 一帧都不派（2026-09-21 实测 `raf: 0`，而 `setTimeout` 照跑），`:focus`
+        // 也压根不匹配（`document.activeElement` 还指着那个元素，`matches(':focus')`
+        // 是 false）。所以它**只给状态类探针用**：读 state、读文档、量同步耗时。
+        // 凡是靠 rAF、靠 `:focus`、靠截图逐像素的断言，在这个模式下一律不成立 ——
+        // 不是变红，是**假绿假红都有可能**，比红更糟。
+        //
+        // `release.sh` 不许设它（那条流水线里有一批按帧取样的断言），
+        // `test/smoke-harness.test.ts` 扫源码守着这一条。
+        if !smokeQuiet { NSApp.activate(ignoringOtherApps: true) }
 
         // 直接 load。这里曾经先 `removeData` 清一遍 WebKit 磁盘/内存缓存、在它的回调里才
         // 加载 —— 用 CURSIVE_TIMING 量过，那个回调要等 140–250ms，**而且等的是一件不必做
@@ -4133,6 +4182,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             const wait = (ms) => new Promise(r => setTimeout(r, ms))
             const regexBtn = document.querySelector('.fs-opts button[data-opt="regex"]')
             const regexBefore = regexBtn ? regexBtn.classList.contains('is-on') : null
+            // **先把基线钉成「关」**：这条断言问的是「面板一关，那颗 `.*` 回不回得去」，
+            // 而开发机上那位偏好本来就可能是开着的（多半正是这个 bug 早先留下的）——
+            // 那样 `regexAfter === regexBefore` 恒真，等于没测。点一下是**人自己按**
+            // 那条路（会写偏好），所以末尾按原样点回去
+            if (regexBefore === true) { regexBtn.click(); await wait(150) }
             // **先滚回文档顶上，再等那颗药丸画出来。** front matter 在第 1–4 行，而上一条
             // 折叠探针刚把视口滚到 140 行开外的那张列表 —— CM 只渲染视口（它自己头上那句
             // 注释说的就是这件事），不滚回去的话 `.cm-lp-fm-tag` 压根不在 DOM 里，
@@ -4142,6 +4196,14 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 排到下一帧，而这条链跑到这儿时机器可能正忙
             const view = window.__cursive.view
             view.scrollDOM.scrollTop = 0
+            // 0.4.1 修：**先把侧栏藏起来**。搜索面板占的就是侧栏那块地方，藏着的时候
+            // 点一颗标签，面板会开在一个 `display:none` 的子树里 —— 人除了状态栏那一句
+            // 回执之外什么都看不见（搜索框也聚不上焦，display:none 的东西 focus() 无效）。
+            // 走菜单那条路藏（不是直接加 class）：显隐要在 `syncTitlebar` 那儿汇合
+            const sbEl = document.getElementById('sidebar')
+            window.__shellEmit('menu', 'view:toggle-sidebar')
+            await wait(150)
+            const sbHiddenBefore = sbEl.classList.contains('is-hidden')
             const chipOf = () => [...document.querySelectorAll('.cm-lp-fm-tag')]
               .find((e) => e.textContent.trim() === '测试')
             for (let w = 0; w < 2000 && !chipOf(); w += 100) await wait(100)
@@ -4167,15 +4229,35 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             const regexOn = !!document.querySelector('.fs-opts button[data-opt="regex"].is-on')
             const files = [...document.querySelectorAll('.fs-file')].map((e) => e.title || '')
             tagProbe = { title, query, regexOn, hits: files.length,
-                         self: files.some((f) => f.indexOf('kitchen-sink.md') >= 0) }
-            // 收干净：开关退回去（点标签只改这一次搜索，不该改人存着的偏好）、面板关掉
-            if (regexBefore === false && regexOn)
-              document.querySelector('.fs-opts button[data-opt="regex"]').click()
-            await wait(200)
+                         self: files.some((f) => f.indexOf('kitchen-sink.md') >= 0),
+                         // 侧栏确实是藏着的（这条用例还证明得了东西），点完自己回来了，
+                         // 而且搜索框拿到了焦点 —— 回来了但聚不上焦等于还是看不见结果
+                         hiddenBefore: sbHiddenBefore,
+                         revealed: !sbEl.classList.contains('is-hidden'),
+                         focused: document.activeElement === input }
             // 外层那个 `sb` 是 #sidebar 这个 DOM 元素，不是 Sidebar 实例 —— 要的是后者
             window.__cursive.sidebar.closeSearch()
             await wait(200)
+            // 0.4.1 修：**面板一关，开关自己回到人那套**。从前这儿有一句手动点回去的
+            // `.click()` —— 那不是收尾，那是替病灶擦屁股：临时开的 `regex` 被合进了
+            // 实例选项里不还原，而他下一次随手点任何一颗开关，`saveOpts()` 就把它
+            // 一起写进了偏好。现在临时那套单独存（`once`），这里只负责**验**
+            tagProbe.regexAfter = !!document.querySelector('.fs-opts button[data-opt="regex"].is-on')
+            // 基线是「关」（上面钉的），所以这里必须也是关的
+            tagProbe.restored = tagProbe.regexAfter === false
+            // 把他原来那位偏好放回去 —— 探针不留痕（同主题走查那条「用 system 复位」）
+            if (regexBefore === true) {
+              document.querySelector('.fs-opts button[data-opt="regex"]').click()
+              await wait(150)
+            }
+            tagProbe.prefKept =
+              !!document.querySelector('.fs-opts button[data-opt="regex"].is-on') === regexBefore
             tagProbe.cleaned = !document.querySelector('.sb-tree').hidden
+            // 侧栏必须留在看得见的状态：后面整套文件树探针都在这块地方
+            if (sbEl.classList.contains('is-hidden')) {
+              window.__shellEmit('menu', 'view:toggle-sidebar')
+              await wait(150)
+            }
           } catch (e) {
             tagProbe = { err: String(e) }
           }
@@ -5294,6 +5376,47 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             updateProbe = { err: String(e) }
           }
         }
+        // 0.4.1 修：**⌘A 的去路**。全选原先挂 AppKit 的 `selectAll:`，落进 WebKit
+        // 自己那条 SelectAll —— 它只认「编辑宿主里渲染出来的那部分」，而 CodeMirror
+        // 只渲染视口，视口外是两个 `contenteditable=false` 的 `.cm-gap`，
+        // 于是全选只选到一屏。**只有长文档测得出来**：一屏装得下的文档里视口就是全文，
+        // 怎么选都对 —— 所以 `viewportSmaller` 也要断言，它守的是「这条用例还证明得了
+        // 东西」，哪天 CM 改成整篇都渲染，这里该红给人看，而不是静悄悄变成一句废话
+        let selectAllProbe = null
+        {
+          // `wait` 是各个探针块自己的局部变量（`let`/`const` 是块作用域），这里另起一个
+          const swait = (ms) => new Promise(r => setTimeout(r, ms))
+          const sv = window.__cursive.view
+          const slen = sv.state.doc.length
+          if (slen > 4000) {
+            sv.dispatch({ selection: { anchor: 0 } })
+            sv.focus()
+            await swait(120)
+            const svp = sv.viewport.to - sv.viewport.from
+            // 0.4.1 修：**从一个非编辑控件上按 ⌘A**。状态栏那颗字数是 role=button
+            // tabindex=0 的真控件（只有点才有反应，聚焦它没有副作用），随便哪个窗口
+            // 都在。从编辑器自己身上按测不到这条：⌘C / ⌘X 走原生 `copy:` 落进 WebKit，
+            // 而 CM 只在自己是 activeElement 时才把选区写进 DOM —— 焦点没收回来的话，
+            // 人看着整篇都选中了，复制出来却是空的
+            const away = document.getElementById('status-count')
+            if (away) away.focus()
+            const awayOK = document.activeElement === away
+            window.__shellEmit('menu', 'edit:select-all')
+            await swait(160)
+            const sm = sv.state.selection.main
+            selectAllProbe = {
+              docLen: slen, viewport: svp, from: sm.from, to: sm.to,
+              coversAll: sm.from === 0 && sm.to === slen,
+              viewportSmaller: svp < slen,
+              // 焦点确实先被挪走了（这条用例还证明得了东西），以及全选之后收了回来
+              awayOK,
+              refocused: document.activeElement === sv.contentDOM
+            }
+            // 选区不留给后面：选区经过的每个块都会露出源码，整篇文档会从渲染态掀回源码
+            sv.dispatch({ selection: { anchor: 0 } })
+            await swait(60)
+          }
+        }
         // P3-7 多窗口：放在**最末尾** —— 新窗口会抢走 key，前面那些量位置/焦点的断言
         // 必须都跑完了。窗口数由壳侧在写 JSON 时补上（网页看不到原生的窗口表）
         // 契约 v14：带文件夹开新窗口（「打开文件夹 = 新窗口」走的就是这条）
@@ -5320,6 +5443,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           tbHitPage,
           tbMidY,
           tableEdit,
+          selectAllProbe,
           handles,
           treeProbe,
           findProbe,
@@ -5690,7 +5814,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(NSMenuItem(title: L("menu.edit.cut"), action: Selector(("cut:")), keyEquivalent: "x"))
         edit.addItem(NSMenuItem(title: L("menu.edit.copy"), action: Selector(("copy:")), keyEquivalent: "c"))
         edit.addItem(NSMenuItem(title: L("menu.edit.paste"), action: Selector(("paste:")), keyEquivalent: "v"))
-        edit.addItem(NSMenuItem(title: L("menu.edit.selectAll"), action: Selector(("selectAll:")), keyEquivalent: "a"))
+        // **全选同样走渲染层**（0.4.1 修，与上面撤销那条同一个病灶）：`selectAll:`
+        // 沿响应链落进 WKWebView，执行的是 WebKit 自己那条 SelectAll —— 它只认
+        // 「编辑宿主里渲染出来的内容」，而 CodeMirror 只把视口那一段放进 DOM，
+        // 视口外是 `contenteditable=false` 的 `.cm-gap`。实测 19340 字符的文档，
+        // 点一次这条菜单只选到 `0…340`（= 当时的视口），⌘A 之后复制 / 删除
+        // 只拿得到当前屏幕上的那一段。理由全文见 `src/shared/types.ts` 里
+        // `MenuAction` 的 'edit:select-all'
+        edit.addItem(item(L("menu.edit.selectAll"), "edit:select-all", key: "a"))
         edit.addItem(.separator())
         // P2-4：粘贴为纯文本（⇧⌥⌘V）—— ⌘ 组合一律走菜单（判断 1）
         edit.addItem(item(L("menu.edit.pastePlain"), "edit:paste-plain", key: "v", modifiers: [.command, .option, .shift]))
