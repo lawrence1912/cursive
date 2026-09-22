@@ -108,6 +108,14 @@ io.open(os.path.join(d, 'rep-undo.md'), 'w', encoding='utf-8', newline='').write
     '# 撤销\n\n这里有一个 待撤销 的词。\n')
 REPFIX
 
+# 第八节 4：读盘失败的三种夹具。壳要把它们分成三类（契约 v35），从前四种失败
+# 在渲染层长得一模一样。**GBK 那份不能用 printf 写** —— 得真是一段非 UTF-8 字节；
+# 000 那份靠权限位，整轮末尾随 $FIX 一起 rm -rf（目录可写，删得掉）
+python3 -c "open('/tmp/cursive-e2e/gbk.md','wb').write('# 中文标题\n正文两行。\n'.encode('gbk'))"
+printf '# 读不动
+' > "$FIX/denied.md"
+chmod 000 "$FIX/denied.md"
+
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
 
@@ -187,6 +195,14 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and abs(r.get('tbMidY', -99) - c.get('trafficMidFromTop', 0)) <= 1
       and r.get('tbToggle', {}).get('hidden') == 'none'
       and r.get('tbToggle', {}).get('restored') == 'flex')
+# 第八节 4：读盘失败分四类（契约 v35）。三种真失败各造了一份夹具，
+# 壳回的必须是「类别 | 路径」而不是同一句「读不到文件」
+op = r.get('openFailProbe') or {}
+ok = ok and op.get('gbk') == 'notUtf8' and op.get('missing') == 'notFound'
+ok = ok and op.get('denied') == 'denied'
+# 能读的那一份照样读得到（证明这条用例不是在报一片红）
+ok = ok and op.get('fine') is True
+
 # 第八节 1：保存状态归**标签**自己。每个用例都走一遍 —— 它量的是一条人人都在的路
 sp = r.get('saveProbe') or {}
 # 刚自动保存完 → 那一格有话说，而且不是黄的（黄色只留给「保存失败」）

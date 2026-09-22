@@ -297,6 +297,13 @@ const en: Record<Key, string> = {
   // 0.2.x status-bar receipts (`ui/note.ts`)
   'note.undo': 'Undo',
   'note.reveal': 'Show in Finder',
+  'note.exportFailed': 'Export failed: {reason}',
+  'open.notUtf8': '“{name}” isn’t UTF-8 text, so it can’t be opened',
+  'open.notFound': 'Can’t find “{name}” — it may have been moved or renamed',
+  'open.denied': 'No permission to read “{name}”',
+  'open.io': 'Can’t open “{name}”',
+  'note.refreshTree': 'Refresh files',
+  'note.dismiss': 'Dismiss',
   'note.trashed': '“{name}” moved to Trash',
   'note.restored': '“{name}” restored',
   'note.restoreFailed': 'Can’t restore: something else is at that path, or it’s no longer in the Trash',

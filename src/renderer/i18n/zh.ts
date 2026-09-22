@@ -311,6 +311,15 @@ const zh = {
   // 图片落到了哪儿、复制成了什么、删掉的那份还能不能回来
   'note.undo': '撤销',
   'note.reveal': '在 Finder 中显示',
+  'note.exportFailed': '导出失败：{reason}',
+  // 第八节 4：打不开一份文件时，四类各说各的（壳侧按契约 v35 分类）。
+  // 「不是 UTF-8」与「没权限」不会自己好，所以那两句不自散
+  'open.notUtf8': '「{name}」不是 UTF-8 文本，打不开',
+  'open.notFound': '找不到「{name}」—— 它可能已经被移走或改名了',
+  'open.denied': '没有读取「{name}」的权限',
+  'open.io': '打不开「{name}」',
+  'note.refreshTree': '刷新文件树',
+  'note.dismiss': '知道了',
   'note.trashed': '「{name}」已移到废纸篓',
   'note.restored': '「{name}」已还原',
   'note.restoreFailed': '还原不了：那个位置已经被占用，或者废纸篓里已经没有它了',

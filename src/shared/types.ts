@@ -401,6 +401,14 @@ export interface UpdateInfo {
 /** preload 通过 contextBridge 暴露给渲染进程的接口 */
 export interface CursiveApi {
   openDialog(): Promise<DocPayload | null>
+  /**
+   * 读一份文档。**失败时 reject 的形状是 `<类别>|<路径>`**（契约 v35，第八节 4）：
+   * 类别是 `notUtf8` / `notFound` / `denied` / `io` 四选一，**一个字的文案都不带** ——
+   * 话由渲染层说（`ui/read-error.ts` 认类别，`main.ts` 的 `openFailed` 说话给按钮），
+   * 因为只有那边知道此刻该给「在 Finder 中显示」「刷新文件树」还是「重试」。
+   * 从前四种失败回的是同一句「读不到文件：<路径>」，于是「这份文件不是 UTF-8」
+   * 这种一句话就能说清的事，用户只看得到一片沉默。
+   */
   read(path: string): Promise<DocPayload>
   save(
     path: string | null,

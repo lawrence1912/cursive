@@ -210,6 +210,7 @@ let SHELL_TEXT: [String: [String]] = [
     "err.move":         ["无法移动「{name}」", "Can’t Move “{name}”"],
     // 写盘失败：这一句会原样进渲染层，挂在状态栏「保存失败」那一格的 title 上
     // （第八节 1）。写成字面量的话，英文界面上人读到的就是一句中文
+    "err.notUtf8":      ["这份文件不是 UTF-8 文本", "This file is not UTF-8 text"],
     "err.write":        ["写入失败：{reason}", "Write failed: {reason}"],
     "err.write.scratch":["草稿写入失败：{reason}", "Draft write failed: {reason}"]
 ]
@@ -2523,8 +2524,13 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             } else { respond(id, NSNull()) }
 
         case "read":
-            do { respond(id, try readDoc(args[0] as? String ?? "")) }
-            catch { reject(id, "读不到文件：\(args[0])") }
+            // 契约 v35：读不到的时候**回一个机器可读的类别 + 路径**，话由渲染层自己说 ——
+            // 那边才知道此刻该给哪颗按钮（定位 / 刷新 / 重试），也才有那两份文案字典。
+            // 从前四种失败在渲染层长得一模一样（都是「读不到文件：<路径>」），
+            // 于是「这份文件不是 UTF-8」这种一句话就能说清的事，用户只看得到一片沉默
+            let rp = args[0] as? String ?? ""
+            do { respond(id, try readDoc(rp)) }
+            catch { reject(id, "\(readFailKind(rp, error))|\(rp)") }
 
         case "save", "saveAs":
             let current = args[0] as? String
@@ -3323,9 +3329,24 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         let hasBOM = data.starts(with: [0xEF, 0xBB, 0xBF])
         guard let text = String(data: hasBOM ? data.dropFirst(3) : data, encoding: .utf8) else {
             throw NSError(domain: "cursive.io", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "不是 UTF-8 文本"])
+                          userInfo: [NSLocalizedDescriptionKey: L("err.notUtf8")])
         }
         return hasBOM ? "\u{feff}" + text : text
+    }
+
+    /**
+     * 读盘失败分四类（契约 v35）：`notUtf8` / `notFound` / `denied` / `io`。
+     *
+     * **顺序不能换**：先认我们自己抛的那个域（文件读进来了、只是解不出 UTF-8），
+     * 再问「在不在」，再问「读不读得动」—— 反过来的话，一个存在且可读的 GBK 文件
+     * 会被归成 `io`，而那正是这四类里唯一一句什么也没说的话。
+     */
+    private func readFailKind(_ path: String, _ error: Error) -> String {
+        if (error as NSError).domain == "cursive.io" { return "notUtf8" }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: path) { return "notFound" }
+        if !fm.isReadableFile(atPath: path) { return "denied" }
+        return "io"
     }
 
     private func readDoc(_ path: String) throws -> [String: Any] {
@@ -3698,6 +3719,23 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           saveProbe = {
             savedText, savedWarn, dirtyText, blankText, tabsOpen, backWaited, writeFail,
             back: !!backText && words(backText) === words(savedText)
+          }
+        }
+        // 第八节 4：读盘失败分四类（契约 v35）。三份夹具各走一种真失败 ——
+        // 从前壳回的是同一句「读不到文件：<路径>」，渲染层于是分不出「这文件不是
+        // UTF-8」（一句话就说得清）和「它不在了」（该刷树）。**只认类别那一段**：
+        // 文案由渲染层自己说，这条通道上一个字的文案都不该有
+        let openFailProbe = null
+        {
+          const kindOf = async (p) => {
+            try { await window.api.read(p); return 'ok' }
+            catch (err) { return String((err && err.message) || err).split('|')[0] }
+          }
+          openFailProbe = {
+            gbk: await kindOf(docDir + '/gbk.md'),
+            missing: await kindOf(docDir + '/这个文件不存在.md'),
+            denied: await kindOf(docDir + '/denied.md'),
+            fine: (await kindOf(path)) === 'ok'
           }
         }
         // 第八节 2：外部修改冲突。**这条路从前一次都没被自检跑过** —— 它走的是一个原生
@@ -5526,6 +5564,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           tabProbe,
           saveProbe,
           conflictProbe,
+          openFailProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
           tbGutter,

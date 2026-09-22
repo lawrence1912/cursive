@@ -12,6 +12,8 @@
  * 时间反应的那一种。
  */
 
+import { t } from '../i18n'
+
 export interface NoteAction {
   label: string
   run: () => void
@@ -22,6 +24,14 @@ export interface NoteOpts {
   action?: NoteAction
   /** 「刚才那一下没成」用黄色；办成了的回执用常规色 */
   warn?: boolean
+  /**
+   * **不自己消失**（第八节 4）：留到人自己收起为止，末尾多一颗「知道了」。
+   *
+   * 给的是那一类**不会自己好**的失败 —— 这份文件不是 UTF-8、没有读它的权限：
+   * 人多半得离开这个窗口去处理（换个程序转码、改权限），回来时那句话还得在。
+   * 「刚才那下没成」与「那件事还没解决」是两种消息，前者 4 秒足够，后者不该有计时器。
+   */
+  sticky?: boolean
 }
 
 /** 有动作按钮时停久一点 —— 4 秒够不着一颗要读一眼才敢按的按钮 */
@@ -51,7 +61,17 @@ export function note(message: string, opts: NoteOpts = {}): void {
     })
     el.append(' ', btn)
   }
+  if (opts.sticky) {
+    // 一条不会自己走的消息必须给得出「让它走」的办法，否则状态栏上就多了一块赶不掉的疤
+    const off = document.createElement('button')
+    off.type = 'button'
+    off.className = 'note-act'
+    off.textContent = t('note.dismiss')
+    off.addEventListener('click', clearNote)
+    el.append(' ', off)
+  }
   clearTimeout(timer)
+  if (opts.sticky) return
   timer = window.setTimeout(clearNote, opts.action ? LINGER.action : LINGER.plain)
 }
 

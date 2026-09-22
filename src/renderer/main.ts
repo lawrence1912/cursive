@@ -58,6 +58,7 @@ import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
 import type { ConflictChoice } from './ui/conflict'
 import { note } from './ui/note'
+import { readFailKind, readFailSticky } from './ui/read-error'
 import { newSaveStatus, SAVING_AFTER, saveLabel, type SaveStatus } from './ui/save-state'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
@@ -1070,7 +1071,14 @@ function retargetTabs(from: string, to: string): void {
  */
 async function openHit(hit: SearchHit): Promise<void> {
   if (hit.path !== docPath) {
-    const doc = await window.api.read(hit.path)
+    let doc: DocPayload
+    try {
+      doc = await window.api.read(hit.path)
+    } catch (e) {
+      // 搜到那一刻还在，点的时候没了（或者本来就读不动）—— 同文件树那条路
+      openFailed(hit.path, e, () => void openHit(hit))
+      return
+    }
     openTab(doc.content, doc.path, doc.fingerprint)
   }
   const doc = view.state.doc
@@ -1087,6 +1095,40 @@ async function openHit(hit: SearchHit): Promise<void> {
 }
 
 /**
+ * **一份文件打不开了**（第八节 4）。四类各说各的话、各给各的下一步：
+ *
+ * · 不是 UTF-8 / 没权限 —— **不会自己好**，所以那句话不自散（人多半得离开这个窗口
+ *   去换个程序转码、去改权限，回来时它还得在），给一颗「在 Finder 中显示」把人送到门口；
+ * · 找不到 —— 十有八九是树里那一行过期了（别处删了 / 改名了），给一颗「刷新文件树」，
+ *   刷的只是它所在那一级（同 kqueue 那条路）；
+ * · 其余 IO —— 给「重试」，这一类真的可能下一次就好。
+ *
+ * 从前这四种在渲染层长得一模一样（壳回的都是「读不到文件：<路径>」），而且文件树
+ * 与搜索结果那两条路**压根没接住它** —— 点开一个 GBK 编码的 .md，屏幕上什么都不会发生。
+ */
+function openFailed(path: string, e: unknown, retry?: () => void): void {
+  const kind = readFailKind(e)
+  const name = basename(path)
+  const key = (
+    { notUtf8: 'open.notUtf8', notFound: 'open.notFound', denied: 'open.denied', io: 'open.io' } as const
+  )[kind]
+  let action: { label: string; run: () => void } | undefined
+  if (kind === 'io' && retry) action = { label: t('status.retry'), run: retry }
+  else if (kind === 'notFound') {
+    // 刷的只是它所在那一级（同 kqueue 那条路）；树没开着、或者路径就在根上时不给这颗
+    const dir = dirname(path)
+    if (sidebar.treeRoot && dir) {
+      action = { label: t('note.refreshTree'), run: () => sidebar.onDirChanged(dir) }
+    }
+  } else action = { label: t('note.reveal'), run: () => window.api.revealInFinder(path) }
+  note(t(key, { name }), {
+    warn: true,
+    sticky: readFailSticky(kind),
+    ...(action ? { action } : {})
+  })
+}
+
+/**
  * 从侧边栏点开一个文件（开新标签，不碰现有标签）。
  * `line` 是 0.2.x「跳到行」那条路带进来的：`⌘T` 里打 `readme:120`
  */
@@ -1096,7 +1138,15 @@ async function openPath(path: string, line?: number): Promise<void> {
     if (line) gotoLine(line)
     return
   }
-  const doc = await window.api.read(path)
+  let doc: DocPayload
+  try {
+    doc = await window.api.read(path)
+  } catch (e) {
+    // 文件树 / 快速打开点一下打不开的东西：从前这儿一个 catch 都没有 ——
+    // 屏幕上什么都不发生，控制台里多一条没人看的 unhandled rejection
+    openFailed(path, e, () => void openPath(path, line))
+    return
+  }
   openTab(doc.content, doc.path, doc.fingerprint)
   if (line) gotoLine(line)
 }
@@ -1129,9 +1179,10 @@ async function openDocLink(path: string, slug: string | null): Promise<void> {
     let doc: DocPayload
     try {
       doc = await window.api.read(path)
-    } catch {
-      // 链接写错、文件被挪走、大小写对不上都落在这儿
-      note(t('link.missing', { name: basename(path) }), { warn: true })
+    } catch (e) {
+      // 链接写错、文件被挪走、大小写对不上都落在这儿 —— 而「它在，只是不是 UTF-8」
+      // 也落在这儿，从前一律报「找不到文件」，等于把一句说得清的话换成了一句错的
+      openFailed(path, e, () => void openDocLink(path, slug))
       return
     }
     openTab(doc.content, doc.path, doc.fingerprint)
@@ -1609,6 +1660,21 @@ async function exportSelectionOrAll(type?: Typography): Promise<{ html: string; 
  * 宽度 = 正文栏宽：导出 CSS 的 `--column` 是 rem，而导出物的根字号就是浏览器默认的
  * 16px —— 这条耦合有 E2E 守着（成图宽度必须正好是它的 2 倍）。
  */
+/**
+ * 导出在**渲染层这一侧**断了（第八节 4）。壳那一侧的失败自己会弹 NSAlert（写不进去、
+ * 没权限、打印任务没出文件），这里管的是它够不到的那一半：正文还没交出去就抛了。
+ *
+ * 不自散 + 一颗「重试」：导出的东西十有八九是要马上发给别人的，
+ * 一条 4 秒的提示与「什么都没发生」在人走开倒杯水之后是同一件事。
+ */
+function exportFailed(e: unknown, retry: () => void): void {
+  note(t('note.exportFailed', { reason: e instanceof Error ? e.message : String(e) }), {
+    warn: true,
+    sticky: true,
+    action: { label: t('status.retry'), run: retry }
+  })
+}
+
 async function exportPng(): Promise<void> {
   const { html } = await exportSelectionOrAll(prefs.values)
   const width = Math.round(prefs.values.column * 16)
@@ -1830,7 +1896,16 @@ async function handleMenu(action: MenuAction): Promise<void> {
       await openFolder()
       break
     case 'file:export-html': {
-      const out = await exportHtml()
+      // 壳那一侧的失败（写不进去、没权限）自己会弹 NSAlert；**渲染层这一侧断了的话
+      // 从前一个字都没有** —— 正文渲染里抛一次（mermaid、KaTeX、一条坏图）就是
+      // 「点了导出，什么都没发生」。第八节 4：说清楚，并且给一颗重试
+      let out: { path: string } | null
+      try {
+        out = await exportHtml()
+      } catch (e) {
+        exportFailed(e, () => void handleMenu(action))
+        break
+      }
       // 0.2.x：导出完只有保存面板关掉那一下，此前看不出到底写成功了没有。
       // PDF 那条路是 NSAlert（模态），这条给状态栏一句 + 一颗「在 Finder 中显示」——
       // 导出的东西十有八九是要马上发给别人的
@@ -1842,7 +1917,11 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     }
     case 'file:export-png':
-      await exportPng()
+      try {
+        await exportPng()
+      } catch (e) {
+        exportFailed(e, () => void handleMenu(action))
+      }
       break
     case 'edit:undo':
     case 'edit:redo': {
