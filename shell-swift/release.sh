@@ -708,8 +708,12 @@ if sys.argv[1] == 'links.md':
     ok = ok and any(u.startswith('file:///tmp/cursive-e2e/assets/') and u.endswith('.png') for u in ext)
     # 三次交给系统：外部地址、存在的图、不存在的图（最后一条走的就是下面 fileNote 那条路）
     ok = ok and len(ext) == 3
-    # ⑤⑥⑦ 三种打不开都要在状态栏说一句话：点了没反应是最糟的失败方式
-    ok = ok and lp.get('missingNote') == '找不到文件：缺失.md'
+    # ⑤⑥⑦ 三种打不开都要在状态栏说一句话：点了没反应是最糟的失败方式。
+    # **第八节 4 之后这句话换了**：从前不论什么原因一律报「找不到文件」，
+    # 现在按壳回的类别分四种说法，还各带一个下一步 —— 链接指着的这一份是真没了，
+    # 所以是「找不到 + 刷新文件树」（不是 UTF-8 / 没权限那两种另有各自的话）
+    mn = lp.get('missingNote') or ''
+    ok = ok and mn.startswith('找不到「缺失.md」') and '刷新文件树' in mn
     ok = ok and lp.get('anchorNote') == '本文里没有这个锚点：#没有这一节'
     # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
     # 对 file:// 按「在不在」回话，就是为了让这条路测得到
