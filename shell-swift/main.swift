@@ -298,7 +298,7 @@ let BRIDGE_JS = """
   const callMethods = {
     openDialog: () => call('openDialog'),
     read: (path) => call('read', [path]),
-    save: (path, content, fingerprint) => call('save', [path, content, fingerprint]),
+    save: (path, content, fingerprint, expect) => call('save', [path, content, fingerprint, expect ?? null]),
     saveAs: (current, content, fingerprint) => call('saveAs', [current, content, fingerprint]),
     setDocState: (state) => call('setDocState', [state]),
     confirmClose: () => call('confirmClose'),
@@ -2538,9 +2538,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             let panel = NSOpenPanel()
             panel.allowedContentTypes = ["md", "markdown", "mdown", "mkd", "txt"]
                 .compactMap { UTType(filenameExtension: $0) }
+            // 契约 v36：**取消与打不开不是一回事**。从前两条都回 null，于是从菜单选一个
+            // GBK 文件、或者一个没权限的文件，屏幕上什么都不会发生（第八节 4 补的那四句话
+            // 只覆盖了文件树与搜索结果两条路，这一条漏了）。失败照 `read` 那条的形状回
             if panel.runModal() == .OK, let url = panel.url {
-                let doc = try? readDoc(url.path)
-                respond(id, doc ?? NSNull())
+                do { respond(id, try readDoc(url.path)) }
+                catch { reject(id, "\(readFailKind(url.path, error))|\(url.path)") }
             } else { respond(id, NSNull()) }
 
         case "read":
@@ -2566,6 +2569,23 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             guard let path = target, let content = args[1] as? String,
                   let fpDict = args[2] as? [String: Any] else { respond(id, NSNull()); break }
             let fp = Fingerprint(eol: fpDict["eol"] as? String ?? "\n", bom: fpDict["bom"] as? Bool ?? false)
+            // **写之前先看一眼盘上那份是不是我们以为的那份**（契约 v36）。
+            //
+            // 光靠文件监听挡不住覆盖：监听有 300ms 合并窗，而自动保存是停手 2 秒 ——
+            // 外面的程序要是在自动保存开火前那 300ms 里写了一笔，我们会**先盖上去**，
+            // 事件随后才到，那时读到的已经是我们自己那份，冲突于是永远不会出现。
+            // 唯一靠得住的是写盘那一刻自己比一次（compare-and-swap）：
+            // `expect` 是渲染层「以为盘上是什么」，对不上就不写，回一个 `stale`，
+            // 渲染层拿它去走**和外部变更同一条路**（摆差异，让人自己选）。
+            //
+            // 两处有意放行：① 文件压根不在（新建 / 人明确要求重建）—— 没有东西会丢；
+            // ② `expect` 没给（另存为、或者人在冲突面板上已经当面选了「保留我的」）
+            if let expect = args.count > 3 ? args[3] as? String : nil,
+               FileManager.default.fileExists(atPath: path),
+               let onDisk = try? readRawDoc(path), decodeDoc(onDisk).text != expect {
+                reject(id, "stale|\(path)")
+                break
+            }
             do {
                 try encodeDoc(content, fp).write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
                 dirty = false; window.isDocumentEdited = false
@@ -3100,7 +3120,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             let dir = historyDir(for: path)
             let fm = FileManager.default
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            // **建不出目录就直接认输**：底下那两句从前是 `try?`，写坏了照样 respond(true)
+            // —— 渲染层于是回一句「已存进版本历史，随时找得回来」，而它根本不在
+            do { try fm.createDirectory(at: dir, withIntermediateDirectories: true) }
+            catch { reject(id, LF("err.write", ["reason": error.localizedDescription])); break }
             // **去重**：自动保存每隔两秒就可能触发一次，内容没变的话历史里全是同一份。
             // 只比最新那一条就够 —— 快照按时间单调追加，中间不会插队
             let existing = snapshotFiles(dir)
@@ -3110,8 +3133,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             // 落盘目录里只放正文：原路径与时间戳分别由 `path.txt` 和文件名记着，
             // 不再为每份快照多写一个元数据文件（那会让目录里的文件数翻倍）
-            try? content.write(to: dir.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000)).md"),
-                               atomically: true, encoding: .utf8)
+            do {
+                try content.write(to: dir.appendingPathComponent("\(Int(Date().timeIntervalSince1970 * 1000)).md"),
+                                  atomically: true, encoding: .utf8)
+            } catch { reject(id, LF("err.write", ["reason": error.localizedDescription])); break }
+            // `path.txt` 只是给人看的反查表（目录名是路径的哈希），它写不下不算失败
             try? path.write(to: dir.appendingPathComponent("path.txt"), atomically: true, encoding: .utf8)
             pruneSnapshots(dir)
             respond(id, true)
@@ -4020,8 +4046,30 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             const txt = await window.api.snapshotRead(path, sn.id)
             if (txt && txt.indexOf('conflict-disk') >= 0) { diskKept = true; break }
           }
+          // ---- 第二幕：**写盘那一刻自己比一次**（契约 v36 的 compare-and-swap）----
+          // 上面那一幕靠的是文件监听，而监听有 300ms 合并窗、自动保存是停手 2 秒 ——
+          // 外面要是在那 300ms 里写一笔，我们会**先盖上去**，事件随后才到，读到的已经是
+          // 自己那份，冲突于是永远不会出现。这一幕就逼出那条竞态：外部写完**立刻**按 ⌘S，
+          // 不给监听任何时间。壳必须拒写并回 stale，渲染层拿它走同一条路（摆差异）
+          const disk2 = (await window.api.read(path)).content + '\\nrace-disk'
+          cv.dispatch({ changes: { from: cv.state.doc.length, insert: '\\nrace-mine' } })
+          await window.api.save(path, disk2, doc.fingerprint)
+          window.__shellEmit('menu', 'file:save')
+          let raced = 0
+          while (raced < 4000 && !(panel() && !panel().hidden)) { await cwait(100); raced += 100 }
+          const racePanel = !!(panel() && !panel().hidden)
+          const raceDisk = (await window.api.read(path)).content
+          // 收干净：用磁盘那份（这一幕的 mine 不要了），面板跟着关掉
+          const reloadBtn = panel() ? panel().querySelector('button[data-pick="reload"]') : null
+          if (reloadBtn) reloadBtn.click()
+          await cwait(400)
+
           conflictProbe = {
-            shown, opened,
+            shown, opened, raced,
+            // 竞态里那一发保存**一个字节都没写下去**：盘上还是外面那份
+            racePanel: racePanel,
+            raceHeld: raceDisk.indexOf('race-disk') >= 0 && raceDisk.indexOf('race-mine') < 0,
+            raceClosed: !!(panel() && panel().hidden),
             // 面板里两份都看得见（− 是磁盘那份、+ 是我这份）
             sawDisk: diffText.indexOf('conflict-disk') >= 0,
             sawMine: diffText.indexOf('conflict-mine') >= 0,

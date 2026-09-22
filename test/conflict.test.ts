@@ -46,7 +46,7 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     const body = fn('async function writeOnce(')
     const gate = body.slice(body.indexOf('if (t.conflict'))
     expect(body.indexOf('if (t.conflict'), '闸要排在真正发出去之前').toBeLessThan(
-      body.indexOf('await (opts.as')
+      body.indexOf('res = opts.as')
     )
     expect(gate).toContain('openConflict(t)')
     expect(gate.slice(0, gate.indexOf('\n  }'))).toContain('return false')
@@ -106,6 +106,40 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     expect(body).toContain('DispatchWorkItem')
     // 目录那一侧（契约 v32）当初就是因为同一个道理选的尾部去抖
     expect(swift).toContain('self.dirNotify[path]?.cancel()')
+  })
+
+  it('关窗那条批量路径同样过闸 —— 它不走 writeOnce', () => {
+    const at = main.indexOf("case 'file:save-and-close'")
+    const block = main.slice(at, main.indexOf("case 'file:open-folder'", at))
+    // 复现过的路：本地改 → 外部改 → 冲突选「稍后」→ 关窗选保存 = 外面那份被静默覆盖
+    expect(block).toContain('tabs.find((x) => x.conflict && isTabDirty(x))')
+    expect(block, '先把它摆出来，这一次关窗到此为止').toContain('await openConflict(blocked)')
+    // 而且这条路也要比一次盘（刚刚才发生、还没来得及变成 conflict 的那一种）
+    expect(block).toContain('lastWritten ?? null')
+  })
+
+  it('新来的冲突不许被旧操作顺手删掉', () => {
+    const body = fn('async function resolveConflict(')
+    // 两句 await 之间外面可能又改了一次，handleExternalChange 会往这儿放一个更新的冲突
+    expect(body).toContain('if (tab.conflict !== c)')
+  })
+
+  it('自写识别连指纹一起比 —— 只改换行/BOM 的外部修改不算我们自己写的', () => {
+    const body = fn('async function handleExternalChange(')
+    expect(body).toContain('sameFp')
+    expect(body).toContain('disk.fingerprint.eol === t.writtenFp?.eol')
+  })
+
+  it('版本历史没写成就不许说「随时找得回来」', () => {
+    const body = fn('async function resolveConflict(')
+    expect(body).toContain('const kept =')
+    expect(body).toContain('if (kept) note(')
+    expect(body).toContain('cf.noBackup')
+    // 壳那边也别再谎报成功
+    const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+    const snap = swift.slice(swift.indexOf('case "snapshotSave"'), swift.indexOf('case "snapshotList"'))
+    expect(snap).not.toContain('try? fm.createDirectory')
+    expect(snap).not.toContain('try? content.write')
   })
 
   it('状态栏那一格把冲突排在最前面，且那颗「查看差异」不自散', () => {

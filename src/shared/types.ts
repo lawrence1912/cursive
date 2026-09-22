@@ -410,10 +410,28 @@ export interface CursiveApi {
    * 这种一句话就能说清的事，用户只看得到一片沉默。
    */
   read(path: string): Promise<DocPayload>
+  /**
+   * 写一份文档。回 `null` = 人在保存面板上点了取消；reject = 真的写坏了
+   * （`err.write`，渲染层把它挂在状态栏「保存失败」那一格的 title 上）。
+   *
+   * **`expect` 是契约 v36 加的**：渲染层「以为盘上此刻是什么」。壳在写之前先读一眼，
+   * 对不上就**不写**，回一个 `stale|<路径>` —— 渲染层拿它去走和外部变更同一条路
+   * （摆差异，让人自己选）。
+   *
+   * 为什么非有它不可：光靠文件监听挡不住覆盖。监听有 300ms 合并窗，而自动保存是
+   * 停手 2 秒 —— 外面的程序要是在自动保存开火前那 300ms 里写了一笔，我们会先盖上去，
+   * 事件随后才到，那时读到的已经是我们自己那份，**冲突于是永远不会出现**。
+   * 唯一靠得住的是写盘那一刻自己比一次（compare-and-swap）。
+   *
+   * 不给 `expect`（或给 null）= 不比：另存为（目标是人在面板里现挑的）、
+   * 以及人在冲突面板上已经当面选了「保留我的」那一次。文件压根不在时也放行 ——
+   * 没有东西会丢，而「重新创建」正是这条路。
+   */
   save(
     path: string | null,
     content: string,
-    fingerprint: FileFingerprint
+    fingerprint: FileFingerprint,
+    expect?: string | null
   ): Promise<{ path: string } | null>
   saveAs(
     current: string | null,

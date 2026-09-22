@@ -26,6 +26,7 @@ export interface SaveStatus {
 export type SaveLabel =
   | { kind: 'none' }
   | { kind: 'conflict' }
+  | { kind: 'missing' }
   | { kind: 'dirty' }
   | { kind: 'saving' }
   | { kind: 'saved'; at: number }
@@ -48,8 +49,9 @@ export function newSaveStatus(): SaveStatus {
 /**
  * 三样事实 + 脏不脏 → 状态栏那一格。**顺序本身就是产品判断**：
  *
- * ⓪ **未决的外部修改冲突**排在最前面 —— 它挂着的时候这个文件一个字节都没往下写，
- *    人最需要知道的就是这个（而且那一格上那颗「查看差异」是唯一的出口）。
+ * ⓪ **写不得的两种理由**（未决的外部修改冲突 / 文件已经不在了）排在最前面 ——
+ *    它们挂着的时候这个文件一个字节都没往下写，人最需要知道的就是这个
+ *    （那一格上那颗按钮也是唯一的出口）。
  * ① **失败压倒一切**。它一直挂着直到人处理（重试 / 另存为 / 或者下一次成功写盘把它
  *    顶掉）—— 「保存失败」是这条状态栏上唯一一句不该自己消失的话。
  * ② **正在写**（且慢过门槛）。
@@ -63,12 +65,17 @@ export function saveLabel(
   st: SaveStatus,
   dirty: boolean,
   now: number,
-  /** 这份文档有一个未决的外部修改冲突（第八节 2）。它挂着的时候写盘是停的 */
-  conflict = false
+  /**
+   * 这个文件此刻**写不得**的理由（两种，都会让自动保存停下）：
+   * - `conflict`：有一个未决的外部修改冲突（第八节 2）；
+   * - `missing`：盘上那个文件读不到了（别处删了 / 改名了 / 外接盘拔了）——
+   *   自动保存这时候要是照写不误，会把人家刚删掉的文件**原地复活**（原子写 = 新建）。
+   */
+  blocked?: 'conflict' | 'missing'
 ): SaveLabel {
-  // **排在失败前面**：冲突挂着的时候一次都没往盘上写，所以「为什么没在保存」
-  // 的答案是它，不是上一次那个失败（何况那时候写都没写，谈不上坏）
-  if (conflict) return { kind: 'conflict' }
+  // **排在失败前面**：这两种挂着的时候一次都没往盘上写，所以「为什么没在保存」
+  // 的答案是它们，不是上一次那个失败（何况那时候写都没写，谈不上坏）
+  if (blocked) return { kind: blocked }
   if (st.failure !== null) return { kind: 'failed', reason: st.failure }
   if (st.savingSince !== null && now - st.savingSince >= SAVING_AFTER) return { kind: 'saving' }
   if (dirty) return { kind: 'dirty' }

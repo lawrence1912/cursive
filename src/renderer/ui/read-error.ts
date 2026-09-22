@@ -18,6 +18,22 @@
  */
 export type ReadFailKind = 'notUtf8' | 'notFound' | 'denied' | 'io'
 
+/**
+ * 那条竖线后面是**路径**。菜单「打开」那条路上渲染层手里没有路径（是人在原生面板里
+ * 挑的），只能从这句话里拿（契约 v36）
+ */
+export function readFailPath(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  const at = msg.indexOf('|')
+  return at < 0 ? '' : msg.slice(at + 1)
+}
+
+/** 写盘那一刻发现盘上那份已经不是我们以为的那份了（契约 v36 的 compare-and-swap） */
+export function isStaleWrite(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return msg.startsWith('stale|')
+}
+
 const KINDS: readonly ReadFailKind[] = ['notUtf8', 'notFound', 'denied', 'io']
 
 /**

@@ -63,6 +63,15 @@ describe('保存状态 → 状态栏', () => {
     expect(saveLabel(s, false, 2001)).toEqual({ kind: 'saved', at: 2000 })
   })
 
+  it('写不得的两种理由排在最前面：冲突 / 文件已不在', () => {
+    // 两种挂着的时候这个文件一个字节都没往下写，「为什么没在保存」的答案就是它们
+    const s = st({ failure: '磁盘已满', savedAt: 500 })
+    expect(saveLabel(s, true, 1000, 'conflict')).toEqual({ kind: 'conflict' })
+    expect(saveLabel(s, true, 1000, 'missing')).toEqual({ kind: 'missing' })
+    // 不给理由时照旧
+    expect(saveLabel(s, true, 1000)).toEqual({ kind: 'failed', reason: '磁盘已满' })
+  })
+
   it('新的状态是干净的三个 null', () => {
     expect(newSaveStatus()).toEqual({ savedAt: null, savingSince: null, failure: null })
   })
@@ -84,13 +93,41 @@ describe('main.ts 里的落盘接线', () => {
   it('写下去的是**发出去的那一份**，不是 await 回来之后视图里那份', () => {
     const body = fn('writeOnce')
     const capture = body.indexOf('const doc = t.state.doc')
-    const send = body.indexOf('await (opts.as')
+    // 发出去那一句现在是个三元（契约 v36：只有非另存为、非 force 的那一支带 expect）
+    const send = body.indexOf('res = opts.as')
     expect(capture, '这一份必须在 await 之前就拿在手上').toBeGreaterThan(0)
     expect(capture).toBeLessThan(send)
     expect(body, '认 view.state.doc 等于把 await 期间敲的字说成已保存').toContain(
       't.savedDoc = doc'
     )
     expect(body).not.toContain('savedDoc = view.state.doc')
+  })
+
+  it('写盘前先让壳比一次盘上那份（契约 v36 的 compare-and-swap）', () => {
+    const body = fn('writeOnce')
+    // 光靠文件监听挡不住覆盖：监听 300ms 合并窗 vs 自动保存停手 2 秒 —— 外面在这
+    // 300ms 里写一笔，我们会先盖上去，事件到的时候读到的已经是自己那份
+    expect(body).toContain("opts.force ? null : (t.lastWritten ?? null)")
+    // 另存为不比（目标是人现挑的）
+    expect(body).toContain('window.api.saveAs(t.path, content, t.fp)')
+    // 比出来不一样时**一个字节都没写**，走和外部变更同一条路
+    expect(body).toContain('isStaleWrite(e)')
+    expect(body).toContain('await handleExternalChange(t.path)')
+  })
+
+  it('另存为点了取消，上一次那个失败要原样挂回去', () => {
+    const body = fn('writeOnce')
+    expect(body).toContain('const hadFailure = t.save.failure')
+    // 取消那一支必须还原，否则「保存失败 · 重试 · 另存为…」会在人改主意的那一下整条消失
+    const cancel = body.slice(body.indexOf('if (!res) {'))
+    expect(cancel.slice(0, 200)).toContain('t.save.failure = hadFailure')
+  })
+
+  it('盘上那个文件没了的时候，自动保存不许把它原地复活', () => {
+    const body = fn('writeOnce')
+    expect(body).toContain('if (t.missing && opts.auto) return false')
+    // 人自己按的 ⌘S 照做，写成了就把这个状态摘掉
+    expect(body).toContain('delete t.missing')
   })
 
   it('认领路径之前现问一次 activeId —— 面板开着的时候人可能已经切走了', () => {

@@ -58,7 +58,7 @@ import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
 import type { ConflictChoice } from './ui/conflict'
 import { note } from './ui/note'
-import { readFailKind, readFailSticky } from './ui/read-error'
+import { isStaleWrite, readFailKind, readFailPath, readFailSticky } from './ui/read-error'
 import { newSaveStatus, SAVING_AFTER, saveLabel, type SaveStatus } from './ui/save-state'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
@@ -558,6 +558,15 @@ interface Tab {
    */
   lastWritten?: string
   /**
+   * 写下去那一份的**指纹**（2026-09-22）。`lastWritten` 只记正文，而正文是
+   * 剥了 BOM、换行归一成 LF 之后的样子 —— 外面的工具把 LF 改成 CRLF、或者加/去掉一个
+   * BOM 时，正文一个字都不变。光比正文会把那种改动误判成「我自己写的」，
+   * 接着按旧指纹写回去，人家的转换就被我们悄悄撤销了（红线一：保存零损耗）
+   */
+  writtenFp?: FileFingerprint
+  /** 盘上那个文件读不到了（删了 / 改名了 / 外接盘拔了）。挂着时自动保存停下，见 `writeOnce` */
+  missing?: true
+  /**
    * 这个标签自己的保存状态（第八节 1）。**归标签不归窗口** —— 从前那句
    * 「已保存 10:23」是一个全局变量，后台标签的自动保存会把它刷成此刻，
    * 于是正在编辑的这一份挂着一句它从来没发生过的回执（见 `ui/save-state.ts`）
@@ -1047,11 +1056,19 @@ function openTab(content: string, path: string | null, fp: FileFingerprint): Tab
     activate(existing.id)
     return existing
   }
-  return spawnTab(
+  const tab = spawnTab(
     createState(content, listener, { dir: path ? dirname(path) : null, sourceMode }),
     path,
     fp
   )
+  // **刚从盘上读进来的这一份，就是「我们以为盘上是什么」**（契约 v36 的 expect）。
+  // 不在这儿记的话，第一次自动保存发不出比对依据 —— 而「打开、编辑、两秒后自动保存」
+  // 正是最常走的那条路，也正是那条竞态最容易咬到的地方
+  if (path) {
+    tab.lastWritten = content
+    tab.writtenFp = { ...fp }
+  }
+  return tab
 }
 
 /**
@@ -1275,6 +1292,11 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
     if (!opts.auto) void openConflict(t)
     return false
   }
+  // **盘上那个文件已经不在了**（别处删了 / 改名了 / 外接盘拔了）：自动保存这时候要是
+  // 照写不误，`write(atomically:)` 会把它**原地复活** —— 人在 Finder 里删掉的东西
+  // 两秒后自己回来了，而同步工具那边看到的是「又新建了一份」。人自己按的 ⌘S 照做
+  //（那是一次明确的「我要把它写回去」），写成了就把这个状态摘掉
+  if (t.missing && opts.auto) return false
   if (opts.auto) {
     if (!isTabDirty(t)) return true
     // **失败之后自动保存就停下**：磁盘满了、外接盘拔了这类毛病不会因为多试几次就好，
@@ -1287,14 +1309,32 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   const doc = t.state.doc
   const content = doc.toString()
   t.save.savingSince = Date.now()
+  // **先记下来再清**：这一发要是被取消（另存为面板上点了「取消」），上一次那个失败
+  // 还没解决，得原样挂回去 —— 不然「保存失败 · 重试 · 另存为…」会在人按了另存为、
+  // 又改主意的那一下**整条消失**，退回一句轻飘飘的「未保存」
+  const hadFailure = t.save.failure
   t.save.failure = null
   clearTimeout(savingTimer)
   savingTimer = window.setTimeout(renderSave, SAVING_AFTER)
   renderSave()
   let res: { path: string } | null = null
   try {
-    res = await (opts.as ? window.api.saveAs : window.api.save)(t.path, content, t.fp)
+    // **写之前让壳自己比一次**（契约 v36）：`expect` 是我们以为盘上此刻的样子。
+    // 另存为不比（目标是人现挑的），人在冲突面板上当面选过的那一次也不比（`force`）
+    res = opts.as
+      ? await window.api.saveAs(t.path, content, t.fp)
+      : await window.api.save(t.path, content, t.fp, opts.force ? null : (t.lastWritten ?? null))
   } catch (e) {
+    // 盘上那份已经不是我们以为的那份了：**一个字节都没写**。走和外部变更完全同一条路
+    // —— 读盘、比对、摆差异让人自己选。这是那条「监听有 300ms 合并窗、自动保存是 2 秒」
+    // 的竞态唯一真正堵得住的地方（那时事件还没到，光等监听等不出冲突来）
+    if (isStaleWrite(e) && t.path) {
+      t.save.savingSince = null
+      t.save.failure = hadFailure
+      endWrite()
+      await handleExternalChange(t.path)
+      return false
+    }
     // 壳侧 reject（写入失败：磁盘满 / 外接盘拔了 / 权限没了）。**记在标签上**，
     // 状态栏那一格会一直挂着它直到人处理 —— 一条 4 秒自散的回执配不上「文件没写进去」
     t.save.failure = e instanceof Error ? e.message : String(e)
@@ -1303,14 +1343,17 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
     return false
   }
   t.save.savingSince = null
-  // 保存面板上点了取消：**不是失败**，什么都不记（人只是改了主意）
+  // 保存面板上点了取消：**不是失败**，但也不许把上一次那个未解决的失败擦掉
   if (!res) {
+    t.save.failure = hadFailure
     endWrite()
     return false
   }
   t.path = res.path
   t.savedDoc = doc
   t.lastWritten = content
+  t.writtenFp = { ...t.fp }
+  delete t.missing
   if (t.scratchId) {
     void window.api.scratchClear(t.scratchId)
     t.scratchId = undefined
@@ -1337,11 +1380,15 @@ function endWrite(): void {
  * 去重、留存上限、目录管理全在壳侧 —— 这里只发一次请求，失败了也不打扰用户：
  * 历史是安全网，不是保存的一部分，它出问题不该让「刚才那次保存成功了吗」变得可疑。
  */
-async function keepSnapshot(path: string, content: string): Promise<void> {
+async function keepSnapshot(path: string, content: string): Promise<boolean> {
   try {
+    // 回的是「真写了一份没有」：内容与最新那份一样时壳会去重（回 false），
+    // 那也算留住了 —— 那一份就在历史里。只有**写坏了**才该让调用方知道
     await window.api.snapshotSave(path, content)
+    return true
   } catch {
-    /* 历史写不下就算了，保存本身已经成功 */
+    /* 历史写不下：保存本身已经成功，平时不打扰用户（见下面冲突那条路的例外） */
+    return false
   }
 }
 
@@ -1365,14 +1412,17 @@ function renderSave(): void {
     cur?.save ?? newSaveStatus(),
     cur ? isTabDirty(cur) : false,
     Date.now(),
-    cur?.conflict !== undefined
+    cur?.conflict ? 'conflict' : cur?.missing ? 'missing' : undefined
   )
   // **没变就一个字节都不动**：这条挂在 `syncStatus` 上，于是每敲一个键都会来一次，
   // 而九成九的相邻两次说的是同一句话。语言切换那条路自己会先把它作废（见 onLangChange）
   const sig = `${cur?.id ?? -1}|${lab.kind}|${'at' in lab ? lab.at : ''}|${'reason' in lab ? lab.reason : ''}`
   if (sig === lastSaveSig) return
   lastSaveSig = sig
-  elSaved.classList.toggle('is-warn', lab.kind === 'failed' || lab.kind === 'conflict')
+  elSaved.classList.toggle(
+    'is-warn',
+    lab.kind === 'failed' || lab.kind === 'conflict' || lab.kind === 'missing'
+  )
   elSaved.title = ''
   switch (lab.kind) {
     case 'none':
@@ -1381,6 +1431,19 @@ function renderSave(): void {
     case 'dirty':
       elSaved.textContent = t('status.unsaved')
       break
+    case 'missing': {
+      // 文件没了：自动保存已经停下（不然它会把人家刚删掉的东西原地复活）。
+      // 两个出口 —— 「另存为…」把手上这份挪到别处，「重新创建」明确把它写回原路径
+      const tab = cur!
+      elSaved.replaceChildren(
+        document.createTextNode(t('status.missing')),
+        ' ',
+        saveAct(t('cmd.saveAs'), () => void writeTab(tab, { as: true })),
+        ' ',
+        saveAct(t('status.recreate'), () => void writeTab(tab))
+      )
+      break
+    }
     case 'conflict': {
       // 冲突挂着 = 这个文件一个字节都没在往下写。那颗「查看差异」是唯一的出口，
       // 所以它**不自己消失**（同「保存失败」那一格）—— 关掉面板不等于解决
@@ -1534,6 +1597,9 @@ async function restoreSession(): Promise<void> {
       // 返回之后再写 `tab.scroll` 就晚了一步（那次 activate 已经把视图滚到 0）
       st?.scroll ?? 0
     )
+    // 恢复出来的这些同样要记下「盘上是什么」（契约 v36），否则它们第一次自动保存不比对
+    tab.lastWritten = doc.content
+    tab.writtenFp = { ...doc.fingerprint }
     // 接管空白页那一次会当场 activate；别的都开在背景里，不动活动标签
     if (tab.id === activeId) selfActs += 1
   }
@@ -1818,7 +1884,15 @@ async function handleMenu(action: MenuAction): Promise<void> {
       newUntitledTab()
       break
     case 'file:open': {
-      const doc = await window.api.openDialog()
+      // 契约 v36：**取消与打不开不是一回事**。从前两条都回 null，于是从菜单选一个
+      // GBK 文件、或者一个没权限的文件，屏幕上什么都不会发生
+      let doc: DocPayload | null
+      try {
+        doc = await window.api.openDialog()
+      } catch (e) {
+        openFailed(readFailPath(e), e)
+        break
+      }
       if (doc) openTab(doc.content, doc.path, doc.fingerprint)
       break
     }
@@ -1847,6 +1921,17 @@ async function handleMenu(action: MenuAction): Promise<void> {
       // 循环本身在 `ui/closing.ts`（提出去是为了能测那三件时序上的事）
       const cur = activeTab()
       if (cur && cur.id === viewTabId) cur.state = view.state
+      // **关窗这条路同样不许绕过冲突闸**（2026-09-22 修）：它走的是 `saveDirtyTabs`
+      // → `window.api.save`，不经过 `writeOnce` 里那道闸 —— 于是「冲突选了稍后再说 →
+      // 关窗 → 保存」会把外面那份**一声不响地**盖掉，而人从头到尾没见过差异。
+      // 有未决冲突就先把它摆出来，这一次关窗到此为止（同「任何一个被取消就中止整批」）
+      const blocked = tabs.find((x) => x.conflict && isTabDirty(x))
+      if (blocked) {
+        if (blocked.id !== activeId) activate(blocked.id)
+        await openConflict(blocked)
+        syncStatus(true)
+        return
+      }
       let done = false
       /**
        * 这一次交给壳去写的**是哪一份字节**（第八节 1）。从前 `onSaved` 里那句
@@ -1860,7 +1945,13 @@ async function handleMenu(action: MenuAction): Promise<void> {
       try {
         done = await saveDirtyTabs(
           tabs.filter((x) => isTabDirty(x)),
-          { save: window.api.save, scratchClear: (id) => void window.api.scratchClear(id) },
+          {
+            // 这条路同样比一次（契约 v36）：关窗前那一刻外面改了文件，照写就是覆盖。
+            // 上面那道闸挡的是**已经知道**的冲突，这一句挡的是**刚刚才发生**的
+            save: (p, content, fp) =>
+              window.api.save(p, content, fp, tabs.find((x) => x.path === p)?.lastWritten ?? null),
+            scratchClear: (id) => void window.api.scratchClear(id)
+          },
           (tb) => {
             inFlight = tb
             written.set(tb.id, tb.state.doc)
@@ -2134,18 +2225,26 @@ async function handleExternalChange(path: string): Promise<void> {
   try {
     disk = await window.api.read(path)
   } catch {
+    // 读不到了：别处删了 / 改名了 / 外接盘拔了。**记成 missing** —— 不记的话
+    // 两秒后的自动保存会把它原地复活（见 `writeOnce` 里那道闸）
     t.stale = true
+    t.missing = true
     syncStatus(true)
     return
   }
+  delete t.missing
   const curText = t.id === viewTabId ? view.state.doc.toString() : t.state.doc.toString()
   // 两条都是「这一下是我们自己干的」：① 盘上那份与当前文档一致；
   // ② 盘上那份**正是我们自己最后写下去的那一份** —— 第二条不能省：自动保存落盘之后
   // 到监听事件到达之间只隔 300ms，人在这中间又敲了两个字的话第一条就不成立了，
   // 于是报出一次假冲突，而假冲突会把这个文件的自动保存整个停下来（比没有冲突更坏）
+  const sameFp =
+    disk.fingerprint.eol === t.writtenFp?.eol && disk.fingerprint.bom === t.writtenFp.bom
   if (
     encode(curText, t.fp) === encode(disk.content, disk.fingerprint) ||
-    disk.content === t.lastWritten
+    // **连指纹一起比**：只比正文的话，「把 LF 换成 CRLF」这种改动正文一个字不变，
+    // 会被当成我们自己写的而忽略掉 —— 下一次保存再按旧指纹写回去，人家的转换就没了
+    (disk.content === t.lastWritten && sameFp)
   ) {
     t.stale = false
     syncStatus(true)
@@ -2254,11 +2353,23 @@ async function resolveConflict(tab: Tab, choice: ConflictChoice): Promise<void> 
   // **冲突到写成了才算解决**：另存为的面板上点了取消、或者那一发写盘坏了，
   // 它就得原样挂回去 —— 提前摘掉的话，下一次自动保存会直接盖掉磁盘上那份
   if (choice === 'keep') {
-    // 覆盖之前把磁盘那份留进版本历史（契约 v22）：它是这条路上唯一一份会凭空消失的内容
-    if (tab.path) await keepSnapshot(tab.path, c.content)
+    // 覆盖之前把磁盘那份留进版本历史（契约 v22）：它是这条路上唯一一份会凭空消失的内容。
+    // **写没写成要说实话**：历史目录不可写的时候（只读盘、权限没了），从前照样回一句
+    // 「随时找得回来」—— 那是这条路上最不该说的一句假话，因为紧接着就把它覆盖了
+    const kept = tab.path ? await keepSnapshot(tab.path, c.content) : false
     if (!(await writeTab(tab, { force: true }))) return
-    note(t('cf.kept'))
+    if (kept) note(t('cf.kept'))
+    // 人已经明确选了「保留我的」，所以照覆盖 —— 但得让他知道那份没有备份了。
+    // 不自散：这句话比「已存进历史」重要得多
+    else note(t('cf.noBackup'), { warn: true, sticky: true })
   } else if (!(await writeTab(tab, { as: true, force: true }))) return
+  // **只摘掉自己处理的那一个**：上面两句 await 之间，外面可能又改了一次文件，
+  // 于是 `handleExternalChange` 往这儿放了一个**更新的**冲突。无条件 delete 会把它
+  // 一起抹掉 —— 人以为刚才那一下把事情解决了，其实盘上还压着一份没人看过的改动
+  if (tab.conflict !== c) {
+    syncStatus(true)
+    return
+  }
   delete tab.conflict
   tab.stale = false
   syncStatus(true)

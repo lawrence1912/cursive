@@ -29,6 +29,9 @@ const zh = {
   'status.retry': '重试',
   'status.conflict': '外部已修改',
   'status.viewDiff': '查看差异',
+  // 盘上那个文件没了（别处删了/改名了）：自动保存停下，不然原子写会把它原地复活
+  'status.missing': '文件已不在',
+  'status.recreate': '重新创建',
   'status.source': '源代码',
   'status.preview': '预览',
   'status.detailTitle': '点击查看详细统计',
@@ -222,6 +225,7 @@ const zh = {
   'cf.saveAs': '另存我的版本…（两份都留着）',
   'cf.later': '稍后再说',
   'cf.kept': '磁盘上那一份已存进版本历史，随时找得回来',
+  'cf.noBackup': '磁盘上那一份没能存进版本历史，已按你的选择覆盖 —— 它没有备份了',
   'hi.title': '版本历史',
   'hi.close': '关闭版本历史',
   'hi.versions': '历史版本',

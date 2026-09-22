@@ -417,8 +417,15 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and cp.get('notOverwritten') is True
     # 点「保留我的」之后盘上才轮到我这份，而磁盘那份已经先进了版本历史
     ok = ok and cp.get('resolved') is True and cp.get('diskKept') is True
+    # ---- 契约 v36：写盘那一刻自己比一次 ----
+    # 上面那一幕靠文件监听，而监听有 300ms 合并窗、自动保存是停手 2 秒 —— 外面在那
+    # 300ms 里写一笔的话，我们会先盖上去，事件随后才到、读到的已经是自己那份，
+    # 冲突永远不会出现。这一条逼的就是那条竞态：外部写完**立刻**按 ⌘S
+    ok = ok and cp.get('racePanel') is True
+    # **一个字节都没写下去**：盘上还是外面那份
+    ok = ok and cp.get('raceHeld') is True
     # 收干净了：面板关掉（它是 inset:0 的浮层，留着会挡住后面每一条 elementFromPoint）
-    ok = ok and cp.get('closed') is True
+    ok = ok and cp.get('closed') is True and cp.get('raceClosed') is True
     # ---- 0.4.1 front matter 属性表 ----
     # 夹具头上是 `title: 语料文档` + `tags: [markdown, 测试]`。三条各守一段：
     # 键名两个（title / tags）、标签两颗（数组拆开了才有）、两条 `---` 收成了边
