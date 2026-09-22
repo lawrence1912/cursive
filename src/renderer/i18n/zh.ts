@@ -21,6 +21,12 @@ const zh = {
   'status.selected': '已选 {words} 词 · {chars} 字符',
   'status.count': '{words} 词 · {chars} 字符',
   'status.saved': '已保存 {time}',
+  // 第八节 1：保存状态的另外三句。「未保存」是常态里出现最多的一句（停手两秒之内），
+  // 所以要短；「保存失败」后面跟着两颗按钮，而且不自己消失
+  'status.unsaved': '未保存',
+  'status.saving': '正在保存…',
+  'status.saveFailed': '保存失败',
+  'status.retry': '重试',
   'status.source': '源代码',
   'status.preview': '预览',
   'status.detailTitle': '点击查看详细统计',

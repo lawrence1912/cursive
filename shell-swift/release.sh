@@ -187,6 +187,19 @@ ok = (c['status'] != '未命名' and c['cm'] and c.get('dragStripHit') is True
       and abs(r.get('tbMidY', -99) - c.get('trafficMidFromTop', 0)) <= 1
       and r.get('tbToggle', {}).get('hidden') == 'none'
       and r.get('tbToggle', {}).get('restored') == 'flex')
+# 第八节 1：保存状态归**标签**自己。每个用例都走一遍 —— 它量的是一条人人都在的路
+sp = r.get('saveProbe') or {}
+# 刚自动保存完 → 那一格有话说，而且不是黄的（黄色只留给「保存失败」）
+ok = ok and bool(sp.get('savedText')) and sp.get('savedWarn') is False
+# 改一个字就换了一句话：没落盘的内容不许显示成「已保存」
+ok = ok and bool(sp.get('dirtyText')) and sp.get('dirtyText') != sp.get('savedText')
+# **靶子**：换到一个从来没落过盘的空白标签，那一格必须一个字都没有。
+# tabsOpen 证明这条断言还证明得了东西（真的换到了第二个标签上）
+ok = ok and sp.get('blankText') == '' and sp.get('tabsOpen') == 2
+# 切回来还是原来那句（去掉时刻里的数字再比，跨分钟不飘）
+ok = ok and sp.get('back') is True
+# 壳侧写盘失败回的那句话非空 —— 状态栏「保存失败」那一格的 title 读的就是它
+ok = ok and bool((sp.get('writeFail') or '').strip())
 # P4-1 导出 HTML：每个用例都导一次 —— 渲染路径上任何一处抛异常都会在这里现形
 hp = r.get('htmlProbe') or {}
 html_out = '/tmp/cursive-e2e/out/%s.html' % sys.argv[1]

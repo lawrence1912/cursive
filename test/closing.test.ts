@@ -154,7 +154,14 @@ describe('取消之后要把脏状态重新告诉壳', () => {
     expect(block).toContain('if (!done) return')
   })
 
-  it('异常不许吞：finally 里没有 catch', () => {
-    expect(block, '吞掉的话，磁盘满这种事就永远没人知道').not.toContain('catch')
+  it('异常不许吞：接住只为记下是哪一份写坏了，随后原样抛出去', () => {
+    // 第八节 1 之后这儿多了一个 catch —— 失败要记在**那一个标签**上（状态栏那格
+    // 「保存失败 · 重试 · 另存为…」靠它，而异常里没有「是谁」这个信息）。
+    // 接住可以，吞掉不行：磁盘满这种事没人知道的话，下一次关窗照样放行
+    const c = block.indexOf('} catch (e) {')
+    expect(c, '要么不接，要么接了就得往上抛').toBeGreaterThan(0)
+    const body = block.slice(c, block.indexOf('} finally {', c))
+    expect(body, '吞掉的话，磁盘满这种事就永远没人知道').toContain('throw e')
+    expect(body, '失败要记在标签上，状态栏那一格读的就是它').toContain('save.failure')
   })
 })

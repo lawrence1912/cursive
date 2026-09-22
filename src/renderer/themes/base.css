@@ -797,6 +797,13 @@ body {
 }
 .note-act:hover { opacity: 0.75; }
 #status-saved { font-variant-numeric: tabular-nums; }
+/* 第八节 1：四种保存状态共用这一格。**没话说就整格让出去**（同缩放那格的规矩）——
+   新开一份没修改过的空白文档，这儿一个字都不该有 */
+#status-saved:empty { display: none; }
+/* 「保存失败」用 --warn，和状态栏那句一次性回执同一档颜色。它后面跟着「重试」与
+   「另存为…」两颗 .note-act，**不会自己消失** —— 文件没写进去是唯一一件
+   「等它自己过去」会真丢东西的事 */
+#status-saved.is-warn { color: var(--warn); }
 #status-file { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #status-mode { font-variant-numeric: tabular-nums; }
 /* P3-8：光标行列与字数。等宽数字 —— 不这样的话行号一进位整条就抖一下 */

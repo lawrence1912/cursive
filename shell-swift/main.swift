@@ -212,7 +212,11 @@ let SHELL_TEXT: [String: [String]] = [
     "err.create":       ["无法创建「{name}」", "Can’t Create “{name}”"],
     "err.trash":        ["无法移到废纸篓", "Can’t Move to Trash"],
     "err.rename":       ["无法重命名「{name}」", "Can’t Rename “{name}”"],
-    "err.move":         ["无法移动「{name}」", "Can’t Move “{name}”"]
+    "err.move":         ["无法移动「{name}」", "Can’t Move “{name}”"],
+    // 写盘失败：这一句会原样进渲染层，挂在状态栏「保存失败」那一格的 title 上
+    // （第八节 1）。写成字面量的话，英文界面上人读到的就是一句中文
+    "err.write":        ["写入失败：{reason}", "Write failed: {reason}"],
+    "err.write.scratch":["草稿写入失败：{reason}", "Draft write failed: {reason}"]
 ]
 
 /// 取当前语言的文案。缺 key 回退中文，表里压根没有就原样返回 key —— 宁可露馅也别崩
@@ -2547,7 +2551,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 dirty = false; window.isDocumentEdited = false
                 NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
                 respond(id, ["path": path])
-            } catch { reject(id, "写入失败：\(error.localizedDescription)") }
+            } catch { reject(id, LF("err.write", ["reason": error.localizedDescription])) }
 
         case "setDocState":
             let st = args[0] as? [String: Any] ?? [:]
@@ -3127,7 +3131,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 let data = try JSONSerialization.data(withJSONObject: payload)
                 try data.write(to: scratchDir.appendingPathComponent("\(sid).json"))
                 respond(id, true)
-            } catch { reject(id, "scratch 写入失败：\(error.localizedDescription)") }
+            } catch { reject(id, LF("err.write.scratch", ["reason": error.localizedDescription])) }
 
         case "scratchList":
             var list: [[String: Any]] = []
@@ -3669,6 +3673,48 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         while (!after.content.includes('autosave-check-marker') && autosaveWaited < 5000) {
           await new Promise(r => setTimeout(r, 200)); autosaveWaited += 200
           after = await window.api.read(path)
+        }
+        // 第八节 1：保存状态**归标签自己**。上面那发自动保存刚落盘，所以这会儿状态栏
+        // 右下角该是「已保存 HH:MM」；改一个字就该当场翻成「未保存」（没落盘的内容
+        // 不许显示成已保存）；再换到一个**从来没落过盘**的空白标签 —— 那一格必须一个
+        // 字都没有。最后这条是这个探针真正的靶子：从前那句「已保存」是一个全局变量，
+        // 后台标签的自动保存会把它刷成此刻，于是**每一个**标签都挂着同一句回执，
+        // 包括一份刚新建、还从来没存过的空白文档
+        let saveProbe = null
+        {
+          const sEl = document.getElementById('status-saved')
+          const pause = (ms) => new Promise(r => setTimeout(r, ms))
+          // 时刻里的数字每分钟都在变：比「去掉数字之后的那句话」，跨分钟也不会飘
+          const words = (x) => (x || '').replace(/[0-9]/g, '')
+          const savedText = sEl.textContent
+          const savedWarn = sEl.classList.contains('is-warn')
+          v.dispatch({ changes: { from: v.state.doc.length, insert: ' x' } })
+          await pause(60)
+          const dirtyText = sEl.textContent
+          window.__shellEmit('menu', 'file:new')
+          await pause(150)
+          const blankText = sEl.textContent
+          const tabsOpen = document.querySelectorAll('.tab-item').length
+          window.__shellEmit('menu', 'file:close-tab')
+          // 切标签会把刚才那个字顺手落盘，等它回到「已保存」（**等到为止**，
+          // 别在固定时刻采一次样 —— 同上面自动保存那两条）
+          let backText = ''
+          let backWaited = 0
+          while (backWaited < 4000) {
+            await pause(100); backWaited += 100
+            backText = sEl.textContent
+            if (words(backText) === words(savedText) && backText) break
+          }
+          // 壳侧写盘失败真的会回一句话（状态栏「保存失败」那一格的 title 读的就是它）。
+          // 拿一个**必然写不进去**的路径去试：夹具自己是文件，底下不可能再有一层
+          let writeFail = ''
+          try {
+            await window.api.save(path + '/nope.md', 'x', doc.fingerprint)
+          } catch (err) { writeFail = String((err && err.message) || err) }
+          saveProbe = {
+            savedText, savedWarn, dirtyText, blankText, tabsOpen, backWaited, writeFail,
+            back: !!backText && words(backText) === words(savedText)
+          }
         }
         const img = document.querySelector('.cm-lp-image img')
         // 侧边栏开关回归验证：发两次菜单事件，查 computed display
@@ -5436,6 +5482,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             : null,
           v020,
           tabProbe,
+          saveProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
           tbGutter,

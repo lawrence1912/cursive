@@ -57,6 +57,7 @@ import {
 import { createHoleReporter } from './ui/drag-holes'
 import { parseGoto } from './ui/goto'
 import { note } from './ui/note'
+import { newSaveStatus, SAVING_AFTER, saveLabel, type SaveStatus } from './ui/save-state'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
 import { Zoom } from './ui/zoom'
@@ -538,6 +539,12 @@ interface Tab {
   scratchId?: string
   /** 磁盘文件被外部修改且本标签有未保存改动 */
   stale?: boolean
+  /**
+   * 这个标签自己的保存状态（第八节 1）。**归标签不归窗口** —— 从前那句
+   * 「已保存 10:23」是一个全局变量，后台标签的自动保存会把它刷成此刻，
+   * 于是正在编辑的这一份挂着一句它从来没发生过的回执（见 `ui/save-state.ts`）
+   */
+  save: SaveStatus
 }
 
 let tabs: Tab[] = []
@@ -668,6 +675,8 @@ function spawnTab(
     pristine.fp = fp
     pristine.savedDoc = state.doc
     pristine.scroll = scroll
+    // 换了一份文档 = 换了一段身世：上一份的「已保存 10:23」不能跟着新文件走
+    pristine.save = newSaveStatus()
     // **背景接管也要走 activate**（0.4.1 修）：`focus=false` 是为了省掉会话恢复里
     // 那 N-1 次白做的 `view.setState`，但被接管的要是**当前这个空白标签**，
     // 不换视图就等于让 `activeId` 指着新文件、视图里却还是那份空白文档 ——
@@ -676,7 +685,16 @@ function spawnTab(
     if (focus || pristine.id === activeId) activate(pristine.id)
     return pristine
   }
-  const t: Tab = { id: nextId++, path, fp, state, savedDoc: state.doc, scroll, sourceMode }
+  const t: Tab = {
+    id: nextId++,
+    path,
+    fp,
+    state,
+    savedDoc: state.doc,
+    scroll,
+    sourceMode,
+    save: newSaveStatus()
+  }
   tabs.push(t)
   if (focus) activate(t.id)
   return t
@@ -758,14 +776,10 @@ async function closeTab(id: number, discard = false): Promise<boolean> {
   if (!discard && isTabDirty(t)) {
     const choice = await window.api.confirmDiscard(tabTitle(t))
     if (choice === 'cancel') return false
-    if (choice === 'save') {
-      if (t.id === activeId) {
-        if (!(await save())) return false
-      } else {
-        const res = await window.api.save(t.path, t.state.doc.toString(), t.fp)
-        if (!res) return false
-      }
-    }
+    // 活动与非活动走同一条路（`writeTab` 认的是标签不是「当前那个」）：
+    // 从前非活动那一支自己发 `window.api.save`，于是那个标签的保存状态、
+    // scratch 清理与版本快照三件全漏了
+    if (choice === 'save' && !(await writeTab(t))) return false
   }
 
   const idx = tabs.findIndex((x) => x.id === id)
@@ -878,6 +892,8 @@ function syncStatus(force = false): void {
     activeId
   )
   window.api.openTabs(tabs.map((x) => x.path).filter((p): p is string => p !== null))
+  // 「存没存」跟着脏状态走：每敲一个字它都可能从「已保存 10:23」翻成「未保存」
+  renderSave()
   // 标签重画了：段数、宽度都可能变，挖洞区跟着重报（合帧 + 没变就不发，见 drag-holes.ts）
   holes.schedule()
 }
@@ -1140,23 +1156,101 @@ tagHost.search = (tag, query) => {
   else note(t('note.tagNoFolder'))
 }
 
-async function save(): Promise<boolean> {
-  const res = await window.api.save(docPath, view.state.doc.toString(), fingerprint)
-  if (!res) return false
-  docPath = res.path
-  const t = activeTab()
-  if (t) {
-    t.path = res.path
-    t.savedDoc = view.state.doc
-    if (t.scratchId) {
-      void window.api.scratchClear(t.scratchId)
-      t.scratchId = undefined
-    }
+// ---------- 落盘（第八节 1：一条路 + 一份状态）----------
+
+/**
+ * 同一个标签的写盘**排队**，不并发。两种撞法都真会发生：连按两下 ⌘S，
+ * 以及自动保存那一发正好压在人按的 ⌘S 上。两发同时冲向同一个路径时，
+ * 后回来的那一发会拿**它自己那份字节**去认领 `savedDoc` —— 顺序一反，
+ * 「已保存」就指到了旧内容上。串起来最省事，代价是零：写盘本来就是毫秒级的
+ */
+const writeQueue = new Map<number, Promise<void>>()
+
+interface WriteOpts {
+  /** 走另存为面板（总是要跑，哪怕文档此刻不脏） */
+  as?: boolean
+  /** 自动保存：不脏就不写，**上一次失败了也不写**（见 `writeOnce` 里那段） */
+  auto?: boolean
+}
+
+/**
+ * 把一个标签写进盘里 —— **所有落盘路径的唯一入口**（⌘S · 另存为 · 自动保存 ·
+ * 失败之后那颗「重试」）。
+ *
+ * **拿的是标签而不是「当前那个」**（第八节 1 的「异步边界」）：从前 `save()` 在
+ * `await` **之后**才去问 `activeTab()`，而那一句 await 里可以发生任何事 ——
+ * 另存为面板是模态的，人在面板开着的时候切了标签，回来那几句
+ * `t.path = res.path` / `t.savedDoc = …` 就全落在**另一个标签**身上：
+ * 它凭空拿到了别人的路径，而真正被写进盘的那一份还显示着「有修改」。
+ */
+function writeTab(t: Tab, opts: WriteOpts = {}): Promise<boolean> {
+  const run = (writeQueue.get(t.id) ?? Promise.resolve()).then(() => writeOnce(t, opts))
+  // 队列只管**排队**，不传播结果也不传播异常（否则一次失败会毒死这个标签后面每一次保存）
+  writeQueue.set(
+    t.id,
+    run.then(
+      () => undefined,
+      () => undefined
+    )
+  )
+  return run
+}
+
+async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
+  if (t.id === viewTabId) t.state = view.state
+  if (opts.auto) {
+    if (!isTabDirty(t)) return true
+    // **失败之后自动保存就停下**：磁盘满了、外接盘拔了这类毛病不会因为多试几次就好，
+    // 而每两秒重试一次的唯一效果是把那句「保存失败」不停地重置一遍。停在这儿，
+    // 状态栏上那颗「重试」就是唯一的出口 —— 人按一下，或者另存到别处去
+    if (t.save.failure !== null) return false
   }
-  markSaved()
+  // **这一次要写的是这一份**。下面 await 里人还能接着打字，那些字属于下一次 ——
+  // 认领 `savedDoc` 时必须认这一份，认「此刻视图里那份」等于把没落盘的内容说成已保存
+  const doc = t.state.doc
+  const content = doc.toString()
+  t.save.savingSince = Date.now()
+  t.save.failure = null
+  clearTimeout(savingTimer)
+  savingTimer = window.setTimeout(renderSave, SAVING_AFTER)
+  renderSave()
+  let res: { path: string } | null = null
+  try {
+    res = await (opts.as ? window.api.saveAs : window.api.save)(t.path, content, t.fp)
+  } catch (e) {
+    // 壳侧 reject（写入失败：磁盘满 / 外接盘拔了 / 权限没了）。**记在标签上**，
+    // 状态栏那一格会一直挂着它直到人处理 —— 一条 4 秒自散的回执配不上「文件没写进去」
+    t.save.failure = e instanceof Error ? e.message : String(e)
+    t.save.savingSince = null
+    endWrite()
+    return false
+  }
+  t.save.savingSince = null
+  // 保存面板上点了取消：**不是失败**，什么都不记（人只是改了主意）
+  if (!res) {
+    endWrite()
+    return false
+  }
+  t.path = res.path
+  t.savedDoc = doc
+  if (t.scratchId) {
+    void window.api.scratchClear(t.scratchId)
+    t.scratchId = undefined
+  }
+  t.save.savedAt = Date.now()
+  // 活动标签刚在面板里拿到路径的话，`docPath` 也得跟上（状态栏与壳侧的标题读它）。
+  // **要现问一次 activeId** —— 面板开着的那段时间里人可能已经切走了
+  if (t.id === activeId) docPath = t.path
+  endWrite()
   syncStatus(true)
-  void keepSnapshot(res.path, view.state.doc.toString())
+  void keepSnapshot(res.path, content)
   return true
+}
+
+/** 一次写盘收尾：把那句「正在保存…」的延时闸撤掉，再照新状态重画一次 */
+function endWrite(): void {
+  clearTimeout(savingTimer)
+  renderSave()
 }
 
 /**
@@ -1173,36 +1267,74 @@ async function keepSnapshot(path: string, content: string): Promise<void> {
   }
 }
 
-let savedAt: Date | null = null
-function markSaved(): void {
-  savedAt = new Date()
-  renderSaved()
-}
+/** 「正在保存…」那句话的延时闸（见 `save-state.ts` 的 SAVING_AFTER）。多数时候它一次都不响 */
+let savingTimer: number | undefined
 
-/** 语言切换时也要能重刷这条（savedAt 记下时刻，文案现取） */
-function renderSaved(): void {
-  if (!savedAt) return
-  const time = savedAt.toLocaleTimeString(localeOf(), { hour: '2-digit', minute: '2-digit' })
-  elSaved.textContent = t('status.saved', { time })
-}
+/** 上一次画出去的那句话的指纹（标签 + 状态 + 时刻/原因）。一样就不重画 */
+let lastSaveSig = ''
 
-async function saveAs(): Promise<boolean> {
-  const res = await window.api.saveAs(docPath, view.state.doc.toString(), fingerprint)
-  if (!res) return false
-  docPath = res.path
-  const t = activeTab()
-  if (t) {
-    t.path = res.path
-    t.savedDoc = view.state.doc
-    if (t.scratchId) {
-      void window.api.scratchClear(t.scratchId)
-      t.scratchId = undefined
+/**
+ * 状态栏右下角那一格（第八节 1）。**读的是活动标签自己那份状态** ——
+ * 切一下标签就换一句话，因为「存没存」本来就是每份文档各自的事。
+ *
+ * 四种说法：没修改也没落过盘 → 一个字都不说（`:empty` 整格让出去，同缩放那格的规矩）；
+ * 有修改 → 「未保存」；慢过门槛的写盘 → 「正在保存…」；失败 → 黄色的「保存失败」
+ * **外加两颗按钮，而且不会自己消失**。语言切换时也走这儿（时刻记着，文案现取）。
+ */
+function renderSave(): void {
+  const cur = activeTab()
+  const lab = saveLabel(cur?.save ?? newSaveStatus(), cur ? isTabDirty(cur) : false, Date.now())
+  // **没变就一个字节都不动**：这条挂在 `syncStatus` 上，于是每敲一个键都会来一次，
+  // 而九成九的相邻两次说的是同一句话。语言切换那条路自己会先把它作废（见 onLangChange）
+  const sig = `${cur?.id ?? -1}|${lab.kind}|${'at' in lab ? lab.at : ''}|${'reason' in lab ? lab.reason : ''}`
+  if (sig === lastSaveSig) return
+  lastSaveSig = sig
+  elSaved.classList.toggle('is-warn', lab.kind === 'failed')
+  elSaved.title = ''
+  switch (lab.kind) {
+    case 'none':
+      elSaved.replaceChildren()
+      break
+    case 'dirty':
+      elSaved.textContent = t('status.unsaved')
+      break
+    case 'saving':
+      elSaved.textContent = t('status.saving')
+      break
+    case 'saved': {
+      const time = new Date(lab.at).toLocaleTimeString(localeOf(), {
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+      elSaved.textContent = t('status.saved', { time })
+      break
+    }
+    case 'failed': {
+      // 原因（壳侧那句「写入失败：…」）挂在 title 上：状态栏只有一行，把系统那句
+      // 长错误摊在这儿会把右边整排读数挤出窗口，而它对人的第一价值是「出事了」，
+      // 第二才是「为什么」
+      elSaved.title = lab.reason
+      const tab = cur!
+      elSaved.replaceChildren(
+        document.createTextNode(t('status.saveFailed')),
+        ' ',
+        saveAct(t('status.retry'), () => void writeTab(tab)),
+        ' ',
+        saveAct(t('cmd.saveAs'), () => void writeTab(tab, { as: true }))
+      )
+      break
     }
   }
-  markSaved()
-  syncStatus(true)
-  void keepSnapshot(res.path, view.state.doc.toString())
-  return true
+}
+
+/** 「保存失败」后面那两颗按钮。长得与状态栏回执上那颗一样（`.note-act`，像链接不像按钮） */
+function saveAct(label: string, run: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'note-act'
+  btn.textContent = label
+  btn.addEventListener('click', run)
+  return btn
 }
 
 // ---------- 0.2.x 会话恢复：关掉再开，回到上次那几个标签 ----------
@@ -1342,24 +1474,29 @@ function scheduleAutosave(): void {
   autosaveTimer = window.setTimeout(() => void flushAutosave(), 2000)
 }
 
-/** 静默落盘一个标签：有路径走 save，无路径进 scratch */
+/**
+ * 静默落盘一个标签：有路径走 `writeTab`（与 ⌘S 同一条路，于是状态与失败处理只有一份），
+ * 无路径进 scratch。
+ *
+ * **scratch 写坏了也要说话**（第八节 1）：从前那句 `await` 裸着，磁盘满的时候只是在
+ * 控制台留一条没人看的 unhandled rejection —— 而对一份还没落过盘的草稿来说，
+ * scratch 就是它此刻**唯一**的副本。同样记成一次保存失败，状态栏那颗「另存为…」
+ * 正是这时候该按的那一颗。
+ */
 async function flushTabAutosave(t: Tab): Promise<void> {
   if (t.id === viewTabId) t.state = view.state
   if (!isTabDirty(t)) return
   if (t.path) {
-    const content = t.state.doc.toString()
-    const res = await window.api.save(t.path, content, t.fp)
-    if (res) {
-      t.savedDoc = t.state.doc
-      markSaved()
-      syncStatus(true)
-      // 自动保存也留快照。壳侧会去重，所以「停手两秒」触发的那一串同样内容
-      // 只会落下一份（契约 v22）
-      void keepSnapshot(t.path, content)
-    }
-  } else {
-    t.scratchId ??= `tab-${Date.now()}-${t.id}`
+    await writeTab(t, { auto: true })
+    return
+  }
+  if (t.save.failure !== null) return
+  t.scratchId ??= `tab-${Date.now()}-${t.id}`
+  try {
     await window.api.scratchSave(t.scratchId, t.state.doc.toString(), t.fp)
+  } catch (e) {
+    t.save.failure = e instanceof Error ? e.message : String(e)
+    renderSave()
   }
 }
 
@@ -1576,12 +1713,17 @@ async function handleMenu(action: MenuAction): Promise<void> {
       if (doc) openTab(doc.content, doc.path, doc.fingerprint)
       break
     }
-    case 'file:save':
-      await save()
+    case 'file:save': {
+      // **先把标签拿在手上**：底下那句 await 里人可以切标签、可以接着打字
+      const cur = activeTab()
+      if (cur) await writeTab(cur)
       break
-    case 'file:save-as':
-      await saveAs()
+    }
+    case 'file:save-as': {
+      const cur = activeTab()
+      if (cur) await writeTab(cur, { as: true })
       break
+    }
     case 'file:close-tab':
       await closeTab(activeId)
       break
@@ -1596,23 +1738,43 @@ async function handleMenu(action: MenuAction): Promise<void> {
       // 循环本身在 `ui/closing.ts`（提出去是为了能测那三件时序上的事）
       const cur = activeTab()
       if (cur && cur.id === viewTabId) cur.state = view.state
-      let saved = 0
       let done = false
+      /**
+       * 这一次交给壳去写的**是哪一份字节**（第八节 1）。从前 `onSaved` 里那句
+       * `tb.savedDoc = tb.state.doc` 读的是 await **之后**的文档 —— 无标题标签的
+       * 保存面板是模态的，在它开着的时候人还能回到别的标签接着打字，那些字于是
+       * 被算进了「已经写进盘里的那一份」。认下面这份就不会：它是发出去的那一份
+       */
+      const written = new Map<number, Text>()
+      /** 正在写的是谁：壳侧 reject 时异常里没有这个信息，而失败要记在标签上 */
+      let inFlight: Tab | null = null
       try {
         done = await saveDirtyTabs(
           tabs.filter((x) => isTabDirty(x)),
           { save: window.api.save, scratchClear: (id) => void window.api.scratchClear(id) },
-          (tb) => tb.state.doc.toString(),
+          (tb) => {
+            inFlight = tb
+            written.set(tb.id, tb.state.doc)
+            return tb.state.doc.toString()
+          },
           (tb, path) => {
-            saved += 1
-            tb.savedDoc = tb.state.doc
+            inFlight = null
+            const doc = written.get(tb.id) ?? tb.state.doc
+            tb.savedDoc = doc
+            tb.save.savedAt = Date.now()
+            tb.save.failure = null
             // 活动标签要是刚在保存面板里拿到路径，`docPath` 也得跟上 ——
             // 下一句 syncStatus 报的就是它
             if (tb.id === activeId) docPath = path
-            // 写进真实路径就留一份快照（契约 v22，同 `save()` 与自动保存那两条路）
-            void keepSnapshot(path, tb.state.doc.toString())
+            // 写进真实路径就留一份快照（契约 v22，同 `writeTab` 与自动保存那两条路）
+            void keepSnapshot(path, doc.toString())
           }
         )
+      } catch (e) {
+        // 写盘失败：**记在那一个标签上**，状态栏挂着「保存失败 · 重试 · 另存为…」
+        // 不自己消失。异常照旧往上抛（不吞）
+        if (inFlight) (inFlight as Tab).save.failure = e instanceof Error ? e.message : String(e)
+        throw e
       } finally {
         // **没存完就一定要重新同步脏状态**：壳侧那个 dirty 是一个全局位，前面几次
         // 成功保存已经把它清零了（`main.swift` 的 save 分支）—— 不同步的话，下一次
@@ -1620,11 +1782,10 @@ async function handleMenu(action: MenuAction): Promise<void> {
         // **走 finally 而不是 `if (!done)`**：取消（`save` 回 null）只是两条路里的一条，
         // 另一条是**写盘失败**（壳侧 reject：磁盘满、外接盘拔了、权限没了）——
         // 那时 `await` 直接抛出去，`if` 那一支根本执行不到，而壳那边已经是「干净」了。
-        // 异常照旧往上抛（不吞），控制台要看得见是哪一份写坏了
-        if (!done) {
-          if (saved) markSaved() // 一个都没存成就别亮「已保存 HH:MM」，那是句假话
-          syncStatus(true)
-        }
+        // 异常照旧往上抛（不吞），控制台要看得见是哪一份写坏了。
+        // 「已保存 HH:MM」现在归标签自己管（`tb.save.savedAt` 在 onSaved 里记），
+        // 所以这儿只要把脏状态同步回去 —— 没存成的那几个照旧显示「未保存」
+        if (!done) syncStatus(true)
       }
       if (!done) return
       window.api.confirmClose()
@@ -2009,7 +2170,9 @@ onLangChange(() => {
   outline.refresh()
   stats.render(docStat, selStat())
   syncTitlebarLabels()
-  renderSaved()
+  // 状态那一格的文案要重取：指纹只认状态，不认语言，得先把它作废
+  lastSaveSig = ''
+  renderSave()
 })
 
 // P0-2 崩溃恢复：上次留下的 scratch 未命名文档，替换启动空白标签。
