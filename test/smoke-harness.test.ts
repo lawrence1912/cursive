@@ -120,3 +120,52 @@ describe('自检不许碰真实的应用支持目录', () => {
     expect(body, '这个出口必须被 smokeAuto 挡着').toMatch(/if smokeAuto,[\s\S]*CURSIVE_SMOKE_SUPPORT/)
   })
 })
+
+/**
+ * 第八节 3 的**固定走查项**：五组组合操作，每一组都有一条 E2E 探针 + 一条断言。
+ *
+ * 这份清单的意义在于**它不许悄悄变短**。五组里每一组都对应一层已经存在、而且
+ * 只有真跑起来才看得见的保护（拖选期间冻结回显布局、文末翻面的底部留白、表格
+ * 进出编辑态的条件、reconfigure 之后的滚动锚、合成期间不重算装饰器）——
+ * 这些保护从前全靠手点走查，谁都不知道哪一次改动把哪一层碰掉了。
+ */
+describe('第八节 3：源码显隐与选区稳定性的固定走查项', () => {
+  const items = [
+    // [探针名, release.sh 里读它的那一行的一部分]
+    ['dragProbe', "dp.get('steady')"],
+    ['mathTailProbe', "mt.get('inBlock')"],
+    ['tableHopProbe', "th.get('stillRendered')"],
+    ['modeProbe', "mp.get('drift')"],
+    ['imeProbe', "ip.get('heldRendered')"]
+  ] as const
+
+  it('五组都在探针里，也都在断言里 —— 少一组就是少走查一层保护', () => {
+    for (const [probe, assertion] of items) {
+      expect(swift, `${probe} 的探针没了`).toContain(`${probe} = {`)
+      expect(swift, `${probe} 没报回去`).toContain(`          ${probe},`)
+      expect(release, `${probe} 没人验`).toContain(assertion)
+    }
+  })
+
+  it('每一组都带着「这条用例还证明得了东西」的证人', () => {
+    // 走查最容易烂掉的方式不是变红，是**变成一句空话**：图没渲染出来、公式没翻、
+    // 表只有一张、模式没切过去、那一行本来就翻不动 —— 每一条都另钉一个前提
+    expect(release).toContain("dp.get('covers')") // 选区真跨过了那张图
+    expect(release).toContain("mt.get('revealed')") // 公式真翻成源码了
+    expect(release).toContain("th.get('views0') == 2") // 真有两张表
+    expect(release).toContain("mp.get('inSource')") // 真切到源码模式了
+    expect(release).toContain("ip.get('revealedAfter')") // 合成收工之后它翻得动
+  })
+
+  it('文末翻面那条是**量出来的预算**，不是拍的', () => {
+    // 2026-09-22 实测 29px（正文一行 ≈ 29px）。这个数一旦涨到几百，
+    // 就是 `pointer-selection.ts` 末尾那笔底部留白又没了（0.2.x 实测跳 377px）
+    expect(release).toContain("mt.get('jumped', 999) <= 40")
+  })
+
+  it('标签数按「多出来一个」算，不写死 —— 所有用例共用一个工作区根', () => {
+    // 上一条用例留在会话里的标签会在这一条启动时被恢复出来，写死 2 会随用例顺序
+    // 随机变红（2026-09-22 真踩过：单跑绿，接在 tables.md 后面跑红）
+    expect(release).toContain("sp.get('tabsOpen') == sp.get('tabsBefore', -9) + 1")
+  })
+})

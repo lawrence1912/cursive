@@ -42,6 +42,9 @@ rm -rf "$FIX"; mkdir -p "$FIX/assets" "$FIX/out"
 cp test/fixtures/kitchen-sink.md test/fixtures/crlf.md test/fixtures/math.md test/fixtures/mermaid.md \
    test/fixtures/dialect.md test/fixtures/callout.md test/fixtures/bom.md "$FIX/"
 cp test/fixtures/assets/placeholder.png "$FIX/assets/中文 图.png"
+# 第八节 3 走查②要一个**落在文末**的块级公式：「展开会让文档变矮、滚动被夹回去」
+# 只在文末才发生（文档中间有的是内容把高度撑着）。追加在副本上，仓库里的夹具不动
+printf '\n$$\n\\begin{aligned}\na &= b + c \\\\\nd &= e + f \\\\\ng &= h + i\n\\end{aligned}\n$$\n' >> "$FIX/math.md"
 # 三张图各守一条链：① 百分号编码的中文文件名；② 尺寸语法 `=宽x高`；
 # ③ 尖括号目的地（文件名带空格时**唯一**的写法）+ 尺寸。②③ 以前在编辑器里从来没生效过
 printf '# 图片测试\n\n![中文图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png)\n\n![尺寸图](assets/%%E4%%B8%%AD%%E6%%96%%87%%20%%E5%%9B%%BE.png =120x80)\n\n![尖括号图](<assets/中文 图.png> =60x40)\n' > "$FIX/img.md"
@@ -118,6 +121,10 @@ chmod 000 "$FIX/denied.md"
 
 # 手工对齐过的表：E2E 要靠它证明「改一格不会顺手把别的列重排」
 printf '# 表格测试\n\n| 左对齐   | 居中 | 右对齐 |\n| :------- | :--: | -----: |\n| a        | b    | c      |\n| **粗体** | `code` | d      |\n' > "$FIX/table.md"
+# 第八节 3 走查③（连着进两张表）**自己一份夹具**：往 table.md 里加第二张表会把
+# 那条用例原有的断言搅了（实测底部工具栏那条当场翻红）。同 tabs.md / link-target.md
+# 的道理 —— 拿别的用例的夹具当小白鼠，红起来分不清是谁的错
+printf '# 两张表\n\n| 一表左 | 一表右 |\n| ------ | ------ |\n| a      | b      |\n\n正文一行，把两张表隔开。\n\n| 二表左 | 二表右 |\n| ------ | ------ |\n| x      | y      |\n' > "$FIX/tables.md"
 
 # A1 排序的三个证人（目录在前 + Finder 的比法）。`out/` 本来就在（字母序落在中间，
 # 必须被提到所有文件前面），这里再补两类裸 `sorted()` 一定会排错的名字：
@@ -211,7 +218,9 @@ ok = ok and bool(sp.get('savedText')) and sp.get('savedWarn') is False
 ok = ok and bool(sp.get('dirtyText')) and sp.get('dirtyText') != sp.get('savedText')
 # **靶子**：换到一个从来没落过盘的空白标签，那一格必须一个字都没有。
 # tabsOpen 证明这条断言还证明得了东西（真的换到了第二个标签上）
-ok = ok and sp.get('blankText') == '' and sp.get('tabsOpen') == 2
+# **数的是「多出来一个」**：所有用例共用一个工作区根，上一条用例留在会话里的标签
+# 会在这一条启动时被恢复出来，写死 2 会随用例顺序随机变红（真踩过）
+ok = ok and sp.get('blankText') == '' and sp.get('tabsOpen') == sp.get('tabsBefore', -9) + 1
 # 切回来还是原来那句（去掉时刻里的数字再比，跨分钟不飘）
 ok = ok and sp.get('back') is True
 # 壳侧写盘失败回的那句话非空 —— 状态栏「保存失败」那一格的 title 读的就是它
@@ -229,6 +238,16 @@ ok = ok and 'safe-file://' not in page and 'app://' not in page and '<script' no
 if c.get('dblClickAction') == 'Maximize':
     ok = ok and c.get('dblClickZoomed') is True
 if sys.argv[1] == 'img.md':
+    # ---- 第八节 3 走查①：跨图片拖选 ----
+    # 拖过一张渲染出来的图时回显布局必须冻住（holdPointerLayout）。量法是**同一个屏幕
+    # 坐标问两次**：拖到一半问一次、拖到终点再问一次 —— 不冻的话那张图会在半路翻成
+    # 源码、下面的东西整体上跳，两次答案就不一样了（也就是「人手底下的落点被换掉了」）
+    dp = r.get('dragProbe') or {}
+    ok = ok and dp.get('steady') is True
+    # 选区真的跨过了那张图（这条用例才证明得了东西）
+    ok = ok and dp.get('covers') is True
+    # 拖选期间视口一动不动
+    ok = ok and dp.get('scrolled') == 0
     # P4-1：图片嵌成 data: URI —— 文档里写的是百分号编码的中文文件名，
     # 这一条同时守着「渲染层给绝对路径 → 壳逐级解码找到文件 → base64 嵌进去」整条链
     ok = ok and 'data:image/png;base64,' in page
@@ -261,6 +280,16 @@ if sys.argv[1] == 'img.md':
         ok = ok and ph > pw and ph < 32768
         # 图片嵌进去了：几张 icon 的 base64 摊开，一张空白页绝到不了这个量
         ok = ok and len(raw) > 100_000
+if sys.argv[1] == 'tables.md':
+    # ---- 第八节 3 走查③：连着进两张表 ----
+    # 第一张进就地编辑态之后再点第二张：第二张要接上，**而且两张都得留在渲染态** ——
+    # 「进/出」的条件是 0.4.x 修过两轮的地方（docs/table-editing.md 判断 3 / 5），
+    # 从前栽过的样子正是「点完第二张，第一张塌回管道符源码」
+    th = r.get('tableHopProbe') or {}
+    ok = ok and th.get('views0') == 2          # 夹具真有两张表
+    ok = ok and th.get('firstOn') is True and th.get('secondOn') is True
+    ok = ok and th.get('stillRendered') == 2
+    ok = ok and th.get('bar') is True          # 工具栏跟着走到第二张
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
     # P2-6：点单元格 → 表格**留在渲染态**、焦点落进 contenteditable 的格子里
@@ -357,6 +386,21 @@ if sys.argv[1] == 'table.md':
     # 探针自己收干净了（皮肤退选），否则它会跟着 localStorage 留给后面的用例
     ok = ok and sk.get('cleaned') != 'rgb(1, 2, 3)'
 if sys.argv[1] == 'kitchen-sink.md':
+    # ---- 第八节 3 走查④：切源码模式，阅读位置要稳 ----
+    # 切换是一次 reconfigure：文档没变，整篇的高度全变了（图/公式/表换成源码）。
+    # 量的是「视口顶上那一行的行号」—— 位置按像素留在原地的话，看的那一行早跑没了
+    mp = r.get('modeProbe') or {}
+    ok = ok and mp.get('inSource') is True and mp.get('restored') is True
+    ok = ok and mp.get('drift') == 0 and mp.get('driftBack') == 0
+    # ---- 第八节 3 走查⑤：中文输入候选期间点一下别处 ----
+    # 红线二：合成期间绝不重算装饰器（候选窗开着时结构一变，WebKit 把候选整个撤掉 =
+    # 中文连打掉字）。量的是看得见的东西：那一行会不会翻回源码
+    ip = r.get('imeProbe') or {}
+    ok = ok and ip.get('started') is True and ip.get('renderedBefore') is True
+    ok = ok and ip.get('heldRendered') is True and ip.get('kept') is True
+    # moved：那一下点击真的落下去了；revealedAfter：合成收工之后它**翻得动** ——
+    # 两条都是「这条用例还证明得了东西」的证人
+    ok = ok and ip.get('moved') is True and ip.get('revealedAfter') is True
     # ---- 第八节 2：外部修改冲突 ----
     # 这条路从前一次都没被自检跑过（原生弹窗的 runModal 会把无人值守的自检卡死）。
     # 只挂在这一条用例上：它要等过整个自动保存窗口，每条都跑就是白花小一分钟
@@ -557,6 +601,15 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and st.get('closed') is True                        # Escape 关得掉
     ok = ok and st.get('backText') == st.get('docText')         # 取消选区读数复原
 if sys.argv[1] == 'math.md':
+    # ---- 第八节 3 走查②：文末展开一个块级公式 ----
+    # 翻面让文档变矮，浏览器把超出新上限的 scrollTop **夹回去** —— 0.2.x 实测文末
+    # 400px 的图点一下跳 377px。`pointer-selection.ts` 末尾那笔底部留白治的就是它
+    mt = r.get('mathTailProbe') or {}
+    ok = ok and mt.get('revealed') is True          # 真翻成源码了
+    ok = ok and mt.get('inBlock') is True           # 落点落在点中的那个块里
+    # **回归预算**：2026-09-22 实测 29px（正文一行 ≈ 29px），给到一行出头。
+    # 这个数是量出来的，不是拍的 —— 它一旦涨到几百，就是那笔留白又没了
+    ok = ok and mt.get('jumped', 999) <= 40
     # P4-1：导出的公式走 MathML（不依赖 KaTeX 的 CSS 与字体）
     ok = ok and '<math' in page and 'class="math-block"' in page
     # P1-1：行内 + 块级公式都渲染了，且 KaTeX 字体真的加载（CSP 下被拦肉眼不一定看得出）
@@ -744,6 +797,7 @@ PY
 }
 run_case img.md
 run_case table.md
+run_case tables.md
 run_case kitchen-sink.md
 run_case crlf.md
 # 0.4.0 F2 顺带补的一条：**带 BOM 的文件读进来再存回去，那三个字节还得在**。

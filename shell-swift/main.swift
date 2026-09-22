@@ -3713,6 +3713,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const words = (x) => (x || '').replace(/[0-9]/g, '')
           const savedText = sEl.textContent
           const savedWarn = sEl.classList.contains('is-warn')
+          // **起点不是「一个标签」**：所有用例共用同一个工作区根，上一条用例留在会话里的
+          // 标签会在这一条启动时被恢复出来。所以数的是「多出来一个」，不是「总共两个」
+          const tabsBefore = document.querySelectorAll('.tab-item').length
           v.dispatch({ changes: { from: v.state.doc.length, insert: ' x' } })
           await pause(60)
           const dirtyText = sEl.textContent
@@ -3737,10 +3740,222 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             await window.api.save(path + '/nope.md', 'x', doc.fingerprint)
           } catch (err) { writeFail = String((err && err.message) || err) }
           saveProbe = {
-            savedText, savedWarn, dirtyText, blankText, tabsOpen, backWaited, writeFail,
+            savedText, savedWarn, dirtyText, blankText, tabsOpen, tabsBefore, backWaited, writeFail,
             back: !!backText && words(backText) === words(savedText)
           }
         }
+        // ---------- 第八节 3：源码显隐与选区稳定性的**固定走查项** ----------
+        // 五组组合操作，每一组都是「人真的会这么干、而且从前只能靠手点」的那一类。
+        // 合成鼠标事件在 CM 这条路上是**真路径**：它按坐标自己算位置，不读 DOM 选区
+        const fire = (el, type, x, y, buttons) => el.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: buttons
+        }))
+        const wwait = (ms) => new Promise(r => setTimeout(r, ms))
+
+        // 走查①：**跨图片拖选**。拖过一个渲染出来的块时回显布局必须冻住
+        //（`editor/pointer-selection.ts` 的 holdPointerLayout）—— 不冻的话，选区一碰到
+        // 那张图它当场翻成源码、下面的东西整体上跳，人手底下的落点就不是刚才那个了。
+        // 量法是**同一个屏幕坐标问两次**：拖到一半问一次、拖到终点再问一次，冻住了答案就一样
+        let dragProbe = null
+        if (path.indexOf('img.md') >= 0) {
+          const dv = window.__cursive.view
+          const wrap = document.querySelector('.cm-lp-image')
+          if (wrap) {
+            const imgPos = dv.posAtDOM(wrap)
+            const imgLine = dv.state.doc.lineAt(imgPos)
+            const from = dv.state.doc.line(Math.max(1, imgLine.number - 1)).from
+            const toLine = dv.state.doc.line(Math.min(dv.state.doc.lines, imgLine.number + 2))
+            const a = dv.coordsAtPos(from)
+            const b = dv.coordsAtPos(toLine.to)
+            if (a && b) {
+              const scroll0 = dv.scrollDOM.scrollTop
+              const bx = b.left + 2, by = (b.top + b.bottom) / 2
+              fire(dv.contentDOM, 'mousedown', a.left + 1, (a.top + a.bottom) / 2, 1)
+              await wwait(40)
+              fire(document, 'mousemove', bx, (a.top + b.top) / 2, 1)
+              await wwait(40)
+              const mid = dv.posAtCoords({ x: bx, y: by }, false)
+              fire(document, 'mousemove', bx, by, 1)
+              await wwait(40)
+              const held = dv.posAtCoords({ x: bx, y: by }, false)
+              const sel = dv.state.selection.main
+              fire(document, 'mouseup', bx, by, 0)
+              await wwait(160)
+              dragProbe = {
+                imgPos: imgPos, mid: mid, held: held, steady: mid === held,
+                covers: sel.from <= imgPos && sel.to >= imgPos,
+                scrolled: Math.abs(dv.scrollDOM.scrollTop - scroll0)
+              }
+              // 选区不留给后面：它会让沿途每个块都露出源码
+              dv.dispatch({ selection: { anchor: 0 } })
+              await wwait(80)
+            }
+          }
+        }
+
+        // 走查②：**文末展开一个块级公式**。翻面会让文档变矮（公式换成三行源码），
+        // 浏览器把超出新上限的 scrollTop **夹回去** —— 在文末点开一个高块，整页会往下跳
+        // 一大截（0.2.x 实测文末 400px 的图跳 377px）。`pointer-selection.ts` 末尾那笔
+        // 底部留白就是为它补的，这条盯着它还在不在
+        let mathTailProbe = null
+        if (path.indexOf('math.md') >= 0) {
+          const mv = window.__cursive.view
+          const sd = mv.scrollDOM
+          sd.scrollTop = sd.scrollHeight
+          await wwait(200)
+          const blocks = document.querySelectorAll('.cm-lp-mathview')
+          const last = blocks[blocks.length - 1]
+          if (last) {
+            const r0 = last.getBoundingClientRect()
+            const before = sd.scrollTop
+            // 这块公式在文档里从哪儿起：**落点准不准要按块算**，不能按字符数算 ——
+            // 点的时候它还是一个 widget（整块只对应一个位置），翻成源码之后才有行
+            const blockFrom = mv.posAtDOM(last)
+            const hit = mv.posAtCoords({ x: r0.left + 6, y: r0.top + 6 }, false)
+            fire(mv.contentDOM, 'mousedown', r0.left + 6, r0.top + 6, 1)
+            fire(document, 'mouseup', r0.left + 6, r0.top + 6, 0)
+            await wwait(260)
+            const head = mv.state.selection.main.head
+            // 落在**点中的那个块里**（它是文末最后一块，所以「在它起点之后」就够）
+            const inBlock = head >= blockFrom
+            mathTailProbe = {
+              before: Math.round(before), after: Math.round(sd.scrollTop),
+              jumped: Math.round(Math.abs(sd.scrollTop - before)),
+              hit: hit, head: head, blockFrom: blockFrom, inBlock: inBlock,
+              // 真的翻成源码了（这条用例才证明得了东西）
+              revealed: !!document.querySelector('.cm-lp-math')
+            }
+            mv.dispatch({ selection: { anchor: 0 } })
+            await wwait(80)
+          }
+        }
+
+        // 走查③：**连着进两张表**。第一张进就地编辑态之后再点第二张 ——
+        // 第一张要退回渲染态、第二张要接上，而不是两张都停在源码上（`tableRendered`
+        // 的进出条件是 0.4.x 修过两轮的地方，docs/table-editing.md 判断 3 / 5）
+        let tableHopProbe = null
+        if (path.indexOf('tables.md') >= 0) {
+          const cells = document.querySelectorAll('.cm-lp-tableview td')
+          const views0 = document.querySelectorAll('.cm-lp-tableview').length
+          if (cells.length && views0 >= 2) {
+            const first = cells[0]
+            first.focus()
+            await wwait(120)
+            const firstOn = document.activeElement === first
+            // 第二张表的第一格
+            const secondView = document.querySelectorAll('.cm-lp-tableview')[1]
+            const cell2 = secondView ? secondView.querySelector('td') : null
+            if (cell2) {
+              cell2.focus()
+              await wwait(160)
+              tableHopProbe = {
+                views0: views0,
+                firstOn: firstOn,
+                secondOn: document.activeElement === cell2,
+                // 两张都还是渲染态 = 第一张没被落在源码里
+                stillRendered: document.querySelectorAll('.cm-lp-tableview').length,
+                bar: !!document.querySelector('.cm-lp-tbl-bar')
+              }
+              // 退出就地编辑，别留给后面的 tableEdit 探针
+              window.__cursive.view.dispatch({ selection: { anchor: 0 } })
+              window.__cursive.view.focus()
+              await wwait(120)
+            }
+          }
+        }
+
+        // 走查④：**切源码模式，阅读位置要稳**。切换是一次 reconfigure：文档没变，
+        // 可整篇的高度全变了（图/公式/表换成源码），滚动位置按像素留在原地 =
+        // 看的那一行早跑没了。量的是「视口顶上那一行的行号」，切过去、切回来各一次
+        let modeProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          const mv = window.__cursive.view
+          const sd = mv.scrollDOM
+          sd.scrollTop = Math.round((sd.scrollHeight - sd.clientHeight) * 0.45)
+          await wwait(220)
+          const box = sd.getBoundingClientRect()
+          const topLine = () => mv.state.doc.lineAt(
+            mv.posAtCoords({ x: box.left + 24, y: box.top + 6 }, false)).number
+          const before = topLine()
+          window.__shellEmit('menu', 'view:toggle-source')
+          await wwait(320)
+          const inSource = mv.dom.classList.contains('cursive-source')
+          const after = topLine()
+          window.__shellEmit('menu', 'view:toggle-source')
+          await wwait(320)
+          const back = topLine()
+          modeProbe = {
+            before: before, after: after, back: back, inSource: inSource,
+            restored: !mv.dom.classList.contains('cursive-source'),
+            drift: Math.abs(after - before), driftBack: Math.abs(back - before),
+            lines: mv.state.doc.lines
+          }
+          sd.scrollTop = 0
+          await wwait(120)
+        }
+
+        // 走查⑤：**中文输入候选期间点一下别处**。红线二：合成期间绝不重算装饰器 ——
+        // 候选窗开着时文档结构一变，WebKit 会把候选整个撤掉（中文连打掉字）。
+        //
+        // 合成的 CompositionEvent 驱不动真的输入法，但**驱得动 CM 的
+        // `compositionStarted`**（`composing` 要等首个文本变更才为真，所以不能拿它当信号
+        // —— 这条探针第一版就栽在这儿，量到的是 false）。量的是**看得见的东西**：
+        // 平时光标一落到带 `**` 的那一行，那一行就回显源码；合成期间必须**一个字不动**，
+        // 合成结束之后才补上（`live-preview/index.ts` 的 wasComposing）
+        let imeProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          const iv = window.__cursive.view
+          const lineElAt = (pos) => {
+            let n = iv.domAtPos(pos).node
+            while (n && !(n.classList && n.classList.contains('cm-line'))) n = n.parentNode
+            return n
+          }
+          const d = iv.state.doc
+          let target = -1
+          for (let n = 1; n <= d.lines; n++) {
+            const tx = d.line(n).text
+            const at = tx.indexOf('**')
+            if (at >= 0 && tx.length > at + 4) { target = d.line(n).from + at + 3; break }
+          }
+          if (target >= 0) {
+            iv.focus()
+            iv.dispatch({ selection: { anchor: 0 } })
+            await wwait(140)
+            const before = lineElAt(target)
+            const renderedBefore = !!before && before.textContent.indexOf('**') < 0
+            const c = iv.coordsAtPos(target)
+            iv.contentDOM.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+            await wwait(60)
+            const started = iv.compositionStarted
+            const len0 = iv.state.doc.length
+            if (c) {
+              fire(iv.contentDOM, 'mousedown', c.left + 1, (c.top + c.bottom) / 2, 1)
+              fire(document, 'mouseup', c.left + 1, (c.top + c.bottom) / 2, 0)
+            }
+            await wwait(160)
+            const during = lineElAt(target)
+            imeProbe = {
+              started: started,
+              renderedBefore: renderedBefore,
+              // **候选期间那一行一个字都不许翻**
+              heldRendered: !!during && during.textContent.indexOf('**') < 0,
+              // 文档也不许变（合成期间任何一次写都可能把候选撕掉）
+              kept: iv.state.doc.length === len0,
+              moved: iv.state.selection.main.head !== 0
+            }
+            iv.contentDOM.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }))
+            await wwait(80)
+            // 合成收工之后补一次：这一下必须翻出源码 —— 它证明上面那条「没翻」不是因为
+            // 这条用例本来就翻不动
+            iv.dispatch({ selection: { anchor: target } })
+            await wwait(160)
+            const after = lineElAt(target)
+            imeProbe.revealedAfter = !!after && after.textContent.indexOf('**') >= 0
+            iv.dispatch({ selection: { anchor: 0 } })
+            await wwait(80)
+          }
+        }
+
         // 第八节 4：读盘失败分四类（契约 v35）。三份夹具各走一种真失败 ——
         // 从前壳回的是同一句「读不到文件：<路径>」，渲染层于是分不出「这文件不是
         // UTF-8」（一句话就说得清）和「它不在了」（该刷树）。**只认类别那一段**：
@@ -5588,6 +5803,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           saveProbe,
           conflictProbe,
           openFailProbe,
+          dragProbe,
+          mathTailProbe,
+          tableHopProbe,
+          modeProbe,
+          imeProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },
           tabHit,
           tbGutter,
