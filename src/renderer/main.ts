@@ -551,6 +551,13 @@ interface Tab {
    */
   conflict?: { content: string; fingerprint: FileFingerprint }
   /**
+   * **我们自己最后写下去的那一份字节**（2026-09-22）。用来认出「这次文件变了是我自己
+   * 干的」—— 光比「盘上那份与当前文档一不一样」不够：人在自动保存落盘之后、监听事件
+   * 到达之前又敲了几个字（这两件事只隔 300ms），那条就不成立了，于是报出一次
+   * 彻头彻尾的假冲突。而假冲突比没有冲突更坏：它会把这个文件的自动保存停下来
+   */
+  lastWritten?: string
+  /**
    * 这个标签自己的保存状态（第八节 1）。**归标签不归窗口** —— 从前那句
    * 「已保存 10:23」是一个全局变量，后台标签的自动保存会把它刷成此刻，
    * 于是正在编辑的这一份挂着一句它从来没发生过的回执（见 `ui/save-state.ts`）
@@ -1303,6 +1310,7 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   }
   t.path = res.path
   t.savedDoc = doc
+  t.lastWritten = content
   if (t.scratchId) {
     void window.api.scratchClear(t.scratchId)
     t.scratchId = undefined
@@ -1862,6 +1870,7 @@ async function handleMenu(action: MenuAction): Promise<void> {
             inFlight = null
             const doc = written.get(tb.id) ?? tb.state.doc
             tb.savedDoc = doc
+            tb.lastWritten = doc.toString()
             tb.save.savedAt = Date.now()
             tb.save.failure = null
             // 活动标签要是刚在保存面板里拿到路径，`docPath` 也得跟上 ——
@@ -2130,8 +2139,14 @@ async function handleExternalChange(path: string): Promise<void> {
     return
   }
   const curText = t.id === viewTabId ? view.state.doc.toString() : t.state.doc.toString()
-  // 与磁盘一致 → 是我们自己的自动保存触发的监听事件，忽略
-  if (encode(curText, t.fp) === encode(disk.content, disk.fingerprint)) {
+  // 两条都是「这一下是我们自己干的」：① 盘上那份与当前文档一致；
+  // ② 盘上那份**正是我们自己最后写下去的那一份** —— 第二条不能省：自动保存落盘之后
+  // 到监听事件到达之间只隔 300ms，人在这中间又敲了两个字的话第一条就不成立了，
+  // 于是报出一次假冲突，而假冲突会把这个文件的自动保存整个停下来（比没有冲突更坏）
+  if (
+    encode(curText, t.fp) === encode(disk.content, disk.fingerprint) ||
+    disk.content === t.lastWritten
+  ) {
     t.stale = false
     syncStatus(true)
     return
@@ -2177,6 +2192,9 @@ function adoptDisk(tab: Tab, disk: DocPayload): void {
   tab.savedDoc = tab.state.doc
   tab.fp = disk.fingerprint
   tab.stale = false
+  // 换进来的这份就是盘上那份：接下来那一发监听事件（换内容本身不写盘，但别人
+  // 可能接着又改）认得出「这不是我写的」
+  tab.lastWritten = disk.content
   delete tab.conflict
   if (!live) {
     syncStatus(true)

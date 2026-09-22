@@ -1858,7 +1858,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     var docPath: String?
     /// 外部变更监听：path → DispatchSource
     var watchers: [String: DispatchSourceFileSystemObject] = [:]
-    var lastNotify: [String: Date] = [:]
+    /// 文件变更的**合并窗**（2026-09-22 从「头部节流」改过来，理由见 `watch`）
+    var fileNotify: [String: DispatchWorkItem] = [:]
     /// 文件树的**目录**监听（契约 v32）。与上面那张分开放：那张认的是「打开着的
     /// 文档」，两张单子各自更新、报的也是两个不同的事件，混在一起就没法各自撤销
     var dirWatchers: [String: DispatchSourceFileSystemObject] = [:]
@@ -1867,7 +1868,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
     var scratchDir: URL { scratchDirURL() }
 
-    /// P0-3：外部变更监听。rename/delete 后必须重开重注册（rename-replace 保存会让 fd 失效）
+    /**
+     * P0-3：外部变更监听。rename/delete 后必须重开重注册（rename-replace 保存会让 fd 失效）。
+     *
+     * **合并窗是尾部去抖，不是头部节流**（2026-09-22 改，跑 E2E 跑出来的）。从前这儿写的是
+     * 「距上一次报过不到 0.8 秒就 `return`」—— 那是把这 0.8 秒里的变更**整个丢掉**，
+     * 而不是晚一点再报。后果是一次真的外部变更可以彻底消失：自动保存刚落过盘（我们
+     * 自己那一次也会吵醒 kqueue），紧接着别的程序改了同一个文件，那一下就落进阴影里，
+     * 渲染层一个字都收不到 —— 接着我们的下一次自动保存把人家的改动盖掉。
+     * 目录那一侧（契约 v32）当初正是因为同一个道理选的尾部去抖，这里补上。
+     *
+     * 300ms 静默才报：一批写常常是一条条到的（同步工具、`sed -i`、别的编辑器的
+     * rename-replace），报第一条意味着渲染层去读一个**写到一半**的文件。
+     */
     private func watch(_ path: String) {
         watchers[path]?.cancel()
         let fd = open(path, O_EVTONLY)
@@ -1878,10 +1891,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             guard let self, let src = self.watchers[path] else { return }
             let data = src.data
             if data.contains(.rename) || data.contains(.delete) { self.watch(path) }
-            if let last = self.lastNotify[path], Date().timeIntervalSince(last) < 0.8 { return }
-            self.lastNotify[path] = Date()
-            self.webView.evaluateJavaScript(
-                "window.__shellEmit('file:changed-externally', \(jsonLiteral(path)))")
+            self.fileNotify[path]?.cancel()
+            let job = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.fileNotify.removeValue(forKey: path)
+                self.webView.evaluateJavaScript(
+                    "window.__shellEmit('file:changed-externally', \(jsonLiteral(path)))")
+            }
+            self.fileNotify[path] = job
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: job)
         }
         src.setCancelHandler { close(fd) }
         src.resume()
@@ -1893,6 +1911,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         for (p, src) in watchers where !set.contains(p) {
             src.cancel()
             watchers.removeValue(forKey: p)
+            // 在飞的那一发也撤掉：标签都关了，没必要再去问一个不再盯着的路径
+            fileNotify.removeValue(forKey: p)?.cancel()
         }
         for p in paths where watchers[p] == nil { watch(p) }
     }
@@ -3749,16 +3769,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const cwait = (ms) => new Promise(r => setTimeout(r, ms))
           const cv = window.__cursive.view
           const panel = () => document.getElementById('conflict')
-          const diskText = (await window.api.read(path)).content + '\nconflict-disk'
+          const diskText = (await window.api.read(path)).content + '\\nconflict-disk'
           // **顺序不能反**：先在编辑器里改一笔（这个标签从此是脏的），再从外面改文件。
           // 自动保存是「停手 2 秒」，文件监听有 0.8 秒节流 —— 这样冲突会在自动保存
           // 开火之前落下来。`window.api.save` 直接写盘 = 一次真的外部变更（同契约 v32
           // 那三条用的手法）
-          cv.dispatch({ changes: { from: cv.state.doc.length, insert: '\nconflict-mine' } })
+          cv.dispatch({ changes: { from: cv.state.doc.length, insert: '\\nconflict-mine' } })
           await window.api.save(path, diskText, doc.fingerprint)
           let opened = 0
           while (opened < 6000 && !(panel() && !panel().hidden)) { await cwait(100); opened += 100 }
           const el = panel()
+          // **当场记下「它出来了」**：底下点完「保留我的」面板就关了，等跑到末尾再问
+          // `el.hidden` 问到的是那一下的结果，不是此刻这一问的结果
+          const shown = !!(el && !el.hidden)
           const diffText = el ? ((el.querySelector('.hi-diff') || {}).textContent || '') : ''
           const sEl2 = document.getElementById('status-saved')
           const statusWarn = sEl2.classList.contains('is-warn')
@@ -3783,7 +3806,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             if (txt && txt.indexOf('conflict-disk') >= 0) { diskKept = true; break }
           }
           conflictProbe = {
-            shown: !!(el && !el.hidden), opened,
+            shown, opened,
             // 面板里两份都看得见（− 是磁盘那份、+ 是我这份）
             sawDisk: diffText.indexOf('conflict-disk') >= 0,
             sawMine: diffText.indexOf('conflict-mine') >= 0,

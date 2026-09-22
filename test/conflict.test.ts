@@ -86,6 +86,28 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     expect(body).toContain('{ as: true, force: true }')
   })
 
+  it('我们自己写下去的那一份不算外部变更 —— 哪怕人在那之后又敲了几个字', () => {
+    const body = fn('async function handleExternalChange(')
+    // 光比「盘上那份与当前文档一不一样」不够：自动保存落盘到监听事件到达之间只隔
+    // 300ms，人在这中间又敲两个字，那条就不成立了 —— 于是报出一次假冲突，
+    // 而假冲突会把这个文件的自动保存整个停下来，比没有冲突更坏
+    expect(body).toContain('disk.content === t.lastWritten')
+    expect(main, '写成了才记得住').toContain('t.lastWritten = content')
+  })
+
+  it('文件监听是**尾部去抖**，不是头部节流（2026-09-22 跑 E2E 跑出来的）', () => {
+    const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+    const at = swift.indexOf('private func watch(_ path: String) {')
+    const body = swift.slice(at, swift.indexOf('\n    }\n', at))
+    // 头部节流是把那 0.8 秒里的变更**整个丢掉**，不是晚一点再报 —— 一次真的外部变更
+    // 可以就此消失（自动保存刚吵醒过 kqueue，紧接着别人改了同一个文件）
+    expect(body).not.toContain('lastNotify')
+    expect(body).toContain('fileNotify[path]?.cancel()')
+    expect(body).toContain('DispatchWorkItem')
+    // 目录那一侧（契约 v32）当初就是因为同一个道理选的尾部去抖
+    expect(swift).toContain('self.dirNotify[path]?.cancel()')
+  })
+
   it('状态栏那一格把冲突排在最前面，且那颗「查看差异」不自散', () => {
     const at = main.indexOf('function renderSave(')
     const body = main.slice(at, main.indexOf('\n}\n', at))
