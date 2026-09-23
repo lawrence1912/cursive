@@ -7,7 +7,13 @@ import { findNext, findPrevious, openSearchPanel, selectNextOccurrence } from '@
 import { EditorView } from '@codemirror/view'
 import { EditorState, type Text, type TransactionSpec } from '@codemirror/state'
 import { basename, dirname } from '../shared/path'
-import type { DocPayload, MenuAction, ReplaceTarget, SearchHit } from '../shared/types'
+import type {
+  DiskExpectation,
+  DocPayload,
+  MenuAction,
+  ReplaceTarget,
+  SearchHit
+} from '../shared/types'
 import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
 import { group, readLabel } from '../shared/wordcount'
 import { applyI18n, detectLang, getLang, localeOf, onLangChange, setLang, t } from './i18n'
@@ -551,19 +557,22 @@ interface Tab {
    */
   conflict?: { content: string; fingerprint: FileFingerprint }
   /**
-   * **我们自己最后写下去的那一份字节**（2026-09-22）。用来认出「这次文件变了是我自己
-   * 干的」—— 光比「盘上那份与当前文档一不一样」不够：人在自动保存落盘之后、监听事件
-   * 到达之前又敲了几个字（这两件事只隔 300ms），那条就不成立了，于是报出一次
-   * 彻头彻尾的假冲突。而假冲突比没有冲突更坏：它会把这个文件的自动保存停下来
+   * **我们以为盘上此刻躺着的那些字节**（2026-09-22）—— 注意是**原始字节**
+   * （`encode(正文, 指纹)` 的结果），不是正文。两处都要它：
+   *
+   * ① 认出「这次文件变了是我自己干的」。光比「盘上那份与当前文档一不一样」不够：
+   *    自动保存落盘到监听事件到达之间只隔 300ms，人在这中间又敲了几个字，那条就不
+   *    成立了 —— 于是报出一次假冲突，而假冲突会把这个文件的自动保存整个停下来。
+   * ② 写盘前交给壳去比（契约 v36 的 compare-and-swap）。
+   *
+   * **正文与指纹要一起记**：正文是剥了 BOM、换行归一成 LF 之后的样子 —— 外面的工具
+   * 把 LF 换成 CRLF 时正文一个字都不变，只比正文的话这种改动两处都看不见，接着按旧
+   * 指纹写回去，人家的转换就被我们悄悄撤销了（红线一：保存零损耗）。
+   *
+   * 而**不能记原始字节**：混合换行符的文件 `encode(decode(raw)) !== raw`，
+   * 拿字节去比会让那种文件的自动保存整个停摆（真踩过，E2E 当场红）
    */
-  lastWritten?: string
-  /**
-   * 写下去那一份的**指纹**（2026-09-22）。`lastWritten` 只记正文，而正文是
-   * 剥了 BOM、换行归一成 LF 之后的样子 —— 外面的工具把 LF 改成 CRLF、或者加/去掉一个
-   * BOM 时，正文一个字都不变。光比正文会把那种改动误判成「我自己写的」，
-   * 接着按旧指纹写回去，人家的转换就被我们悄悄撤销了（红线一：保存零损耗）
-   */
-  writtenFp?: FileFingerprint
+  lastSeen?: { text: string; fp: FileFingerprint }
   /** 盘上那个文件读不到了（删了 / 改名了 / 外接盘拔了）。挂着时自动保存停下，见 `writeOnce` */
   missing?: true
   /**
@@ -1064,10 +1073,7 @@ function openTab(content: string, path: string | null, fp: FileFingerprint): Tab
   // **刚从盘上读进来的这一份，就是「我们以为盘上是什么」**（契约 v36 的 expect）。
   // 不在这儿记的话，第一次自动保存发不出比对依据 —— 而「打开、编辑、两秒后自动保存」
   // 正是最常走的那条路，也正是那条竞态最容易咬到的地方
-  if (path) {
-    tab.lastWritten = content
-    tab.writtenFp = { ...fp }
-  }
+  if (path) tab.lastSeen = { text: content, fp: { ...fp } }
   return tab
 }
 
@@ -1258,6 +1264,29 @@ interface WriteOpts {
   auto?: boolean
   /** 冲突已经当面处理过了，别再拦（只有 `resolveConflict` 传它，见第八节 2） */
   force?: boolean
+  /**
+   * 越过那道闸之后**仍然要比的那一份**（契约 v36）。「保留我的」覆盖的是
+   * **人在面板上看见的那一份磁盘内容** —— 从点下按钮到真写下去中间还有一句 await
+   * （留版本历史），外面在这中间又改了一次的话，那一次谁都没看见过。
+   * 不给 = 不比（另存为、重新创建一个已经不在的文件）
+   */
+  expect?: DiskExpectation | null
+}
+
+/** `Tab.lastSeen` → 发给壳的那一份（契约 v36）。没见过就回 null = 不比 */
+function expectOf(seen: { text: string; fp: FileFingerprint } | undefined): DiskExpectation | null {
+  return seen ? { text: seen.text, eol: seen.fp.eol, bom: seen.fp.bom } : null
+}
+
+/** 盘上这一份与「我们以为的那一份」一模一样吗（正文 + 指纹） */
+function sameAsSeen(t: Tab, disk: DocPayload): boolean {
+  const seen = t.lastSeen
+  return (
+    seen !== undefined &&
+    seen.text === disk.content &&
+    seen.fp.eol === disk.fingerprint.eol &&
+    seen.fp.bom === disk.fingerprint.bom
+  )
 }
 
 /**
@@ -1321,9 +1350,16 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   try {
     // **写之前让壳自己比一次**（契约 v36）：`expect` 是我们以为盘上此刻的样子。
     // 另存为不比（目标是人现挑的），人在冲突面板上当面选过的那一次也不比（`force`）
+    // 三条路：另存为不比（目标是人现挑的）；当面处理过冲突的那一次比**人看见的那一份**；
+    // 其余一律比「我们以为盘上是什么」
     res = opts.as
       ? await window.api.saveAs(t.path, content, t.fp)
-      : await window.api.save(t.path, content, t.fp, opts.force ? null : (t.lastWritten ?? null))
+      : await window.api.save(
+          t.path,
+          content,
+          t.fp,
+          opts.force ? (opts.expect ?? null) : expectOf(t.lastSeen)
+        )
   } catch (e) {
     // 盘上那份已经不是我们以为的那份了：**一个字节都没写**。走和外部变更完全同一条路
     // —— 读盘、比对、摆差异让人自己选。这是那条「监听有 300ms 合并窗、自动保存是 2 秒」
@@ -1351,9 +1387,11 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   }
   t.path = res.path
   t.savedDoc = doc
-  t.lastWritten = content
-  t.writtenFp = { ...t.fp }
+  t.lastSeen = { text: content, fp: { ...t.fp } }
+  // 写成了：`missing` 与那颗 ⚠ 一起摘掉 —— 「重新创建」之后标签上还挂着
+  // 「此标签的未保存改动已过期」是一句过期的话
   delete t.missing
+  t.stale = false
   if (t.scratchId) {
     void window.api.scratchClear(t.scratchId)
     t.scratchId = undefined
@@ -1440,7 +1478,9 @@ function renderSave(): void {
         ' ',
         saveAct(t('cmd.saveAs'), () => void writeTab(tab, { as: true })),
         ' ',
-        saveAct(t('status.recreate'), () => void writeTab(tab))
+        // **带 force**：文件不在了，比对必然不过（契约 v36 收紧之后「不在」也算对不上）
+        // —— 而这一下正是人明确说「我要把它写回去」
+        saveAct(t('status.recreate'), () => void writeTab(tab, { force: true }))
       )
       break
     }
@@ -1598,8 +1638,7 @@ async function restoreSession(): Promise<void> {
       st?.scroll ?? 0
     )
     // 恢复出来的这些同样要记下「盘上是什么」（契约 v36），否则它们第一次自动保存不比对
-    tab.lastWritten = doc.content
-    tab.writtenFp = { ...doc.fingerprint }
+    tab.lastSeen = { text: doc.content, fp: { ...doc.fingerprint } }
     // 接管空白页那一次会当场 activate；别的都开在背景里，不动活动标签
     if (tab.id === activeId) selfActs += 1
   }
@@ -1890,7 +1929,9 @@ async function handleMenu(action: MenuAction): Promise<void> {
       try {
         doc = await window.api.openDialog()
       } catch (e) {
-        openFailed(readFailPath(e), e)
+        // 路径只有那句话里有（文件是人在原生面板里挑的）—— 有它才给得出「重试」
+        const p = readFailPath(e)
+        openFailed(p, e, p ? () => void openPath(p) : undefined)
         break
       }
       if (doc) openTab(doc.content, doc.path, doc.fingerprint)
@@ -1949,7 +1990,7 @@ async function handleMenu(action: MenuAction): Promise<void> {
             // 这条路同样比一次（契约 v36）：关窗前那一刻外面改了文件，照写就是覆盖。
             // 上面那道闸挡的是**已经知道**的冲突，这一句挡的是**刚刚才发生**的
             save: (p, content, fp) =>
-              window.api.save(p, content, fp, tabs.find((x) => x.path === p)?.lastWritten ?? null),
+              window.api.save(p, content, fp, expectOf(tabs.find((x) => x.path === p)?.lastSeen)),
             scratchClear: (id) => void window.api.scratchClear(id)
           },
           (tb) => {
@@ -1961,7 +2002,7 @@ async function handleMenu(action: MenuAction): Promise<void> {
             inFlight = null
             const doc = written.get(tb.id) ?? tb.state.doc
             tb.savedDoc = doc
-            tb.lastWritten = doc.toString()
+            tb.lastSeen = { text: doc.toString(), fp: { ...tb.fp } }
             tb.save.savedAt = Date.now()
             tb.save.failure = null
             // 活动标签要是刚在保存面板里拿到路径，`docPath` 也得跟上 ——
@@ -1972,9 +2013,17 @@ async function handleMenu(action: MenuAction): Promise<void> {
           }
         )
       } catch (e) {
-        // 写盘失败：**记在那一个标签上**，状态栏挂着「保存失败 · 重试 · 另存为…」
+        const tb = inFlight as Tab | null
+        // **拒写不是写坏了**（契约 v36）：外面刚刚改了这个文件，壳一个字节都没写。
+        // 上面那道闸挡的是**已经知道**的冲突，这儿接住的是**刚刚才发生**的那一种 ——
+        // 当成「保存失败」就等于把差异藏起来，而人正要关窗，这是最后一次看见它的机会
+        if (isStaleWrite(e) && tb?.path) {
+          await handleExternalChange(tb.path)
+          return // done 还是 false：窗口留着，那条 finally 会把脏状态同步回去
+        }
+        // 真写坏了：**记在那一个标签上**，状态栏挂着「保存失败 · 重试 · 另存为…」
         // 不自己消失。异常照旧往上抛（不吞）
-        if (inFlight) (inFlight as Tab).save.failure = e instanceof Error ? e.message : String(e)
+        if (tb) tb.save.failure = e instanceof Error ? e.message : String(e)
         throw e
       } finally {
         // **没存完就一定要重新同步脏状态**：壳侧那个 dirty 是一个全局位，前面几次
@@ -2238,13 +2287,11 @@ async function handleExternalChange(path: string): Promise<void> {
   // ② 盘上那份**正是我们自己最后写下去的那一份** —— 第二条不能省：自动保存落盘之后
   // 到监听事件到达之间只隔 300ms，人在这中间又敲了两个字的话第一条就不成立了，
   // 于是报出一次假冲突，而假冲突会把这个文件的自动保存整个停下来（比没有冲突更坏）
-  const sameFp =
-    disk.fingerprint.eol === t.writtenFp?.eol && disk.fingerprint.bom === t.writtenFp.bom
   if (
     encode(curText, t.fp) === encode(disk.content, disk.fingerprint) ||
-    // **连指纹一起比**：只比正文的话，「把 LF 换成 CRLF」这种改动正文一个字不变，
+    // **正文与指纹一起比**：只比正文的话，「把 LF 换成 CRLF」这种改动正文一个字不变，
     // 会被当成我们自己写的而忽略掉 —— 下一次保存再按旧指纹写回去，人家的转换就没了
-    (disk.content === t.lastWritten && sameFp)
+    sameAsSeen(t, disk)
   ) {
     t.stale = false
     syncStatus(true)
@@ -2292,8 +2339,9 @@ function adoptDisk(tab: Tab, disk: DocPayload): void {
   tab.fp = disk.fingerprint
   tab.stale = false
   // 换进来的这份就是盘上那份：接下来那一发监听事件（换内容本身不写盘，但别人
-  // 可能接着又改）认得出「这不是我写的」
-  tab.lastWritten = disk.content
+  // 可能接着又改）认得出「这不是我写的」。**指纹要一起换** —— 只换正文的话，
+  // 下一次自写识别拿的是上一次写盘时那个旧指纹
+  tab.lastSeen = { text: disk.content, fp: { ...disk.fingerprint } }
   delete tab.conflict
   if (!live) {
     syncStatus(true)
@@ -2323,12 +2371,23 @@ async function openConflict(tab: Tab): Promise<void> {
   conflictPanel ??= new Conflict()
   // 打开的这一刻现取「我手上这份」：从记下冲突到人点开它，中间可能过了很久
   const mine = (tab.id === viewTabId ? view.state.doc : tab.state.doc).toString()
+  // 正文一模一样、只差换行符 / BOM 的那一种：面板里什么都看不见，得由这句话说清楚
+  const fpDiff = c.fingerprint.eol !== tab.fp.eol || c.fingerprint.bom !== tab.fp.bom
   conflictPanel.open({
     name: tabTitle(tab),
     disk: c.content,
     mine,
+    ...(fpDiff
+      ? { fpNote: t('cf.fpOnly', { disk: fpName(c.fingerprint), mine: fpName(tab.fp) }) }
+      : {}),
     pick: (choice) => void resolveConflict(tab, choice)
   })
+}
+
+/** 指纹说人话：`CRLF + BOM` / `LF`。只在冲突面板那句话里用 */
+function fpName(fp: FileFingerprint): string {
+  const eol = fp.eol === '\r\n' ? 'CRLF' : fp.eol === '\r' ? 'CR' : 'LF'
+  return fp.bom ? `${eol} + BOM` : eol
 }
 
 /**
@@ -2357,7 +2416,10 @@ async function resolveConflict(tab: Tab, choice: ConflictChoice): Promise<void> 
     // **写没写成要说实话**：历史目录不可写的时候（只读盘、权限没了），从前照样回一句
     // 「随时找得回来」—— 那是这条路上最不该说的一句假话，因为紧接着就把它覆盖了
     const kept = tab.path ? await keepSnapshot(tab.path, c.content) : false
-    if (!(await writeTab(tab, { force: true }))) return
+    // **比的是人在面板上看见的那一份**（不是裸 `force`）：上面那句留历史是一次 await，
+    // 外面在这中间又改了一次的话，盘上那份已经没人看过了 —— 比不过就一个字节都不写，
+    // 拒写那一下会把新的差异重新摆出来（`writeOnce` 的 stale 那一支）
+    if (!(await writeTab(tab, { force: true, expect: expectOf({ text: c.content, fp: c.fingerprint }) }))) return
     if (kept) note(t('cf.kept'))
     // 人已经明确选了「保留我的」，所以照覆盖 —— 但得让他知道那份没有备份了。
     // 不自散：这句话比「已存进历史」重要得多

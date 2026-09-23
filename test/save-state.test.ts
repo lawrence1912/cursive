@@ -107,7 +107,7 @@ describe('main.ts 里的落盘接线', () => {
     const body = fn('writeOnce')
     // 光靠文件监听挡不住覆盖：监听 300ms 合并窗 vs 自动保存停手 2 秒 —— 外面在这
     // 300ms 里写一笔，我们会先盖上去，事件到的时候读到的已经是自己那份
-    expect(body).toContain("opts.force ? null : (t.lastWritten ?? null)")
+    expect(body).toContain('opts.force ? (opts.expect ?? null) : expectOf(t.lastSeen)')
     // 另存为不比（目标是人现挑的）
     expect(body).toContain('window.api.saveAs(t.path, content, t.fp)')
     // 比出来不一样时**一个字节都没写**，走和外部变更同一条路

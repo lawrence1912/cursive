@@ -65,7 +65,7 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     const body = fn('async function resolveConflict(')
     const keep = body.slice(body.indexOf("if (choice === 'keep')"))
     const snap = keep.indexOf('keepSnapshot(tab.path, c.content)')
-    const write = keep.indexOf('writeTab(tab, { force: true })')
+    const write = keep.indexOf('writeTab(tab, { force: true, expect: expectOf(')
     expect(snap, '磁盘那份是这条路上唯一一份会凭空消失的内容').toBeGreaterThan(0)
     expect(snap).toBeLessThan(write)
   })
@@ -80,10 +80,28 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     expect(before).toContain('force: true')
   })
 
-  it('三条出路都带 force —— 人刚在面板上做过决定，别再拦一次', () => {
+  it('三条出路都越过那道闸 —— 人刚在面板上做过决定，别再拦一次', () => {
     const body = fn('async function resolveConflict(')
-    expect(body).toContain('{ force: true }')
     expect(body).toContain('{ as: true, force: true }')
+  })
+
+  it('「保留我的」比的是**人在面板上看见的那一份**，不是裸 force', () => {
+    const body = fn('async function resolveConflict(')
+    // 留版本历史那句是一次 await：外面在这中间又改了一次的话，盘上那份没人看过 ——
+    // 裸 force 会直接盖掉它，只保住一个标记（那正是复查第 3 条指出来的）
+    expect(body).toContain('expect: expectOf({ text: c.content, fp: c.fingerprint })')
+    expect(body).not.toContain('writeTab(tab, { force: true })')
+  })
+
+  it('关窗那条路上「刚刚才发生」的外改要摆差异，不许当成保存失败', () => {
+    const at = main.indexOf("case 'file:save-and-close'")
+    const block = main.slice(at, main.indexOf("case 'file:open-folder'", at))
+    const c = block.indexOf('} catch (e) {')
+    const body = block.slice(c, block.indexOf('} finally {', c))
+    expect(body).toContain('isStaleWrite(e)')
+    expect(body).toContain('await handleExternalChange(tb.path)')
+    // 拒写那一支不许往上抛（它不是「写坏了」），但窗口也不许关
+    expect(body.slice(0, body.indexOf('if (tb)'))).toContain('return')
   })
 
   it('我们自己写下去的那一份不算外部变更 —— 哪怕人在那之后又敲了几个字', () => {
@@ -91,8 +109,8 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     // 光比「盘上那份与当前文档一不一样」不够：自动保存落盘到监听事件到达之间只隔
     // 300ms，人在这中间又敲两个字，那条就不成立了 —— 于是报出一次假冲突，
     // 而假冲突会把这个文件的自动保存整个停下来，比没有冲突更坏
-    expect(body).toContain('disk.content === t.lastWritten')
-    expect(main, '写成了才记得住').toContain('t.lastWritten = content')
+    expect(body).toContain('sameAsSeen(t, disk)')
+    expect(main, '写成了才记得住').toContain('t.lastSeen = { text: content, fp: { ...t.fp } }')
   })
 
   it('文件监听是**尾部去抖**，不是头部节流（2026-09-22 跑 E2E 跑出来的）', () => {
@@ -115,7 +133,7 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     expect(block).toContain('tabs.find((x) => x.conflict && isTabDirty(x))')
     expect(block, '先把它摆出来，这一次关窗到此为止').toContain('await openConflict(blocked)')
     // 而且这条路也要比一次盘（刚刚才发生、还没来得及变成 conflict 的那一种）
-    expect(block).toContain('lastWritten ?? null')
+    expect(block).toContain('expectOf(tabs.find((x) => x.path === p)?.lastSeen)')
   })
 
   it('新来的冲突不许被旧操作顺手删掉', () => {
@@ -124,10 +142,33 @@ describe('main.ts：冲突未决时不许覆盖', () => {
     expect(body).toContain('if (tab.conflict !== c)')
   })
 
-  it('自写识别连指纹一起比 —— 只改换行/BOM 的外部修改不算我们自己写的', () => {
+  it('自写识别**正文与指纹一起比** —— 只改换行/BOM 的外部修改不算我们自己写的', () => {
     const body = fn('async function handleExternalChange(')
-    expect(body).toContain('sameFp')
-    expect(body).toContain('disk.fingerprint.eol === t.writtenFp?.eol')
+    expect(body).toContain('sameAsSeen(t, disk)')
+    // 而 `lastSeen` 得跟着每一条「盘上那份换了」的路走，一条都不能漏 ——
+    // 漏一条就是一次假冲突（它会把那个文件的自动保存整个停下来）
+    expect(main).toContain('tab.lastSeen = { text: disk.content, fp: { ...disk.fingerprint } }')
+    expect(main).toContain('tb.lastSeen = { text: doc.toString(), fp: { ...tb.fp } }')
+    expect(main).toContain('tab.lastSeen = { text: content, fp: { ...fp } }')
+    expect(main).toContain('tab.lastSeen = { text: doc.content, fp: { ...doc.fingerprint } }')
+    expect(main).toContain('t.lastSeen = { text: content, fp: { ...t.fp } }')
+  })
+
+  it('壳侧写前比对：读不到、文件不在、字节不同，三种都算对不上', () => {
+    const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
+    const at = swift.indexOf('if let expect = args.count > 3')
+    expect(at).toBeGreaterThan(0)
+    const body = swift.slice(at, at + 600)
+    // 从前这三种都会**放行**：`try?` 读不到时整条 if let 不成立、文件不在时也不成立、
+    // 而比的又只是解码后的正文 —— 于是「外面只把 LF 换成了 CRLF」照样被我们盖掉。
+    // 比的必须是**原始字节**（`readRawDoc` 那一份），也不能拿「盘上的指纹」去比
+    // 「我这次要写的指纹」：人选「保留我的」时那两个按定义就不同
+    expect(body).toContain('guard fm.fileExists(atPath: path), let onDisk = try? readRawDoc(path)')
+    // 比的是**解码之后的正文 + 指纹**：拿原始字节比的话，混合换行符的文件
+    // `encode(decode(raw)) != raw`，自动保存会整个停摆（真踩过，E2E 当场红）
+    expect(body).toContain('d.text != want')
+    expect(body).toContain('d.fp.eol != (expect["eol"]')
+    expect(body).toContain('d.fp.bom != (expect["bom"]')
   })
 
   it('版本历史没写成就不许说「随时找得回来」', () => {

@@ -1,4 +1,4 @@
-import type { FileFingerprint } from './textfile.js'
+import type { Eol, FileFingerprint } from './textfile.js'
 
 export type MenuAction =
   | 'file:new'
@@ -398,6 +398,17 @@ export interface UpdateInfo {
   url: string
 }
 
+/**
+ * 「我以为盘上此刻是什么」（契约 v36）。`text` 是**解码之后**的正文（剥了 BOM、
+ * 换行归一成 LF），`eol`/`bom` 是那一份的指纹 —— 两样一起比，缺一不可：
+ * 只比正文的话，外面把 LF 换成 CRLF 这种改动正文一个字都不变，会被放行。
+ */
+export interface DiskExpectation {
+  text: string
+  eol: Eol
+  bom: boolean
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的接口 */
 export interface CursiveApi {
   openDialog(): Promise<DocPayload | null>
@@ -423,6 +434,11 @@ export interface CursiveApi {
    * 事件随后才到，那时读到的已经是我们自己那份，**冲突于是永远不会出现**。
    * 唯一靠得住的是写盘那一刻自己比一次（compare-and-swap）。
    *
+   * **比的是「解码之后的正文 + 指纹」，不是原始字节**：混合换行符的文件
+   * `encode(decode(raw)) !== raw`，拿字节比会让那种文件的自动保存**整个停摆**，
+   * 而屏幕上只有一句「未保存」（真踩过，E2E 当场红）。`decodeDoc` 是确定的 ——
+   * 混不混合都归一成同一份正文加一个指纹，所以解码之后再比才稳。
+   *
    * 不给 `expect`（或给 null）= 不比：另存为（目标是人在面板里现挑的）、
    * 以及人在冲突面板上已经当面选了「保留我的」那一次。文件压根不在时也放行 ——
    * 没有东西会丢，而「重新创建」正是这条路。
@@ -431,7 +447,7 @@ export interface CursiveApi {
     path: string | null,
     content: string,
     fingerprint: FileFingerprint,
-    expect?: string | null
+    expect?: DiskExpectation | null
   ): Promise<{ path: string } | null>
   saveAs(
     current: string | null,

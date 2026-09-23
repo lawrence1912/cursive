@@ -2578,13 +2578,37 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // `expect` 是渲染层「以为盘上是什么」，对不上就不写，回一个 `stale`，
             // 渲染层拿它去走**和外部变更同一条路**（摆差异，让人自己选）。
             //
-            // 两处有意放行：① 文件压根不在（新建 / 人明确要求重建）—— 没有东西会丢；
-            // ② `expect` 没给（另存为、或者人在冲突面板上已经当面选了「保留我的」）
-            if let expect = args.count > 3 ? args[3] as? String : nil,
-               FileManager.default.fileExists(atPath: path),
-               let onDisk = try? readRawDoc(path), decodeDoc(onDisk).text != expect {
-                reject(id, "stale|\(path)")
-                break
+            // **只有一处放行：`expect` 没给**（另存为 —— 目标是人在面板里现挑的；
+            // 以及明确要求重建一个已经不在的文件）。给了就必须比得过，**四种都算对不上**：
+            // ① 正文不同；
+            // ② **换行符 / BOM 不同** —— 外面的工具把 LF 换成 CRLF 时正文一个字都不变，
+            //    只比正文就会放行，接着按旧指纹写回去 = 人家的转换被我们悄悄撤销了
+            //    （红线一：保存零损耗）。所以 `expect` 是**正文 + 指纹**两样一起比。
+            //    这里踩过两次：① 拿「盘上的指纹」去比「我这一次要写的指纹」——
+            //    人选「保留我的」时那两个按定义就不同，那样比的话这条路永远写不下去；
+            //    ② 改成比**原始字节**（渲染层 `encode(正文, 指纹)` 出来的那一份）——
+            //    **混合换行符的文件会当场卡死**：那种文件 `encode(decode(raw)) != raw`，
+            //    比对永远不过，自动保存整个停摆而屏幕上只有一句「未保存」。
+            //    解码之后再比就稳：`decodeDoc` 是确定的，混不混合都归一成同一份正文 + 一个指纹；
+            // ③ **读不到** —— 不知道盘上是什么就不能往上写。从前这儿是 `try?`，读不到时
+            //    整条 `if let` 直接不成立，于是**照写不误**；
+            // ④ **文件不在了** —— 别处删了 / 改名了。从前这条是「有意放行」，理由写的是
+            //    「没有东西会丢」：内容确实不丢，可人在 Finder 里删掉的东西两秒后自己回来了。
+            //    重建是一件要人明确要求的事（状态栏那颗「重新创建」走的是不带 expect 那条路）
+            if let expect = args.count > 3 ? args[3] as? [String: Any] : nil,
+               let want = expect["text"] as? String {
+                let fm = FileManager.default
+                guard fm.fileExists(atPath: path), let onDisk = try? readRawDoc(path) else {
+                    reject(id, "stale|\(path)")
+                    break
+                }
+                let d = decodeDoc(onDisk)
+                if d.text != want
+                    || d.fp.eol != (expect["eol"] as? String ?? "\n")
+                    || d.fp.bom != (expect["bom"] as? Bool ?? false) {
+                    reject(id, "stale|\(path)")
+                    break
+                }
             }
             do {
                 try encodeDoc(content, fp).write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
@@ -4064,8 +4088,33 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           if (reloadBtn) reloadBtn.click()
           await cwait(400)
 
+          // ---- 第三幕：外面**只改了换行符**，正文一个字都没动 ----
+          // 这是写前比对最容易漏的一种：光比正文的话它完全看不见 —— 于是我们按旧指纹
+          // 写回去，人家刚做的 LF→CRLF 转换被悄悄撤销（红线一：保存零损耗）。
+          // 同样不给监听时间：外部写完立刻按 ⌘S
+          const beforeFp = (await window.api.read(path)).fingerprint
+          cv.dispatch({ changes: { from: cv.state.doc.length, insert: '\\nfp-mine' } })
+          const keepText = (await window.api.read(path)).content
+          await window.api.save(path, keepText, { eol: '\\r\\n', bom: beforeFp.bom })
+          window.__shellEmit('menu', 'file:save')
+          let fpWaited = 0
+          while (fpWaited < 4000 && !(panel() && !panel().hidden)) { await cwait(100); fpWaited += 100 }
+          const fpPanel = !!(panel() && !panel().hidden)
+          const emptyEl = panel() ? panel().querySelector('.hi-empty') : null
+          const fpNote = emptyEl && !emptyEl.hidden ? emptyEl.textContent : ''
+          const fpDisk = (await window.api.read(path)).fingerprint
+          // 收尾：保留我的 —— 盘上换回原来的指纹，后面的用例拿到的还是那份文档
+          const keepBtn2 = panel() ? panel().querySelector('button[data-pick="keep"]') : null
+          if (keepBtn2) keepBtn2.click()
+          await cwait(600)
+
           conflictProbe = {
             shown, opened, raced,
+            // 只改换行符那一种也拦得住：面板出来了，而且盘上**还是外面那个指纹**
+            fpPanel: fpPanel, fpNote: fpNote,
+            fpHeld: fpDisk.eol === '\\r\\n',
+            // 收尾之后换回来了（后面的用例还要用这份文档）
+            fpRestored: (await window.api.read(path)).fingerprint.eol === beforeFp.eol,
             // 竞态里那一发保存**一个字节都没写下去**：盘上还是外面那份
             racePanel: racePanel,
             raceHeld: raceDisk.indexOf('race-disk') >= 0 && raceDisk.indexOf('race-mine') < 0,

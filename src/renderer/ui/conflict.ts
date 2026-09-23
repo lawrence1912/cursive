@@ -32,6 +32,12 @@ export interface ConflictOpen {
   disk: string
   /** 我手上这一份 */
   mine: string
+  /**
+   * 两份正文一模一样、只有**换行符 / BOM** 不同时说的那句话（契约 v36 收紧写前比对
+   * 之后才可能出现这种冲突）。不给就用默认那句「两份内容一模一样」——
+   * 而在这种冲突里那句话是**误导**：差别看不见，但它真真切切存在
+   */
+  fpNote?: string
   pick: (choice: ConflictChoice) => void
 }
 
@@ -102,7 +108,7 @@ export class Conflict {
     // `+` 是「我改出来的」。脚注那句 `cf.hint` 说的就是这个约定
     const d = diffView(o.disk, o.mine)
     this.emptyEl.hidden = d.html !== ''
-    this.emptyEl.textContent = t('cf.same')
+    this.emptyEl.textContent = o.fpNote ?? t('cf.same')
     this.diffEl.innerHTML = d.html
     if (this.el.hidden) this.lastFocus = document.activeElement as HTMLElement | null
     this.el.hidden = false

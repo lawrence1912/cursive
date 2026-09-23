@@ -207,6 +207,7 @@ const en: Record<Key, string> = {
   'cf.body': '“{name}” was changed elsewhere, and this tab still has unsaved edits.',
   'cf.hint': 'Below: − is the version on disk, + is yours',
   'cf.same': 'The two versions are identical — only the timestamp changed',
+  'cf.fpOnly': 'The text is identical; only the line endings / BOM differ — disk is {disk}, yours is {mine}',
   'cf.reload': 'Use the version on disk (discard mine)',
   'cf.keep': 'Keep mine (overwrite the disk copy)',
   'cf.saveAs': 'Save mine as…  (keep both)',

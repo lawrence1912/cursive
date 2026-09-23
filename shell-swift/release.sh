@@ -424,6 +424,14 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and cp.get('racePanel') is True
     # **一个字节都没写下去**：盘上还是外面那份
     ok = ok and cp.get('raceHeld') is True
+    # ---- 第三幕：外面只改了换行符，正文一个字没动 ----
+    # 写前比对最容易漏的一种：光比正文完全看不见它 —— 于是我们按旧指纹写回去，
+    # 人家刚做的 LF→CRLF 转换被悄悄撤销（红线一：保存零损耗）
+    ok = ok and cp.get('fpPanel') is True and cp.get('fpHeld') is True
+    # （面板里那句 `cf.fpOnly` 只在**正文一模一样**时才露面，而这一幕里手上这份多了
+    #   一行，画的是真差异 —— 所以这儿不验那句话，它归 i18n 与那块面板自己管）
+    # 收尾把指纹换回去了（后面的用例还要用这份文档）
+    ok = ok and cp.get('fpRestored') is True
     # 收干净了：面板关掉（它是 inset:0 的浮层，留着会挡住后面每一条 elementFromPoint）
     ok = ok and cp.get('closed') is True and cp.get('raceClosed') is True
     # ---- 0.4.1 front matter 属性表 ----
