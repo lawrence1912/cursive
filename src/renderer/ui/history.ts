@@ -96,9 +96,11 @@ export class History {
     this.picked = null
     this.pickedText = null
     this.restoreBtn.disabled = true
-    this.lastFocus = document.activeElement as HTMLElement | null
+    if (!this.visible) this.lastFocus = document.activeElement as HTMLElement | null
     this.el.hidden = false
     this.bindEscape()
+    // 模态浮层打开后接管焦点，不能让按键继续写进背后的文档。
+    this.el.querySelector<HTMLElement>('.hi-close')!.focus({ preventScroll: true })
     this.diffEl.textContent = ''
     this.emptyEl.hidden = false
     this.emptyEl.textContent = t(path ? 'hi.pick' : 'hi.unnamed')
@@ -121,6 +123,13 @@ export class History {
   private bindEscape(): void {
     this.unbindEscape?.()
     const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Tab' && !e.isComposing) {
+        const buttons = [...this.el.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        e.preventDefault()
+        buttons[(at + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length]?.focus()
+        return
+      }
       if (e.key !== 'Escape' || e.isComposing) return
       e.stopPropagation()
       this.close()

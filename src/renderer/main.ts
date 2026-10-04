@@ -627,6 +627,7 @@ function anyDirty(): boolean {
 const tabbar = new TabBar(
   (id) => {
     if (id !== activeId) activate(id)
+    else focusKeepScroll(view)
   },
   (id) => void closeTab(id),
   (id, e) => openTabMenu(id, e),

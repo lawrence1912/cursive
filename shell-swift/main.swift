@@ -4543,7 +4543,16 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // 再开回来：后面的写作模式探针正好要「面板开着、焦点在查找框里」这个状态
           window.__shellEmit('menu', 'edit:find')
           await new Promise(r => setTimeout(r, 80))
+          const searchInput = document.querySelector('.cs-panel input[name="search"]')
+          searchInput.focus()
+          const beforeTabClick = v.state.doc
+          const beforeTabScroll = v.scrollDOM.scrollTop
+          document.querySelector('#tabbar .tab-item.is-active').click()
+          const activeTabFocus = document.activeElement === v.contentDOM
+          const activeTabStable = v.state.doc === beforeTabClick && v.scrollDOM.scrollTop === beforeTabScroll
+          searchInput.focus()
           searchProbe = {
+            activeTabFocus, activeTabStable,
             open: !!panel,
             nextLabel: nextBtn ? nextBtn.getAttribute('aria-label') : null,
             matchText,
@@ -5310,7 +5319,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           //     公式那条在**正文里不许弹**（那儿的反斜杠是转义），只在 `$…$` 里认
           // **先摆好上下文，再「打」出触发的那几个字**：CM 的 activateOnTyping 只在
           // 光标落在这一次插入的末尾时才弹，一次性把整行连光标位置塞进去是弹不出来的
-          const probeSource = async (setup, caretBack, typed) => {
+          const probeSource = async (setup, caretBack, typed, expectItems = true) => {
             const at = v.state.doc.length
             v.dispatch({ changes: { from: at, insert: '\\n' + setup }, userEvent: 'input.type' })
             const caret = v.state.doc.length - caretBack
@@ -5322,16 +5331,28 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
               userEvent: 'input.type'
             })
             await sleep(450)   // 链接那条要等壳侧 listFiles 走一趟目录
-            const box = document.querySelector('.cm-tooltip-autocomplete')
-            const items = box ? [...box.querySelectorAll('li')].map((li) => li.textContent) : []
+            const readItems = () => [...document.querySelectorAll('.cm-tooltip-autocomplete li')].map((li) => li.textContent)
+            let items = readItems()
+            // 壳侧异步索引在固定 450ms 采样时偶发未返回；正例等结果，反例仍观察整个窗口。
+            for (let waited = 450; expectItems && !items.length && waited < 2500; waited += 100) {
+              await sleep(100)
+              items = readItems()
+            }
             v.dispatch({ changes: { from: at, to: v.state.doc.length } })
             await sleep(80)
             return items
           }
           // 公式里打反斜杠 al 会弹；正文里同样两个字符**不许**弹（那儿的反斜杠是转义）
           const mathItems = await probeSource('$x + $', 1, '\\\\al')
-          const plainItems = await probeSource('正文 ', 0, '\\\\al')
+          const plainItems = await probeSource('正文 ', 0, '\\\\al', false)
           const linkItems = await probeSource('[看]', 0, '(')
+          // 连续输入：第一笔改变脏标记，之后标签栏不应每键拆掉再建。
+          v.dispatch({ changes: { from: v.state.doc.length, insert: 'x' } })
+          const dirtyTab = document.querySelector('#tabbar .tab-item.is-active')
+          v.dispatch({ changes: { from: v.state.doc.length, insert: 'y' } })
+          const tabDOMStable = dirtyTab === document.querySelector('#tabbar .tab-item.is-active')
+          v.dispatch({ changes: { from: v.state.doc.length - 2, to: v.state.doc.length } })
+
           // **再收一次干净**：上面三发前后插了一秒多的临时文字，而自动保存的防抖是 2s ——
           // 它完全可能正好在中间落一次盘，把临时文字写进夹具（`bytesEqual` 于是偶发变红，
           // 而且失败点离真因很远）。显式写回取样时那份，此后再自动保存也是同一内容
@@ -5339,6 +5360,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const completeRestored = v.state.doc.toString() === sampled
 
           // ② 命令面板：列的应当是 MenuAction 全表，筛一个词只剩少数几条
+          v.focus()
           emit('view:command-palette')
           await sleep(80)
           const pal = document.getElementById('palette')
@@ -5348,12 +5370,17 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           input.dispatchEvent(new Event('input', { bubbles: true }))
           await sleep(60)
           const cmdHit = (pal.querySelector('.pl-row .pl-label') || {}).textContent || ''
+          // 连按快捷键不得把返回目标覆盖成面板自己的输入框。
+          emit('view:command-palette')
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+          const cmdFocusInside = pal.contains(document.activeElement)
           // Esc 关面板：**派在 document 上**。元素级的合成 KeyboardEvent 在这个
           // WKWebView 里送不到监听器（实测：同一元素上 `new Event('keydown')` 能触发、
           // `new KeyboardEvent(...)` 不能），而面板的 Esc 本来就挂在 window 捕获上
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
           await sleep(40)
           const cmdClosed = pal.hidden
+          const cmdFocusRestored = document.activeElement === v.contentDOM
 
           // ③ 快速打开：索引由壳侧遍历（契约 v21），等它一趟
           emit('file:quick-open')
@@ -5370,9 +5397,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
           // ⑤ 版本历史（契约 v22）。前面「收干净」那一步保存过一次，所以至少有一份快照。
           // 点开第一条看差异 —— 差异行数为 0 说明要么没读回内容、要么 diff 算错了
+          v.focus()
           emit('file:history')
           await sleep(600)
           const hi = document.getElementById('history')
+          const hiFocusInside = hi.contains(document.activeElement) && document.activeElement !== v.contentDOM
+          emit('file:history')
+          await sleep(80)
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+          const hiTabInside = hi.contains(document.activeElement)
           const hiRows = hi.querySelectorAll('.hi-row').length
           let hiLines = 0
           let hiStat = ''
@@ -5389,9 +5422,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
           await sleep(40)
           const hiClosed = hi.hidden
+          const hiFocusRestored = document.activeElement === v.contentDOM
 
           v020 = { rows, first, tipWaited, restored, cmdAll, cmdHit, cmdClosed, files, fileFirst, fileClosed,
                    hiRows, hiLines, hiStat, hiClosed,
+                   tabDOMStable, cmdFocusInside, cmdFocusRestored, hiFocusInside, hiTabInside, hiFocusRestored,
                    // 0.4.0 F3 的两个新源
                    mathItems, plainItems, linkItems, completeRestored }
         } catch (e) {

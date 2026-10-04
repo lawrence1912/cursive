@@ -322,6 +322,8 @@ if sys.argv[1] == 'table.md':
 # 哪份文档上坏了都算坏（同 P4-1 导出那条的道理）
 v = r.get('v020') or {}
 ok = ok and not v.get('err')
+sp = r.get('searchProbe') or {}
+ok = ok and sp.get('activeTabFocus') is True and sp.get('activeTabStable') is True
 # 自动补全：真的敲了 `:sm` 让面板自己弹出来（走 activateOnTyping，不是直接调 API），
 # 第一条必须是 :smile: —— 面板在、但排序坏了的话这一条就抓得到
 ok = ok and v.get('rows', 0) >= 2 and v.get('first', '').startswith(':smile:')
@@ -329,6 +331,8 @@ ok = ok and v.get('rows', 0) >= 2 and v.get('first', '').startswith(':smile:')
 ok = ok and v.get('restored') is True
 # 命令面板：列的是 MenuAction 全表（40 条以上），筛「高亮」后第一条就是它，Esc 关得掉
 ok = ok and v.get('cmdAll', 0) >= 40 and v.get('cmdHit') == '高亮' and v.get('cmdClosed') is True
+ok = ok and v.get('cmdFocusInside') is True and v.get('cmdFocusRestored') is True
+ok = ok and v.get('tabDOMStable') is True
 # 快速打开：索引走壳侧 listFiles（契约 v21），树根下那几份夹具都得在，Esc 同样关得掉
 ok = ok and v.get('files', 0) >= 5 and v.get('fileFirst', '').endswith('.md')
 ok = ok and v.get('fileClosed') is True
@@ -339,6 +343,7 @@ ok = ok and len(ch) == 2 and ch[1] > 0 and ch[0] > ch[1]
 # 点开它要能读回正文并算出差异（hiLines 为 0 = 要么没读回、要么 diff 空转）
 ok = ok and v.get('hiRows', 0) >= 1 and v.get('hiLines', 0) >= 1
 ok = ok and v.get('hiStat', '').startswith('+') and v.get('hiClosed') is True
+ok = ok and v.get('hiFocusInside') is True and v.get('hiTabInside') is True and v.get('hiFocusRestored') is True
 # 0.4.0 F3 的两个新源。**公式那条的要害是「正文里不许弹」**：那儿的反斜杠是转义，
 # 弹一张希腊字母表纯属打扰 —— 一正一反两条一起断言，只测「弹得出来」是测不到分寸的
 ok = ok and any('alpha' in it for it in (v.get('mathItems') or []))

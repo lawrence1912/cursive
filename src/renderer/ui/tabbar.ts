@@ -1,4 +1,4 @@
-import { t } from '../i18n'
+import { getLang, t } from '../i18n'
 import { icon } from './icons'
 
 /** 拖拽重排的最小位移。与大纲、文件树同一档 —— 小了会把「手抖的点击」当成拖拽 */
@@ -29,13 +29,14 @@ export function reorderIds(ids: number[], id: number, before: number | null): nu
   return [...rest.slice(0, at), id, ...rest.slice(at)]
 }
 
-/** 顶部标签栏：点击激活、× 关闭、中键关闭、右键菜单、拖拽重排。每次全量重建（标签数小，无所谓） */
+/** 顶部标签栏：点击激活、× 关闭、中键关闭、右键菜单、拖拽重排。标签状态变化时重建。 */
 export class TabBar {
   readonly el: HTMLElement
+  private signature = ''
 
   /**
    * 右键菜单此刻作用在哪个标签（画高亮用）。**存 id 而不是直接加 class**：
-   * `render()` 每次文档变化都会重建全部子元素（自动保存落盘也会触发一次），
+   * `render()` 在标签状态变化时会重建全部子元素（自动保存落盘也会触发一次），
    * 加在 DOM 上的标记会被悄悄冲掉，菜单还开着、高亮却没了
    */
   private contextId: number | null = null
@@ -106,6 +107,11 @@ export class TabBar {
   }
 
   render(tabs: TabItem[], activeId: number): void {
+    // 连续输入时标签标题和脏标记通常没变；重建后立刻测量宽度会强制布局。
+    const signature = JSON.stringify([getLang(), activeId, tabs.map((tab) =>
+      [tab.id, tab.title, tab.dirty, tab.stale === true])])
+    if (signature === this.signature) return
+    this.signature = signature
     const frag = document.createDocumentFragment()
     for (const tab of tabs) {
       const el = document.createElement('div')

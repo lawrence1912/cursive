@@ -73,10 +73,12 @@ const EMPTY: SearchStat = { empty: true, invalid: false, total: 0, index: 0, cap
 
 let statFor: EditorState | null = null
 let statValue: SearchStat = EMPTY
+let matchesFor: { doc: EditorState['doc']; query: SearchQuery; wordChars: string; starts: number[] } | null = null
 
 /**
  * 「第几处 / 共几处」。面板和状态栏都要，所以**算在一处**：
- * EditorState 是不可变的，拿它自己当缓存键，同一次 update 里第二个调用者白拿。
+ * 同一次 update 共用结果；选区变化只在已缓存的命中位置里查序号。
+ * 正文、查询或整词规则变化才重扫，避免长文档每按一次方向键都扫描全文。
  */
 export function searchStat(state: EditorState): SearchStat {
   if (statFor === state) return statValue
@@ -85,24 +87,33 @@ export function searchStat(state: EditorState): SearchStat {
   if (!q.search) return (statValue = EMPTY)
   if (!q.valid) return (statValue = { ...EMPTY, empty: false, invalid: true })
 
-  let total = 0
-  let index = 0
-  let capped = false
-  const head = state.selection.main.from
-  try {
-    const cursor = q.getCursor(state)
-    for (let r = cursor.next(); !r.done; r = cursor.next()) {
-      total++
-      if (index === 0 && r.value.from >= head) index = total
-      if (total >= CAP) {
-        capped = true
-        break
+  // 整词规则由光标所在语言决定：进入代码块后可能与正文不同。
+  const wordChars = q.wholeWord ? state.languageDataAt<string>('wordChars', state.selection.main.head)[0] ?? '' : ''
+  // 自定义匹配器可以读取整个 state，不能复用其他选区下的结果。
+  if (matchesFor?.doc !== state.doc || matchesFor.query !== q || matchesFor.wordChars !== wordChars || q.test) {
+    const starts: number[] = []
+    try {
+      const cursor = q.getCursor(state)
+      for (let r = cursor.next(); !r.done; r = cursor.next()) {
+        starts.push(r.value.from)
+        if (starts.length >= CAP) break
       }
+    } catch {
+      return (statValue = { ...EMPTY, empty: false, invalid: true })
     }
-  } catch {
-    return (statValue = { ...EMPTY, empty: false, invalid: true })
+    matchesFor = { doc: state.doc, query: q, wordChars, starts }
   }
-  return (statValue = { empty: false, invalid: false, total, index, capped })
+  const { starts } = matchesFor
+  const total = starts.length
+  const head = state.selection.main.from
+  let lo = 0
+  let hi = total
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (starts[mid]! < head) lo = mid + 1
+    else hi = mid
+  }
+  return (statValue = { empty: false, invalid: false, total, index: lo < total ? lo + 1 : 0, capped: total >= CAP })
 }
 
 /** ⌥⌘R：开面板并把替换那一行摊开（面板已经开着也照样摊开） */

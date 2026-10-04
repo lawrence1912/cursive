@@ -155,7 +155,8 @@ export class Palette {
     this.items = items
     this.emptyKey = emptyKey
     this.prepare = prepare ?? null
-    this.lastFocus = document.activeElement as HTMLElement | null
+    // 重复快捷键或在两种面板之间切换时，保留最初的返回目标。
+    if (!this.visible) this.lastFocus = document.activeElement as HTMLElement | null
     this.input.value = ''
     this.input.placeholder = placeholder
     this.input.setAttribute('aria-label', placeholder)
@@ -177,6 +178,12 @@ export class Palette {
   private bindEscape(): void {
     this.unbindEscape?.()
     const onKey = (e: KeyboardEvent): void => {
+      // 面板唯一的输入控件；Tab 不应把焦点送到遮罩后面的正文。
+      if (e.key === 'Tab' && !e.isComposing) {
+        e.preventDefault()
+        this.input.focus()
+        return
+      }
       if (e.key !== 'Escape' || e.isComposing) return
       e.stopPropagation()
       this.close()
