@@ -284,7 +284,7 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell test/fixtures/kitchen-sink.md
 | 文档 | 讲什么 |
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | 架构、IPC 契约、每一个踩过的坑（改代码前先读这份） |
-| [`ROADMAP.md`](ROADMAP.md) | 1.0 已达成的存档：四条门槛怎么算数、四个结构性判断、一张「有意不做」总表、六条非功能红线 |
+| [`ROADMAP.md`](ROADMAP.md) | 当前任务、执行顺序与验收标准；保留 1.0 历史验收、产品边界和非功能红线 |
 | [`EXAMPLE.md`](EXAMPLE.md) | Markdown 效果全览，也是走查渲染的验收稿 |
 | [`docs/table-editing.md`](docs/table-editing.md) | 表格就地编辑的完整设计 |
 | [`brand/README.md`](brand/README.md) | 品牌资产：标志怎么读、配色、用法、重出图标 |
