@@ -3709,6 +3709,33 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
         }
         let body = """
+        const trace = []
+        const checkpoint = (stage) => {
+          const v = window.__cursive.view
+          trace.push({ stage, ms: Math.round(performance.now()),
+            ...window.__cursive.diagnostics(),
+            focus: document.activeElement?.outerHTML.slice(0, 180),
+            visible: document.visibilityState,
+            level: localStorage.getItem('cursive.outlineLevel'),
+            filter: document.querySelector('.ol-filter input')?.value,
+            outline: [...document.querySelectorAll('.ol-row')].map(e => ({ pos: e.dataset.pos, text: e.textContent })),
+            menu: [...document.querySelectorAll('.ctx-menu .ctx-item')].map(e => ({ text: e.textContent, disabled: e.disabled })),
+            head: v.state.doc.sliceString(0, 200)
+          })
+        }
+        const reportError = console.error
+        console.error = (...args) => {
+          checkpoint('console.error')
+          trace[trace.length - 1].error = args.map(e => e?.stack || String(e)).join(' ')
+          reportError(...args)
+        }
+        const confirmDiscard = window.api.confirmDiscard
+        window.api.confirmDiscard = async (...args) => {
+          checkpoint('confirmDiscard:' + args[0])
+          const choice = await confirmDiscard(...args)
+          checkpoint('confirmDiscard:' + choice)
+          return choice
+        }
         try {
         // 写作模式是**持久化**的（localStorage `cursive.writing`），上一轮或手工走查留下
         // 什么都可能。专注模式一开着，代码块的高亮会整块压成同一个灰 —— codeHl 那条
@@ -5112,6 +5139,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // （真摔过：table.md 连着三轮同一个 TypeError）。自检要一个确定的起点，同契约 v24
           document.querySelector('.ol-levels button[data-level="6"]').click()
           await wait(80)
+          checkpoint('outline:start')
           const all = rows().length
           const words = [...document.querySelectorAll('.ol-words')].map(e => Number(e.textContent))
 
@@ -5156,6 +5184,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // ④ 右键菜单：条目齐不齐 + 「降一级」真的加了一个 #
           // 没有标题的文档就到此为止 —— img.md 的探针会往光标（文首）插图片链接，
           // 把它唯一那行标题撞成图片行，大纲这时本来就该是空的（断言只挂在 kitchen-sink 上）
+          checkpoint('outline:before-menu')
           const row0 = rows()[0]
           if (!row0) {
             outlineProbe = { all, atMenu: rows().length, words, foldedCount, unfoldedCount,
@@ -5169,8 +5198,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const headLine = v.state.doc.lineAt(Number(row0.dataset.pos)).number
           const beforeHead = v.state.doc.line(headLine).text
           const demote = [...document.querySelectorAll('.ctx-menu .ctx-item')].find(b => b.textContent === '降一级')
+          checkpoint('outline:demote-menu')
           if (demote) demote.click()
+          checkpoint('outline:demote-sync')
           await wait(80)    // 改完大纲是立刻重建的（不等那 450ms 防抖），等一帧就够
+          checkpoint('outline:demote-settled')
           const afterHead = v.state.doc.line(headLine).text
           // 大纲行上的 pos 必须已经是改完之后的：拿它去 doc.lineAt 应正好落在那一行
           const freshPos = Number(rows()[0].dataset.pos)
@@ -5259,14 +5291,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // （大纲的降级 / 搬节），而自动保存 2s 后会把改动也写进源文件 —— 于是这条断言退化成
         // 「整个探针跑得比 2s 快」的赌局，再加一个探针就翻车（P3-8 的 statsProbe 就真的翻了：
         // table.md 的源文件被autosave 改成了 `## 表格测试`，outPath 里还是 `#`）。
-        // 两步收干净，从此与探针跑多久无关：① 把文档恢复成取样时那份 —— 此后任何一次自动保存
-        // 写的都是同一内容；② 把源文件显式写回去 —— 盖掉取样后可能已经落盘的那一次
+        // 恢复取样正文后，必须走渲染层保存队列，等已发出的自动保存结束并同步 savedDoc / lastSeen。
+        // 直接 window.api.save 只改磁盘：临时内容一旦先保存，后续编辑会被误判为外部冲突，
+        // 批量关闭也会遇到意外的脏标签（dialect.md 的 afterLeft 偶发为 3）。
         {
           const back = window.__cursive.view
           if (back.state.doc.toString() !== sampled) {
             back.dispatch({ changes: { from: 0, to: back.state.doc.length, insert: sampled } })
           }
-          await window.api.save(path, sampled, doc.fingerprint)
+          if (!(await window.__cursive.saveCurrent())) throw new Error('probe cleanup save failed')
         }
         // P4-1 导出 HTML。同样排在「收干净」之后，而且**必须排在跨文件搜索之前** ——
         // findProbe 点一处命中会切到别的标签，导出的却是当前活动标签，顺序反了就导错文档。
@@ -5351,12 +5384,16 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const dirtyTab = document.querySelector('#tabbar .tab-item.is-active')
           v.dispatch({ changes: { from: v.state.doc.length, insert: 'y' } })
           const tabDOMStable = dirtyTab === document.querySelector('#tabbar .tab-item.is-active')
+          // 固定复现「临时编辑先自动保存，再恢复正文」的顺序，不能靠 2s 防抖碰运气。
+          if (path.endsWith('/dialect.md') && !(await window.__cursive.saveCurrent())) {
+            throw new Error('temporary edit save failed')
+          }
           v.dispatch({ changes: { from: v.state.doc.length - 2, to: v.state.doc.length } })
 
           // **再收一次干净**：上面三发前后插了一秒多的临时文字，而自动保存的防抖是 2s ——
           // 它完全可能正好在中间落一次盘，把临时文字写进夹具（`bytesEqual` 于是偶发变红，
-          // 而且失败点离真因很远）。显式写回取样时那份，此后再自动保存也是同一内容
-          await window.api.save(path, sampled, doc.fingerprint)
+          // 而且失败点离真因很远）。经同一保存队列写回，磁盘和标签的保存基线一起恢复
+          if (!(await window.__cursive.saveCurrent())) throw new Error('probe cleanup save failed')
           const completeRestored = v.state.doc.toString() === sampled
 
           // ② 命令面板：列的应当是 MenuAction 全表，筛一个词只剩少数几条
@@ -5445,6 +5482,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
               const row = document.querySelector('.sb-row[data-path$="/' + name + '"]')
               if (row) row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
               await nap(200)
+              checkpoint('tabs:open:' + name)
             }
             const rightClick = async (i) => {
               const el = tabEls()[i]
@@ -5456,9 +5494,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             const menu = () => [...document.querySelectorAll('.ctx-menu .ctx-item')]
             const pick = async (idx) => {
+              checkpoint('tabs:pick:' + idx)
               const b = menu()[idx]
               if (b) b.dispatchEvent(new MouseEvent('click', { bubbles: true }))
               await nap(320)
+              checkpoint('tabs:picked:' + idx)
             }
 
             // ① 三个标签加原来那个，右键第一个：菜单五条，只有「关闭左边」该是灰的。
@@ -5947,6 +5987,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           tbHitPage,
           tbMidY,
           tableEdit,
+          trace,
           selectAllProbe,
           handles,
           treeProbe,
@@ -5979,7 +6020,11 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           cmLines: document.querySelectorAll('.cm-line').length
         }
         } catch (e) {
-          return { jsError: String(e), stack: e && e.stack ? String(e.stack).slice(0, 300) : null }
+          checkpoint('exception')
+          return { trace, jsError: String(e), stack: e && e.stack ? String(e.stack).slice(0, 300) : null }
+        } finally {
+          window.api.confirmDiscard = confirmDiscard
+          console.error = reportError
         }
         """
         webView.callAsyncJavaScript(

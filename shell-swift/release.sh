@@ -13,7 +13,9 @@ npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm
 echo "==> [2/4] 编译原生壳"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
 
-echo "==> [3/4] E2E 九用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
+echo "==> [3/4] E2E 十一用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
+ARTIFACTS=$(mktemp -d /tmp/cursive-e2e-results.XXXXXX)
+echo "E2E 逐用例记录：$ARTIFACTS"
 FIX=/tmp/cursive-e2e
 # 自检的应用支持目录**整个搬进临时目录**（0.4.1 修）。从前这儿写的是
 # `$HOME/Library/Application Support/cursive/…`，于是跑一轮发布自检要在开发机上
@@ -165,7 +167,11 @@ run_case() {
         CURSIVE_SMOKE_HTML="/tmp/cursive-e2e/out/$1.html" CURSIVE_SMOKE_PDF="$PDF_ENV" \
         CURSIVE_SMOKE_DISCARD="$DISCARD_ENV" CURSIVE_SMOKE_UPDATE="$UPDATE_ENV" \
         CURSIVE_SMOKE_PNG="$PNG_ENV" \
-        ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>/dev/null
+        ./shell-swift/cursive-shell "/tmp/cursive-e2e/$1" 2>"$ARTIFACTS/$1.log"
+    for kind in check e2e pdf; do
+        record="/tmp/cursive-shell-$kind.json"
+        [ ! -f "$record" ] || cp "$record" "$ARTIFACTS/$1.$kind.json"
+    done
     python3 - "$1" <<'PY'
 import json, sys, os, re, struct, hashlib, unicodedata
 px = lambda v: float(str(v or '0').replace('px', '') or 0)
@@ -815,6 +821,11 @@ if sys.argv[1] == 'mermaid.md':
     # P1-2：正常块渲染出 SVG；非法块保留源码报错而不是白屏
     mm = r.get('mermaid') or {}
     ok = ok and mm.get('count', 0) >= 2 and mm.get('svg', 0) >= 1 and mm.get('error', 0) >= 1
+# CM 会捕获插件异常并写 console.error；不能让断言通过掩盖运行时错误。
+errors = [entry.get('error') for entry in r.get('trace', []) if entry.get('stage') == 'console.error']
+if errors:
+    print('renderer errors:', errors)
+ok = ok and not errors
 print(('PASS ' if ok else 'FAIL ') + sys.argv[1])
 sys.exit(0 if ok else 1)
 PY

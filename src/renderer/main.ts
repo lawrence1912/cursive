@@ -2464,7 +2464,22 @@ function outlineSource(): { level: number; text: string }[] {
       outlineSource: () => { level: number; text: string }[]
     }
   }
-).__cursive = { view, sidebar, exportHtml, exportHtmlSource, outlineSource }
+).__cursive = {
+  view, sidebar, exportHtml, exportHtmlSource, outlineSource,
+  ...(selfCheck ? {
+    // 探针清理也走保存队列，同时更新 savedDoc / lastSeen，避免只写盘留下脏状态。
+    saveCurrent: () => writeTab(activeTab()!),
+    diagnostics: () => ({
+      activeId, viewTabId,
+      tabs: tabs.map((tab) => ({
+        id: tab.id, path: tab.path, dirty: isTabDirty(tab),
+        save: { ...tab.save }, stale: tab.stale, conflict: !!tab.conflict,
+        length: (tab.id === viewTabId ? view.state : tab.state).doc.length,
+        savedLength: tab.savedDoc.length
+      }))
+    })
+  } : {})
+}
 
 // P3-4：用户皮肤要等一趟 IPC，起步时发一次就好（加皮肤本来就是「放文件再重开」的动作）
 void prefs.loadUserThemes()

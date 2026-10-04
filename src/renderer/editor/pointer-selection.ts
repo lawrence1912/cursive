@@ -18,6 +18,7 @@ export const pointerSelection = StateField.define<EditorSelection | null>({
 export const pointerSelectionEvents = ViewPlugin.fromClass(
   class {
     private timer: ReturnType<typeof setTimeout> | null = null
+    private layoutGeneration = 0
 
     /**
      * 回显翻面时的**底部留白**（px）。
@@ -42,6 +43,7 @@ export const pointerSelectionEvents = ViewPlugin.fromClass(
     }
 
     update(u: ViewUpdate): void {
+      if (u.docChanged || u.selectionSet) this.layoutGeneration++
       if (!u.docChanged || !this.pad) return
       this.pad = 0
       this.view.contentDOM.style.paddingBottom = ''
@@ -51,6 +53,7 @@ export const pointerSelectionEvents = ViewPlugin.fromClass(
       if (event.button !== 0 || event.defaultPrevented) return
       // widget/表格的自有控件已处理点击，不参与 CM 的正文拖选。
       if ((event.target as Element).closest('[contenteditable="false"], button, input, textarea')) return
+      this.layoutGeneration++
       /*
        * 上一次手势没能正常收尾时（松手落在窗口外、被别的东西吃掉），这里**只把它作废**，
        * 不走 `release()`。
@@ -103,14 +106,16 @@ export const pointerSelectionEvents = ViewPlugin.fromClass(
       this.view.dispatch({ effects })
       if (!top) return
 
+      // 测量可能晚于下一次编辑、手势或标签切换；旧落点不能再读坐标或补滚动。
+      const generation = this.layoutGeneration
       this.view.requestMeasure({
         key: this,
-        read: (view) => ({
-          natural: view.scrollDOM.scrollHeight - this.pad,
-          at: view.coordsAtPos(anchor)
-        }),
+        read: (view) => {
+          if (generation !== this.layoutGeneration) return null
+          return { natural: view.scrollDOM.scrollHeight - this.pad, at: view.coordsAtPos(anchor) }
+        },
         write: (m, view) => {
-          if (!m.at) return
+          if (!m?.at || generation !== this.layoutGeneration) return
           const dom = view.scrollDOM
           // 落点该回到的 scrollTop（夹回来之前或之后都行，`at` 是当下真值）
           const desired = Math.max(
@@ -128,6 +133,7 @@ export const pointerSelectionEvents = ViewPlugin.fromClass(
     }
 
     destroy(): void {
+      this.layoutGeneration++
       if (this.timer !== null) clearTimeout(this.timer)
       if (this.pad) this.view.contentDOM.style.paddingBottom = ''
       this.view.contentDOM.removeEventListener('mousedown', this.start, true)
