@@ -2468,14 +2468,19 @@ function outlineSource(): { level: number; text: string }[] {
   view, sidebar, exportHtml, exportHtmlSource, outlineSource,
   ...(selfCheck ? {
     // 探针清理也走保存队列，同时更新 savedDoc / lastSeen，避免只写盘留下脏状态。
-    saveCurrent: () => writeTab(activeTab()!),
+    saveCurrent: (path: string) => {
+      const tab = activeTab()
+      if (tab?.path !== path) throw new Error(`probe save target mismatch: ${tab?.path} != ${path}`)
+      return writeTab(tab)
+    },
     diagnostics: () => ({
       activeId, viewTabId,
       tabs: tabs.map((tab) => ({
         id: tab.id, path: tab.path, dirty: isTabDirty(tab),
         save: { ...tab.save }, stale: tab.stale, conflict: !!tab.conflict,
         length: (tab.id === viewTabId ? view.state : tab.state).doc.length,
-        savedLength: tab.savedDoc.length
+        savedLength: tab.savedDoc.length,
+        draft: tab.path ? undefined : (tab.id === viewTabId ? view.state : tab.state).doc.toString()
       }))
     })
   } : {})

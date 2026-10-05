@@ -459,7 +459,7 @@ body.cursive-em-italic .cm-md-em {
   border-radius: 5px;
   cursor: pointer;
 }
-.cm-lp-tbl-btn:hover:not(:disabled) {
+.cm-lp-tbl-btn:hover:not(:disabled), .cm-lp-tbl-btn:focus-visible {
   color: var(--fg);
   background: var(--accent-wash);
 }

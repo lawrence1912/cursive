@@ -3793,6 +3793,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // **起点不是「一个标签」**：所有用例共用同一个工作区根，上一条用例留在会话里的
           // 标签会在这一条启动时被恢复出来。所以数的是「多出来一个」，不是「总共两个」
           const tabsBefore = document.querySelectorAll('.tab-item').length
+          const returnId = document.querySelector('.tab-item.is-active').dataset.id
           v.dispatch({ changes: { from: v.state.doc.length, insert: ' x' } })
           await pause(60)
           const dirtyText = sEl.textContent
@@ -3801,6 +3802,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           const blankText = sEl.textContent
           const tabsOpen = document.querySelectorAll('.tab-item').length
           window.__shellEmit('menu', 'file:close-tab')
+          // 恢复草稿可能排在原文件之后；关掉新建标签会选中它，不能当成已经回到原文件。
+          document.querySelector('.tab-item[data-id="' + returnId + '"]').click()
           // 切标签会把刚才那个字顺手落盘，等它回到「已保存」（**等到为止**，
           // 别在固定时刻采一次样 —— 同上面自动保存那两条）
           let backText = ''
@@ -5299,7 +5302,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           if (back.state.doc.toString() !== sampled) {
             back.dispatch({ changes: { from: 0, to: back.state.doc.length, insert: sampled } })
           }
-          if (!(await window.__cursive.saveCurrent())) throw new Error('probe cleanup save failed')
+          if (!(await window.__cursive.saveCurrent(path))) throw new Error('probe cleanup save failed')
         }
         // P4-1 导出 HTML。同样排在「收干净」之后，而且**必须排在跨文件搜索之前** ——
         // findProbe 点一处命中会切到别的标签，导出的却是当前活动标签，顺序反了就导错文档。
@@ -5385,7 +5388,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           v.dispatch({ changes: { from: v.state.doc.length, insert: 'y' } })
           const tabDOMStable = dirtyTab === document.querySelector('#tabbar .tab-item.is-active')
           // 固定复现「临时编辑先自动保存，再恢复正文」的顺序，不能靠 2s 防抖碰运气。
-          if (path.endsWith('/dialect.md') && !(await window.__cursive.saveCurrent())) {
+          if (path.endsWith('/dialect.md') && !(await window.__cursive.saveCurrent(path))) {
             throw new Error('temporary edit save failed')
           }
           v.dispatch({ changes: { from: v.state.doc.length - 2, to: v.state.doc.length } })
@@ -5393,7 +5396,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           // **再收一次干净**：上面三发前后插了一秒多的临时文字，而自动保存的防抖是 2s ——
           // 它完全可能正好在中间落一次盘，把临时文字写进夹具（`bytesEqual` 于是偶发变红，
           // 而且失败点离真因很远）。经同一保存队列写回，磁盘和标签的保存基线一起恢复
-          if (!(await window.__cursive.saveCurrent())) throw new Error('probe cleanup save failed')
+          if (!(await window.__cursive.saveCurrent(path))) throw new Error('probe cleanup save failed')
           const completeRestored = v.state.doc.toString() === sampled
 
           // ② 命令面板：列的应当是 MenuAction 全表，筛一个词只剩少数几条
@@ -5961,6 +5964,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         const wantsSecond = path.indexOf('kitchen-sink.md') >= 0 || secondWindow
         if (wantsSecond) window.api.newWindow(docDir)
         await new Promise((r) => setTimeout(r, secondWindow ? 1600 : 700))
+        checkpoint('done')
         return {
           fingerprint: doc.fingerprint,
           autosaved: after.content.includes('autosave-check-marker'),

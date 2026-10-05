@@ -12,6 +12,7 @@ npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm
 
 echo "==> [2/4] 编译原生壳"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
+python3 shell-swift/check-focus.py
 
 echo "==> [3/4] E2E 十一用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 ARTIFACTS=$(mktemp -d /tmp/cursive-e2e-results.XXXXXX)
@@ -907,7 +908,9 @@ SELALL
 printf '{"content":"# 崩溃前的草稿","fingerprint":{"eol":"\\n","bom":false},"savedAt":"2026-01-01T00:00:00Z"}' \
     > "$SCRATCH/tab-e2e-recovery.json"
 rm -f /tmp/cursive-shell-check.json /tmp/cursive-shell-e2e.json
-CURSIVE_SMOKE=1 CURSIVE_SMOKE_SCRATCH_DELAY=1200 ./shell-swift/cursive-shell "$FIX/img.md" 2>/dev/null
+CURSIVE_SMOKE=1 CURSIVE_SMOKE_SCRATCH_DELAY=1200 ./shell-swift/cursive-shell "$FIX/img.md" 2>"$ARTIFACTS/recovery.log"
+cp /tmp/cursive-shell-check.json "$ARTIFACTS/recovery.check.json"
+cp /tmp/cursive-shell-e2e.json "$ARTIFACTS/recovery.e2e.json"
 python3 - <<'RECOVERY'
 import json, sys, os
 c = json.load(open('/tmp/cursive-shell-check.json'))
@@ -920,7 +923,12 @@ ok = c.get('status') == 'img.md' and '未命名' in tabs
 # 会跟着每一个新开的窗口跑一份（两份各自再落盘，越滚越多）
 once = (e.get('scratchQueries', 0) >= 2 and e.get('scratchHandouts') == 1
         and e.get('scratchPending') == 0)
-ok = ok and once
+r = e.get('result') or {}
+done = next((entry for entry in r.get('trace', []) if entry.get('stage') == 'done'), {})
+drafts = [tab.get('draft') for tab in done.get('tabs', []) if tab.get('path') is None]
+# 探针结束时，恢复草稿必须原文不动；不能把「启动时没抢焦点」当成全程正确。
+ok = ok and once and e.get('bytesEqual') is True and not r.get('jsError')
+ok = ok and drafts == ['# 崩溃前的草稿']
 print(('PASS ' if ok else 'FAIL ') + '崩溃恢复不抢焦点 ' + str(tabs)
       + ' 草稿交出 %s/问 %s 次，剩 %s' % (e.get('scratchHandouts'), e.get('scratchQueries'), e.get('scratchPending')))
 sys.exit(0 if ok else 1)

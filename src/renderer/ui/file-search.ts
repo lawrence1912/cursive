@@ -216,6 +216,14 @@ export class FileSearch {
       this.schedule()
     })
     this.input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return
+      if (e.key === 'ArrowDown') {
+        const first = this.listEl.querySelector<HTMLButtonElement>('.fs-open')
+        if (first) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
       if (e.key === 'Escape') {
         e.stopPropagation()
         if (this.input.value) this.clear()
@@ -232,6 +240,7 @@ export class FileSearch {
     // 0.4.0 F2：替换那一行。回车 = 按下「全部替换」（与查找框的回车对称）
     const replaceInput = this.el.querySelector<HTMLInputElement>('.fs-replace')!
     replaceInput.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Escape') {
         e.stopPropagation()
         this.onBack()
@@ -274,6 +283,22 @@ export class FileSearch {
       const g = this.groups[Number(row.dataset['g'])]
       const hit = g?.hits[Number(row.dataset['h'])]
       if (hit) this.onOpenHit(hit)
+    })
+    this.listEl.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        this.input.focus()
+        return
+      }
+      const buttons = [...this.listEl.querySelectorAll<HTMLButtonElement>('.fs-open')]
+      const at = buttons.indexOf(e.target as HTMLButtonElement)
+      if (at < 0 || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+      e.preventDefault()
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1
+        : Math.max(0, Math.min(buttons.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))
+      buttons[next]?.focus()
     })
 
     // 流式回推：token 对不上的整批丢掉（过期查询的结果不许盖住当前这次）
@@ -460,7 +485,10 @@ export class FileSearch {
   private relabelHits(): void {
     for (const row of this.listEl.querySelectorAll<HTMLElement>('.fs-hit')) {
       const hit = this.groups[Number(row.dataset['g'])]?.hits[Number(row.dataset['h'])]
-      if (hit) row.title = t('fs.line', { line: hit.line })
+      if (hit) {
+        row.title = t('fs.line', { line: hit.line })
+        row.querySelector('.fs-open')?.setAttribute('aria-label', `${row.title}: ${hit.text}`)
+      }
     }
   }
 
@@ -509,7 +537,12 @@ export class FileSearch {
         mark,
         document.createTextNode(hit.text.slice(hit.textCol + hit.length))
       )
-      row.append(pick, ln, text)
+      const open = document.createElement('button')
+      open.type = 'button'
+      open.className = 'fs-open'
+      open.setAttribute('aria-label', `${row.title}: ${hit.text}`)
+      open.append(ln, text)
+      row.append(pick, open)
       wrap.appendChild(row)
     }
     this.listEl.appendChild(wrap)

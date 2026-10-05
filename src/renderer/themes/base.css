@@ -1104,7 +1104,8 @@ body.is-resizing {
   border-radius: 6px;
   cursor: default;
 }
-.ctx-item:not(:disabled):hover { background: var(--accent-wash); }
+.ctx-item:not(:disabled):hover,
+.ctx-item:focus-visible { background: var(--accent-wash); }
 .ctx-item.is-danger { color: var(--warn); }
 .ctx-item.is-danger:not(:disabled):hover { background: color-mix(in srgb, var(--warn) 14%, transparent); }
 
@@ -1388,7 +1389,19 @@ body.is-dragging-row * { cursor: grabbing !important; }
   cursor: default;
   color: var(--muted);
 }
-.fs-hit:hover { background: var(--accent-wash); color: var(--fg); }
+.fs-hit:hover, .fs-hit:focus-within { background: var(--accent-wash); color: var(--fg); }
+.fs-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
 .fs-line {
   flex: none;
   min-width: 22px;

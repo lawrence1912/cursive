@@ -1343,12 +1343,34 @@ function buildToolbar(view: EditorView): HTMLElement {
     btn.className = 'cm-lp-tbl-btn'
     btn.dataset['tool'] = tool.key
     btn.title = tool.title()
+    btn.setAttribute('aria-label', btn.title)
     if (tool.path) btn.appendChild(svgIcon(tool.path))
     else btn.textContent = tool.label?.() ?? ''
     bar.appendChild(btn)
   }
   // 按下就拦：焦点一旦离开格子，编辑态就散了，工具栏自己也跟着消失
   bar.addEventListener('mousedown', (e) => e.preventDefault())
+  bar.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return
+    const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+    const at = buttons.indexOf(e.target as HTMLButtonElement)
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault()
+      e.stopPropagation()
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1
+        : (at + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
+      buttons[next]?.focus({ preventScroll: true })
+    } else if (e.key === 'Escape' || (e.key === 'Tab' && !e.shiftKey && at === buttons.length - 1)) {
+      e.preventDefault()
+      e.stopPropagation()
+      const tf = tableOf(view, bar)
+      const data = tf < 0 ? null : tableAt(view.state, tf)
+      const active = data && activeCellAt(view.state, tf, data)
+      const table = bar.parentElement?.querySelector('table')
+      const cell = active && table?.rows[active.row]?.cells[active.col]
+      if (cell) focusCell(cell, active.offset)
+    }
+  })
   bar.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('[data-tool]') as HTMLButtonElement | null
     const tool = btn && !btn.disabled ? TOOL_BY_KEY.get(btn.dataset['tool'] ?? '') : null
@@ -1563,6 +1585,7 @@ function wire(wrap: HTMLElement, view: EditorView): void {
   wrap.addEventListener('keydown', (e) => {
     const cell = cellOf(e.target)
     if (!cell) return
+    if (e.isComposing || e.keyCode === 229 || cell.dataset['composing']) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       ;(e.shiftKey ? redo : undo)(view)
@@ -1584,6 +1607,8 @@ function wire(wrap: HTMLElement, view: EditorView): void {
         if (e.shiftKey) {
           if (col > 0) move(view, tf, row, col - 1, true)
           else if (row > 0) move(view, tf, row - 1, lastCol, true)
+          else wrap.querySelector<HTMLButtonElement>('.cm-lp-tbl-bar button:not(:disabled)')
+            ?.focus({ preventScroll: true })
         } else if (col < lastCol) move(view, tf, row, col + 1)
         else if (row < lastRow) move(view, tf, row + 1, 0)
         else dispatch(view, insertRowAfter(view.state, tf, row, 0))

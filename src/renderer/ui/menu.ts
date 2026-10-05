@@ -16,12 +16,17 @@ export interface MenuItem {
  */
 let current: HTMLElement | null = null
 let cleanup: (() => void) | null = null
+let returnFocus: HTMLElement | null = null
 
-export function closeMenu(): void {
+export function closeMenu(restoreFocus = true): void {
+  const focus = returnFocus
+  const ownedFocus = current?.contains(document.activeElement)
+  returnFocus = null
   current?.remove()
   current = null
   cleanup?.()
   cleanup = null
+  if (restoreFocus && ownedFocus && focus?.isConnected) focus.focus({ preventScroll: true })
 }
 
 export function openMenu(
@@ -31,7 +36,9 @@ export function openMenu(
   opts: { onClose?: () => void; scrollHost?: HTMLElement } = {}
 ): void {
   closeMenu()
+  returnFocus = document.activeElement as HTMLElement | null
   const menu = document.createElement('div')
+  menu.tabIndex = -1
   menu.className = 'ctx-menu'
   menu.setAttribute('role', 'menu')
   for (const item of items) {
@@ -58,10 +65,23 @@ export function openMenu(
 
   const dismiss = (ev?: Event): void => {
     if (ev && menu.contains(ev.target as HTMLElement)) return
-    closeMenu()
+    closeMenu(false)
   }
   const onKey = (ev: KeyboardEvent): void => {
-    if (ev.key === 'Escape') closeMenu()
+    if (ev.isComposing || ev.keyCode === 229) return
+    const buttons = [...menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
+    if (ev.key === 'Escape' || ev.key === 'Tab') {
+      ev.preventDefault()
+      ev.stopPropagation()
+      closeMenu()
+    } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) {
+      ev.preventDefault()
+      ev.stopPropagation()
+      const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? buttons.length - 1
+        : (at + (ev.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+      buttons[next]?.focus({ preventScroll: true })
+    }
   }
   // 捕获阶段：编辑器自己也吃 mousedown，等冒泡就晚了
   window.addEventListener('mousedown', dismiss, true)
@@ -75,4 +95,5 @@ export function openMenu(
     opts.scrollHost?.removeEventListener('scroll', dismiss)
     opts.onClose?.()
   }
+  ;(menu.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? menu).focus({ preventScroll: true })
 }
