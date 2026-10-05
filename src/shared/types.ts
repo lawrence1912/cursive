@@ -158,6 +158,7 @@ export type MenuAction =
   | 'fmt:superscript'
   | 'fmt:subscript'
   | 'fmt:math-inline'
+  | 'fmt:latex-format'
   // ---- P2-9 命令表补齐：插入 ----
   // 这一组**不是开关**，是在光标处插一段骨架（见 fmt.ts 的 insert 分支）。
   // 仍挂 `fmt:` 前缀是为了走 main.ts 那条 `action.startsWith('fmt:')` 的现成分发，

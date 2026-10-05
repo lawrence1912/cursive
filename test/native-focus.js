@@ -114,5 +114,48 @@ void (async () => {
   results.imageTrap = document.activeElement === close
   key(close, 'Escape')
   results.imageReturn = !document.querySelector('#image-viewer') && document.activeElement === zoom
+
+  window.__shellEmit('menu', 'view:command-palette')
+  const query = document.querySelector('.pl-input')
+  query.value = 'LaTeX'
+  query.dispatchEvent(new Event('input', { bubbles: true }))
+  results.latexPaletteEntry = [...document.querySelectorAll('.pl-row')]
+    .some(row => row.textContent.includes('格式化 LaTeX'))
+  key(query, 'Escape')
+  const original = view.state.doc.toString()
+  const position = original.indexOf('\\begin{aligned}')
+  view.dispatch({ selection: { anchor: position + 2 } })
+  window.__shellEmit('menu', 'fmt:latex-format')
+  for (let i = 0; i < 50 && view.state.doc.toString() === original; i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  const formatted = view.state.doc.toString()
+  results.latexBlock = formatted.includes('$$\n\\begin{aligned}\n  a &= b + c \\\\\n  d &= 2\n\\end{aligned}\n$$')
+    && document.activeElement === view.contentDOM
+  view.dispatch({ selection: { anchor: position + 4 } })
+  window.__shellEmit('menu', 'fmt:latex-format')
+  for (let i = 0; i < 50 && !document.querySelector('#status-note').textContent.includes('源码已格式化'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  results.latexIdempotent = view.state.doc.toString() === formatted
+    && document.querySelector('#status-note').textContent.includes('源码已格式化')
+  window.__shellEmit('menu', 'edit:undo')
+  results.latexUndo = view.state.doc.toString() === original
+  view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+  window.__shellEmit('menu', 'fmt:latex-format')
+  for (let i = 0; i < 50 && !view.state.doc.toString().includes('$x = 1 + 2$'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  results.latexBatch = view.state.doc.toString().includes('$x = 1 + 2$')
+    && view.state.doc.toString().includes('a &= b + c')
+  window.__shellEmit('menu', 'edit:undo')
+  results.latexBatchUndo = view.state.doc.toString() === original
+  view.dispatch({ selection: { anchor: 0 } })
+  window.__shellEmit('menu', 'fmt:latex-format')
+  for (let i = 0; i < 50 && !document.querySelector('#status-note').textContent.includes('请将光标'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  results.latexNoFormula = view.state.doc.toString() === original
+    && document.querySelector('#status-note').textContent.includes('请将光标')
   await window.api.save(window.__focusResult, JSON.stringify(results), { eol: '\n', bom: false })
 })()

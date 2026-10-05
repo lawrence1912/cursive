@@ -106,6 +106,7 @@ let SHELL_TEXT: [String: [String]] = [
     "fmt.superscript":      ["上标", "Superscript"],
     "fmt.subscript":        ["下标", "Subscript"],
     "fmt.mathInline":       ["行内公式", "Inline Math"],
+    "fmt.latexFormat":      ["格式化 LaTeX", "Format LaTeX"],
     "fmt.link":             ["链接", "Link"],
     "fmt.h1":               ["标题 1", "Heading 1"],
     "fmt.h2":               ["标题 2", "Heading 2"],
@@ -6413,6 +6414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         format.addItem(item(L("fmt.superscript"), "fmt:superscript", key: "=", modifiers: [.command, .control]))
         format.addItem(item(L("fmt.subscript"), "fmt:subscript", key: "-", modifiers: [.command, .control]))
         format.addItem(item(L("fmt.mathInline"), "fmt:math-inline", key: "m", modifiers: [.command, .control]))
+        format.addItem(item(L("fmt.latexFormat"), "fmt:latex-format", key: ""))
         format.addItem(item(L("fmt.link"), "fmt:link", key: "k"))
         format.addItem(.separator())
         format.addItem(item(L("fmt.h1"), "fmt:h1", key: "1"))

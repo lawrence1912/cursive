@@ -28,7 +28,7 @@ import {
   type Section
 } from './editor/headings'
 import { forgetRowHeight, livePreview, themeEffect } from './editor/live-preview'
-import { currentTheme, primeHeights } from './editor/live-preview/widgets'
+import { currentTheme, loadKatex, primeHeights } from './editor/live-preview/widgets'
 import {
   bottomOverlay,
   createState,
@@ -45,6 +45,7 @@ import { anchorPos, destLiteral, linkHost } from './editor/link'
 import { jumpTo } from './editor/navigation'
 import { writingModes } from './editor/writing-modes'
 import { applyFormat, formatStateAt } from './editor/fmt'
+import { latexFormatSpec } from './editor/latex-format'
 import { focusKeepScroll } from './editor/focus'
 import { insertText } from './editor/paste'
 import { exportHtmlDocument, type Typography } from './export'
@@ -1920,6 +1921,26 @@ function quickOpenQuery(raw: string): PaletteQuery {
 
 async function handleMenu(action: MenuAction): Promise<void> {
   switch (action) {
+    case 'fmt:latex-format': {
+      if (view.composing || view.state.readOnly) break
+      const state = view.state
+      const tabId = activeId
+      const katex = await loadKatex()
+      if (activeId !== tabId || !view.state.doc.eq(state.doc)
+        || !view.state.selection.eq(state.selection) || view.composing || view.state.readOnly) {
+        note(t('latex.changed'))
+        break
+      }
+      const result = latexFormatSpec(view.state, katex)
+      if (result.spec) {
+        view.dispatch(result.spec)
+        focusKeepScroll(view)
+      }
+      note(result.skipped ? t('latex.skipped', { n: result.changed, skipped: result.skipped })
+        : result.changed ? t('latex.done', { n: result.changed })
+        : t(result.found ? 'latex.unchanged' : 'latex.empty'), { warn: result.skipped > 0 })
+      break
+    }
     case 'file:new':
       newUntitledTab()
       break

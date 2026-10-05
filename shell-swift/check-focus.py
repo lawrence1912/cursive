@@ -10,7 +10,8 @@ root = Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix='cursive-focus-') as directory:
     fixture = Path(directory)
     document = fixture / 'focus.md'
-    document.write_text('# 焦点测试\n\n| A | B |\n| --- | --- |\n| 中文 | 内容 |\n\n中文段落\n\n![图片](pixel.svg)\n')
+    document.write_text('# 焦点测试\n\n| A | B |\n| --- | --- |\n| 中文 | 内容 |\n\n中文段落\n\n![图片](pixel.svg)\n\n$x=1+2$\n\n'
+                        + r'$$\begin{aligned}a&=b+c\\d&=2\end{aligned}$$' + '\n')
     (fixture / 'pixel.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="blue"/></svg>')
     result = fixture / 'result.json'
     script = 'window.__focusResult = ' + json.dumps(str(result)) + ';\n'
@@ -24,4 +25,4 @@ with tempfile.TemporaryDirectory(prefix='cursive-focus-') as directory:
     checks = json.loads(result.read_text())
     for name, passed in checks.items():
         print(('PASS ' if passed else 'FAIL ') + name)
-    assert len(checks) == 28 and all(checks.values()), checks
+    assert len(checks) == 35 and all(checks.values()), checks

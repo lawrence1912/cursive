@@ -130,6 +130,7 @@ const FORMAT: Entry[] = [
   { action: 'fmt:superscript', labelKey: 'fb.sup' },
   { action: 'fmt:subscript', labelKey: 'fb.sub' },
   { action: 'fmt:math-inline', labelKey: 'fb.mathInline' },
+  { action: 'fmt:latex-format', labelKey: 'cmd.latexFormat' },
   { action: 'fmt:link', labelKey: 'fb.link' },
 
   { action: 'fmt:h1', labelKey: 'fb.h', args: { n: 1 }, hint: '⌘1' },
