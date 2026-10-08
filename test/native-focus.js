@@ -157,5 +157,53 @@ void (async () => {
   }
   results.latexNoFormula = view.state.doc.toString() === original
     && document.querySelector('#status-note').textContent.includes('请将光标')
+  // ---- 第八节 13 补查：从查找框 / 表格格子出发开浮层、切标签，再回来 ----
+  const tick = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  const activeTitle = () => document.querySelector('.tab-item.is-active')?.title
+  const home = activeTitle()
+  window.__shellEmit('menu', 'edit:find')
+  await tick()
+  const findInput = document.querySelector('.cm-panels input[name="search"]')
+  results.findEntry = !!findInput && document.activeElement === findInput
+  // 查找框里开命令面板再 Esc：焦点回到查找框，而不是正文
+  window.__shellEmit('menu', 'view:command-palette')
+  key(document.querySelector('.pl-input'), 'Escape')
+  results.findPaletteReturn = document.activeElement === findInput
+  // 查找框开着时切到别的标签再切回来：面板还在（它是这个标签自己的状态）、视口不动、
+  // 焦点回到正文 —— 不能落在一个已经不在页面上的输入框里
+  const findTop = view.scrollDOM.scrollTop
+  const textBefore = view.state.doc.toString()
+  window.__shellEmit('menu', 'file:new')
+  await tick()
+  window.__shellEmit('menu', 'file:prev-tab')
+  await tick()
+  results.findTabSwitch = activeTitle() === home
+    && !!document.querySelector('.cm-panels input[name="search"]')
+    && Math.abs(view.scrollDOM.scrollTop - findTop) <= 1
+    && document.activeElement === view.contentDOM
+  key(document.querySelector('.cm-panels input[name="search"]'), 'Escape')
+  await tick()
+  // 表格格子里切标签再切回来：表还在渲染态，焦点回到原来那一格（或正文），视口不动、文档一个字不变
+  const backCell = document.querySelector('.cm-lp-tableview td')
+  backCell.focus()
+  await tick()
+  const cellTop = view.scrollDOM.scrollTop
+  window.__shellEmit('menu', 'file:next-tab')
+  await tick()
+  window.__shellEmit('menu', 'file:prev-tab')
+  await tick()
+  await tick()
+  const now = document.activeElement
+  results.tableTabSwitch = activeTitle() === home
+    && !!document.querySelector('.cm-lp-tableview')
+    && (now === view.contentDOM || !!now?.matches?.('.cm-lp-tableview td, .cm-lp-tableview th'))
+    && Math.abs(view.scrollDOM.scrollTop - cellTop) <= 1
+    && view.state.doc.toString() === textBefore
+  // 收掉那个空白标签，回到原文档
+  window.__shellEmit('menu', 'file:next-tab')
+  await tick()
+  window.__shellEmit('menu', 'file:close-tab')
+  await tick()
+
   await window.api.save(window.__focusResult, JSON.stringify(results), { eol: '\n', bom: false })
 })()

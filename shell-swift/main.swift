@@ -566,14 +566,17 @@ final class MainWebView: WKWebView {
      *
      * 探针自己发的是合成事件（`dispatchEvent`），根本不走这条路，所以吞掉零影响。
      * `performKeyEquivalent` 返回 true = 「我处理了」，⌘S / ⌘W 这类也一并挡住。
+     *
+     * 唯一的例外是 `smokeKeys`：真实输入法走查要的恰恰是从系统事件流进来的真按键
+     * （`shell-swift/check-ime.py`）—— 那时跑的人被要求别碰键盘。
      */
     override func keyDown(with event: NSEvent) {
-        if smokeAuto { return }
+        if smokeAuto && !smokeKeys { return }
         super.keyDown(with: event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if smokeAuto { return true }
+        if smokeAuto && !smokeKeys { return true }
         if event.modifierFlags.contains(.command) { return false }
         return super.performKeyEquivalent(with: event)
     }
@@ -1769,6 +1772,11 @@ var recoverableScratch: Set<String> = []
 /// `CURSIVE_SMOKE_DISCARD`）、**不碰剪贴板**、以及 `MainWebView` 里**吞掉真实按键**。
 /// 全局而不是某个类的私有属性 —— `MainWebView` 也要用，而它不是 `WindowController`
 let smokeAuto = ProcessInfo.processInfo.environment["CURSIVE_SMOKE"] != nil
+/// `CURSIVE_SMOKE_KEYS=1`（第八节 15 / 17）：自检时**放行真实按键** —— 真实输入法走查与输入延迟
+/// 测量要的就是从系统事件流进来的那几下（`ime-driver` 发的 CGEvent，输入法真的接手）。
+/// 只在自检下认；`release.sh` 不许设它（吞键是那条流水线不随机变红的前提），
+/// `test/smoke-harness.test.ts` 扫源码守着
+let smokeKeys = smokeAuto && ProcessInfo.processInfo.environment["CURSIVE_SMOKE_KEYS"] != nil
 /// `CURSIVE_SMOKE_QUIET=1`：自检时**不抢前台**（0.4.1）。只在自检下有意义，理由见
 /// `makeKeyAndOrderFront` 那一处；`release.sh` 不许设它。
 let smokeQuiet = smokeAuto && ProcessInfo.processInfo.environment["CURSIVE_SMOKE_QUIET"] != nil

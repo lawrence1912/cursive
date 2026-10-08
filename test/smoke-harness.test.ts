@@ -199,3 +199,27 @@ describe('第八节 5–7 的原生专项', () => {
     expect(harness).toContain(`CHECKS = ${n}`)
   })
 })
+
+/**
+ * 自检吞键的那一个口子（`CURSIVE_SMOKE_KEYS`，第八节 15 / 17）：真实输入法走查与输入延迟测量
+ * 要真按键。吞键是 `release.sh` 不随机变红的前提（人在旁边打字会把夹具改花），所以钉三件事：
+ * 只在自检下认；吞键那两句都认它；流水线里一处都不设它。
+ */
+describe('CURSIVE_SMOKE_KEYS：自检时放行真实按键', () => {
+  it('只在自检下成立', () => {
+    expect(swift).toContain('let smokeKeys = smokeAuto && ProcessInfo.processInfo.environment["CURSIVE_SMOKE_KEYS"] != nil')
+  })
+
+  it('keyDown 与 performKeyEquivalent 两句吞键都认它', () => {
+    expect(swift).toContain('if smokeAuto && !smokeKeys { return }')
+    expect(swift).toContain('if smokeAuto && !smokeKeys { return true }')
+  })
+
+  it('release.sh 与两个原生专项一处都不设它', () => {
+    expect(release).not.toContain('CURSIVE_SMOKE_KEYS')
+    for (const f of ['check-focus.py', 'check-flow.py']) {
+      const src = readFileSync(new URL(`../shell-swift/${f}`, import.meta.url), 'utf8')
+      expect(src, f).not.toContain('CURSIVE_SMOKE_KEYS')
+    }
+  })
+})

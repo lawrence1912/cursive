@@ -269,7 +269,12 @@ npm run build                    # 构建 renderer 到 out/renderer
 | `npm run icon` | 从 `brand/app-icon.svg` 重出 `build/icon.png` + `icon.icns` |
 | `./shell-swift/build.sh` | 编译原生壳，只出本机架构（约 10s）|
 | `CURSIVE_UNIVERSAL=1 ./shell-swift/build.sh` | 两片都编（CI 跑的就是这条，挡住 x86_64 悄悄编不过）|
-| `./shell-swift/release.sh` | 类型检查 + 单测 → 构建 → 编译壳 → E2E → 组装 `dist/Cursive.app` → 另一片冒烟 |
+| `./shell-swift/release.sh` | 类型检查 + 单测 → 构建 → 编译壳 → 原生专项（键盘焦点 / 只读·后退前进·重开标签）→ E2E → 组装 `dist/Cursive.app` → 另一片冒烟 |
+| `python3 shell-swift/check-ime.py` | 真实中文输入法走查（人工发起）：用系统当前的中文输入法往测试窗口里真的打字，核对段落 / 表格 / 查找框 / 浮层 / 切标签里一个字不丢不重 |
+| `python3 shell-swift/measure.py` | 真实窗口性能基线（人工发起）：输入延迟、滚动帧、切标签、冷启动、导出、多标签内存、闲置 CPU，拿 `BUDGETS` 比 |
+
+后两条会**真的往测试窗口里打字**（CGEvent，与真键盘同一个入口；每个事件之前确认测试窗口在最前面，
+不在就立刻停），跑的时候别碰键盘鼠标；它们依赖这台机器装了什么输入法、忙不忙，所以不进 `release.sh`。
 
 没法手动点界面时（沙箱、自动化），壳内置探针：
 

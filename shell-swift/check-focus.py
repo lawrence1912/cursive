@@ -19,10 +19,10 @@ with tempfile.TemporaryDirectory(prefix='cursive-focus-') as directory:
     env = dict(os.environ, CURSIVE_SMOKE='1', CURSIVE_SMOKE_SHOT_CLEAN='1',
                CURSIVE_SMOKE_SUPPORT=str(fixture / 'support'),
                CURSIVE_SMOKE_SHOT=str(fixture / 'view.png'),
-               CURSIVE_SMOKE_SHOT_WAIT='2500', CURSIVE_SMOKE_SHOT_JS=script)
+               CURSIVE_SMOKE_SHOT_WAIT='6000', CURSIVE_SMOKE_SHOT_JS=script)
     subprocess.run([str(root / 'shell-swift/cursive-shell'), str(document)],
                    cwd=root, env=env, timeout=60, check=True)
     checks = json.loads(result.read_text())
     for name, passed in checks.items():
         print(('PASS ' if passed else 'FAIL ') + name)
-    assert len(checks) == 35 and all(checks.values()), checks
+    assert len(checks) == 39 and all(checks.values()), checks

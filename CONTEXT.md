@@ -5,13 +5,13 @@
 所见即所得的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+ `src/renderer`（CodeMirror 6）**；Electron 版已彻底删除（P0-4），构建链只剩 Vite → `out/renderer`。
 产品名写作 **Cursive**（菜单、窗口标题、`Cursive.app`）；**目录名 / 环境变量 / localStorage 键 / 可执行文件仍是小写 `cursive`** —— 那些是标识符，改了等于给自己造一次数据迁移。
 
-## 当前收尾（2026-10-04）
+## 当前收尾（2026-10-08）
 
-当前完整交付范围与逐项证据见 [交付检查](docs/experience-completion-2026-10-04.md)，未验证项目保持未勾选。
-体验修复已提交于 `a4ece3f`，测量与验证边界见 [检查报告](docs/experience-audit-2026-10-04.md)。
-第 16 项跟进已定位批量关闭探针的保存状态污染，并修复拖选的过期布局回调；大纲空列表尚未重新捕获，见 [跟进记录](docs/regression-followup-2026-10-04.md)。
-下一步按 [ROADMAP 第八节](ROADMAP.md#八体验与功能待办2026-10-04-更新) 执行：继续确认大纲异常、验证真实中文输入法，再补齐键盘焦点与实际交互性能基线。
-第 13、15 项只完成了一部分，不能勾成整项完成；历史的“通过”记录也不能代替当前完整发布验证。
+完整交付范围与逐项证据见 [交付检查](docs/experience-completion-2026-10-04.md)，未验证项目保持未勾选。
+- **第 16 项已定因并修复**（`b136fdc`）：两处偶发失败同一个根因 —— 混合解析停在半路时外层树全长、正文半截，`parsedTree` 拿 `tree.length` 当进度（见下面「已踩坑」第一条）。待连续三轮完整回归确认。
+- **5–7 已完成**（`919a98c`，契约 v38）：只读阅读模式、后退 / 前进、重新打开关闭的标签；原生专项 `check-flow.py` 30 项接入 `release.sh`。
+- **13** 补查了浮层与切标签的组合（`check-focus.py` 39 项），整项待 17 验收；**15 / 17** 的真实窗口工具已就绪（`measure.py` / `check-ime.py`，会真的往测试窗口里打字，依赖 `CURSIVE_SMOKE_KEYS`），**尚未运行**。
+历史的「通过」记录不能代替当前完整发布验证。
 
 ## 功能要点（renderer）
 
@@ -400,6 +400,8 @@ CURSIVE_SMOKE=1 ./shell-swift/cursive-shell <file.md>
 另加 `CURSIVE_SMOKE_SHOT=<png>`（截 webView）、`CURSIVE_SMOKE_THEME=dark|light|sepia|system`（截图前切主题，走查三套配色；**会写进 localStorage，走查完用 system 复位**）、`CURSIVE_SMOKE_MENU=<菜单动作>`（截图前派任意一个菜单动作，目检设置面板这类用；**与 THEME 互斥** —— THEME 那条先 return）、`CURSIVE_SMOKE_SHOT_SEARCH=1`（截图前把跨文件搜索面板留在开着的状态）、`CURSIVE_SMOKE_NAME` / `CURSIVE_SMOKE_RENAME`（新建 / 重命名时原生输入框的替身，两个**必须不同名**）、`CURSIVE_SMOKE_SCRATCH_DELAY=<ms>`（拖慢 scratchList 应答，逼出「文件先到、崩溃恢复后到」的竞态）。
 
 另加 `CURSIVE_SMOKE_QUIET=1`（0.4.1）：自检时**不抢前台**。默认那句 `NSApp.activate(ignoringOtherApps: true)` 是为了挡住「人在旁边打字把夹具改花」（另一半是吞键），代价是**手跑一次探针就把人踢到后台一次**；安静模式把第一件事换成「窗口根本不是 key，人的按键落在人自己的 app 里」。**代价全在测试侧**：窗口不是 key 时 WebKit 一帧都不派（2026-09-21 实测 `raf: 0`，而 `setTimeout` 照跑）、`:focus` 压根不匹配 —— 所以它**只给状态类探针用**（读 state、读文档、量同步耗时；`performance.now()` 夹着一次 dispatch 是准的，CM 的装饰重建与 DOM 写入都在 dispatch 里同步做完，只有 measure 那一步要帧）。凡是靠 rAF、靠 `:focus`、靠截图逐像素的断言在这个模式下**假绿假红都有可能**，比直接红更难查。`release.sh` 里有一批按帧取样的断言，所以**它不许带这个变量**，`test/smoke-harness.test.ts` 扫源码守着这两条。
+
+另加 `CURSIVE_SMOKE_KEYS=1`（2026-10-08，第八节 15 / 17）：自检时**放行真实按键**。自检默认在 `MainWebView.keyDown` / `performKeyEquivalent` 里吞掉一切真按键（防「人在旁边打字把夹具改花」），而真实输入法走查与输入延迟测量要的恰恰是从系统事件流进来的真按键（`shell-swift/ime-driver.swift` 发的 CGEvent，输入法真的接手）。只在自检下认；`release.sh` 与两个原生专项一处都不许设它（`test/smoke-harness.test.ts` 扫源码守着）。驱动走 `.cghidEventTap`（与真键盘同一个入口，输入法就是从这里接手的），所以在**每一个事件**投递之前都确认测试窗口在最前面，不在就立刻退出，跑的人被要求别碰键盘。**排查时踩过的**：注入的按键一个都没进页面、连回车都没有 —— 不是权限（`CGPreflightPostEventAccess` 为真），是自检在吞键；改 `postToPid` 也一样，因为吞的是壳自己。`postToPid` 在放行之后能不能把按键送到输入法**没有单独验证过**。走查与测量的指令走文件：探针轮询一份 JSON（`window.api.read`），回执用 `scratchSave` 写进隔离支持目录 —— 不走 `save`，后者会把临时路径记进「最近文件」（两个原生专项写结果用的是 `save`，这个副作用是老的）。
 
 另加 `CURSIVE_SMOKE_SUPPORT=<目录>`（0.4.1）：把**应用支持目录的根**换成指定的那一个（`scratch` / `history` / `themes` 三个目录都从它长出来，壳侧只有 `supportBaseURL()` 一处解析，见 main.swift）。**只在 `CURSIVE_SMOKE` 下认** —— 平时能把数据目录整个换掉的口子，迟早会有人在真实文档上误触一次。`release.sh` 从前是直接拿开发机上真实的那三个目录当试验田：整轮开始前 `rm -rf history/`（用户自己的版本历史）、每个用例 `rm -f scratch/*.json`（崩溃恢复草稿）、往 `themes/` 丢一张探针皮肤，而收走皮肤那句 `rm` 挂在脚本末尾，`set -e` 下任何一条断言红了都走不到（实测开发机的 themes/ 里就躺着一张 9-21 留下的 `e2e-skin.css`）。现在整条流水线跑在 `/tmp/cursive-e2e-support` 上，收尾走 `trap … EXIT`，成功失败两条路都收得干净；跨文件替换那条用例读历史快照时也从这个变量取路径，**哪天隔离被绕开，那条断言当场就空了**。`test/smoke-harness.test.ts` 扫源码守着形状。
 

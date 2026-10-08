@@ -6,3 +6,4 @@ dist/
 .shots/
 shell-swift/cursive-shell
 /assets/
+__pycache__/
