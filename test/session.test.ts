@@ -54,6 +54,29 @@ describe('会话的读写', () => {
     expect(loadSession(store, '/root')).toBeNull()
   })
 
+  it('只读这一位跟着存、跟着读回来（第八节 5）', () => {
+    const store = memory()
+    const s = packSession([{ ...tab('/a.md', 10, 2), readOnly: true }, tab('/b.md')], 0)
+    saveSession(store, '/root', s)
+    const back = loadSession(store, '/root')!
+    expect(back.tabs[0]!.readOnly).toBe(true)
+    expect('readOnly' in back.tabs[1]!).toBe(false)
+  })
+
+  it('只读只认严格的 true：手改成别的一律当可编辑；老会话没有这一项照样读得出来', () => {
+    const raw = JSON.stringify({
+      v: SESSION_VERSION,
+      active: 0,
+      tabs: [
+        { path: '/a.md', scroll: 0, cursor: 0, readOnly: 'yes' },
+        { path: '/b.md', scroll: 0, cursor: 0, readOnly: 1 },
+        { path: '/c.md', scroll: 0, cursor: 0 }
+      ]
+    })
+    const back = parseSession(raw)!
+    expect(back.tabs.map((t) => t.readOnly === true)).toEqual([false, false, false])
+  })
+
   it('没有存储（隐私模式 / 被策略禁掉）不炸', () => {
     expect(loadSession(undefined, '/root')).toBeNull()
     expect(() => saveSession(undefined, '/root', packSession([tab('/a.md')], 0))).not.toThrow()

@@ -83,13 +83,18 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       // 进/出表格编辑态只带一个 effect（不改文档也不改选区），不认它就不会重铺行样式
       const tableEdit = u.transactions.some((tr) => tr.effects.some((e) => e.is(setTableEdit)))
       const pointerChanged = u.startState.field(pointerSelection, false) !== u.state.field(pointerSelection, false)
+      // 只读切换（第八节 5）：回显钉住、复选框换成不可点的那一份 —— 文档与选区都没动，得自己认
+      const readOnlyChanged = u.startState.readOnly !== u.state.readOnly
       // 鼠标拖选期间保留预览布局。选区仍正常更新，但 inline widget 不能跟着每个
       // selectionSet 在源码/预览间翻面，否则异步图片或公式会把拖选落点推开。
       if (u.state.field(pointerSelection, false)) {
         this.carry(u)
         return
       }
-      if (this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged || tableEdit || pointerChanged) {
+      if (
+        this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged ||
+        tableEdit || pointerChanged || readOnlyChanged
+      ) {
         this.wasComposing = false
         this.decorations = buildDecorations(u.view)
       }
@@ -143,10 +148,13 @@ const openLinkOnClick = EditorView.domEventHandlers({
 export const blockField = StateField.define<DecorationSet>({
   create: buildBlocks,
   update(value, tr) {
-    const effect = tr.effects.some(
-      (e) =>
-        e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold) || e.is(toggleSectionFold)
-    )
+    // 只读切换（第八节 5）同样是「每一个块都可能跟着变样」：回显钉住、表格换成不可编辑的那一份
+    const effect =
+      tr.startState.readOnly !== tr.state.readOnly ||
+      tr.effects.some(
+        (e) =>
+          e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold) || e.is(toggleSectionFold)
+      )
     // 后台 parse 推进（空事务）也要认：文档大到一次 ensure 解析不完时，块级装饰
     // 只在这条路上才等得到剩下的树 —— 否则半截表格就一直半截着。
     // 比的是**覆盖长度**而不是树对象：`ensureSyntaxTree` 每跑一次都会换一个新的 Tree
@@ -485,7 +493,8 @@ function collectBlocks(
                 widget: new TableWidget(
                   data,
                   editing,
-                  editing ? activeCellAt(state, node.from, data) : null
+                  editing ? activeCellAt(state, node.from, data) : null,
+                  state.readOnly
                 ),
                 block: true
               }).range(node.from, node.to)

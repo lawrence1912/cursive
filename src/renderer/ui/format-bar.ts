@@ -246,6 +246,21 @@ export class FormatBar {
     this.triggers.pick.classList.toggle('is-on', kind.action !== 'fmt:p')
   }
 
+  /**
+   * 只读（第八节 5）：条子留在原处（藏起来的话滚动下边距跟着跳一下），改格式的按钮全部置灰 ——
+   * 点了也落不进文档（`editor/read-only.ts` 那道闸），与其让人点了没反应，不如一眼看出
+   * 这会儿改不了。折角 / 手柄照常能用：收不收条子与改不改文档无关。
+   */
+  setReadOnly(on: boolean): void {
+    // 每次挪光标都会问一遍（`syncFormatBar`），没变就别去碰那二十颗按钮
+    if (this.el.classList.contains('is-ro') === on) return
+    this.el.classList.toggle('is-ro', on)
+    for (const btn of this.el.querySelectorAll<HTMLButtonElement>('.fb-bar button:not(.fb-fold)')) {
+      btn.disabled = on
+    }
+    if (on) this.setMenuOpen(null)
+  }
+
   /** 两个下拉互斥：开一个就关另一个（它们挨着，同时张开会叠在一起） */
   private setMenuOpen(which: MenuId | null): void {
     this.open = which

@@ -169,3 +169,33 @@ describe('第八节 3：源码显隐与选区稳定性的固定走查项', () =>
     expect(release).toContain("sp.get('tabsOpen') == sp.get('tabsBefore', -9) + 1")
   })
 })
+
+/**
+ * 第八节 5–7（只读 / 后退前进 / 重新打开关闭的标签）的原生专项（第四节红线 5：每个新功能
+ * 在 release.sh 里有一条断言）。它是一个独立的窗口（`check-flow.py`），这里钉两件事：
+ * 流水线真的跑它；每一条「挡住了」都带着「可编辑时真的会改」的证人 —— 少了证人，
+ * 「事件压根没生效」也会被读成「只读挡住了」。
+ */
+describe('第八节 5–7 的原生专项', () => {
+  const flow = readFileSync(new URL('../test/native-flow.js', import.meta.url), 'utf8')
+  const harness = readFileSync(new URL('../shell-swift/check-flow.py', import.meta.url), 'utf8')
+
+  it('release.sh 跑它，而且排在打包之前（红了就不出包）', () => {
+    const at = release.indexOf('python3 shell-swift/check-flow.py')
+    expect(at).toBeGreaterThan(-1)
+    expect(at).toBeLessThan(release.indexOf('[4/4] 打包'))
+  })
+
+  it('挡住的那几条各有证人', () => {
+    for (const name of ['roFormat', 'roPaste', 'roTask']) {
+      expect(flow).toContain(`results.${name} =`)
+      expect(flow).toContain(`results.${name}Witness =`)
+    }
+    expect(flow).toContain('results.roOff =') // 打字那条的证人：退出只读后同样的 insertText 改得动
+  })
+
+  it('检查条数对得上（少写一条断言不会悄悄混过去）', () => {
+    const n = [...flow.matchAll(/^\s*results\.(?!error)\w+ = /gm)].length
+    expect(harness).toContain(`CHECKS = ${n}`)
+  })
+})

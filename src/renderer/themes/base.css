@@ -393,6 +393,8 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
+/* 第八节 5 只读：按钮置灰（disabled 已经让它们点不动），折角照常 */
+#format-bar.is-ro .fb-bar button:disabled { opacity: 0.35; }
 #format-bar.is-hidden {
   display: none;
 }
@@ -833,6 +835,22 @@ body {
 #status-zoom:empty { display: none; }
 #status-zoom:hover { background: var(--accent-wash); color: var(--fg); }
 #status-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* 第八节 5 只读：与缩放那格同一套「没话说就别占地方」。只读时一把锁 +「只读」，
+   既是状态、也是退出只读的那颗按钮（与标签右键菜单、视图菜单、⌥⌘L 同一件事） */
+#status-ro {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0 -6px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--accent);
+  cursor: default;
+}
+#status-ro:empty { display: none; }
+#status-ro .ic { width: 12px; height: 12px; }
+#status-ro:hover { background: var(--accent-wash); }
+#status-ro:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 /* P3-8 详细统计面板：贴着字数条上方浮出。**不是模态** —— 写作时要能边看边改，
    视觉沿用右键菜单那套圆角 + 毛玻璃 */
@@ -1566,6 +1584,9 @@ body.is-resizing .sb-resize::after { opacity: 0.7; }
   color: var(--fg);
 }
 .tab-stale { flex: none; display: flex; align-items: center; color: var(--warn); }
+/* 只读（第八节 5）：标题前一把小锁。比 ⚠ 收一号、走正文的弱色 —— 它是一种状态，不是警告 */
+.tab-ro { flex: none; display: flex; align-items: center; color: var(--muted); margin-right: -2px; }
+.tab-ro .ic { width: 12px; height: 12px; }
 
 /* ---- 标题栏的栏宽浮层（P3-5 的第二个入口，ui/prefs.ts）----
    与右键菜单同一套圆角 + 毛玻璃；z-index 压在菜单之下、面板之上 */

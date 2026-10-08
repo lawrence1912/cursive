@@ -126,7 +126,17 @@
 
 新增菜单动作 `fmt:latex-format`，由原生「格式 → 格式化 LaTeX」与命令面板调用同一处理函数。无选区时处理光标所在公式；有选区时处理覆盖的完整公式或包含选区的公式，也支持选中的纯 LaTeX。仅显式执行，不在保存时自动格式化。格式化结果须与原文的 KaTeX 渲染一致；无效公式或无法保持渲染一致的内容原样保留并提示。所有修改合并为一次可撤销事务，不改变换行/BOM 保存指纹；模块加载期间文档、选区或标签变化则取消本次操作。
 
+### 契约 v38：只读阅读模式 · 后退 / 前进 · 重新打开关闭的标签（第八节 5–7）
+
+新增菜单动作 `view:toggle-read-only`（视图，⌥⌘L，带勾）、`go:back` / `go:forward`（新增的「前往」菜单，⌥⌘← / ⌥⌘→）、`file:reopen-closed-tab`（文件，⌥⇧⌘T）。`ViewFlags` 多四项：`readOnly`（**活动标签**是否只读 —— 只读按标签，勾跟着切标签走）与 `canBack` / `canForward` / `canReopen`（三条命令此刻有没有事可做，壳的 `validateMenuItem` 照着亮灭，别的菜单项一律照旧亮着）。壳侧另记一份**本窗口**的 `activeReadOnly`（菜单那份是全应用共用的，拖放却要问这一个窗口）：只读时拖进来的图片不收，**拖进来那一刻就判**（光标当场显示不可放）—— 收了就得先复制进 `assets/`，而链接插不进只读文档，盘上平白多一张图；.md 照收。渲染层「窗口拿到焦点就把视图标志推一遍」：勾与亮灭是每个窗口各自的，不推的话菜单上挂着上一个窗口的状态。
+- **只读的态就在标签自己的 EditorState 里**（`editor/read-only.ts` 的 compartment，CM 自带的 `EditorState.readOnly`）：切走冻结、切回原样，会话与关闭栈各带一位 `readOnly`。挡编辑三层：CM 自带的那层（DOM 输入、粘贴、拖放、剪切、它自己的命令）；**一道只在只读时装上的 changeFilter 兜底**（格式命令、表格格子、任务勾选、图片缩放写回、大纲搬节、回滚……全是程序化 dispatch，二十个入口各写 if 迟早漏一个）；编辑器根上的 `cm-ro` 类把把手、表格工具栏、替换那一行收起来。外部重载换整份 state、不经这道闸，只读这一位由 `adoptDisk` 原样带过去。**切只读是一次 reconfigure（文档、选区都没动）**：块级装饰与 ViewPlugin 都得自己认 `startState.readOnly !== state.readOnly`，`TableWidget` / `CheckboxWidget` 把 readOnly 放进 `eq` —— 不进身份的话 CM 照旧复用那份可编辑的 DOM。
+- **后退 / 前进只记明确的跳转**（`ui/nav-history.ts`，浏览器那一套：一串位置 + 指针，跳一次砍掉往后那一截）。文档内的跳转全走 `jumpTo`，在 `editor/navigation.ts` 的 `jumpHost` 挂一个钩子；跨文档的（文件树、快速打开、搜索命中、链接）由 main.ts 的 `navigation()` 整趟包起来记一格，里面那一下 jumpTo 靠 `navDepth` 不重复记。位置存**文档位置**（光标 + 视口顶上那一行），改文档时跟着 `map`；人自己切了标签（不记）再后退，先回到切走之前那一格。换了标签就晚一帧再摆位置：`activate` 会在下一帧把视图滚回那个标签自己记着的位置。
+- **重新打开只认有路径的标签**（`ui/closed-tabs.ts`）：`openTab` 一开某个路径就把它从栈里摘掉（不会开出第二份）；进了废纸篓的不记；无路径草稿首版不救。
+- 验：`test/read-only.test.ts`、`test/nav-history.test.ts`、`test/closed-tabs.test.ts`；真窗口 `shell-swift/check-flow.py`（30 项，`release.sh` 第 2 步），每条「挡住了」都钉着一个「可编辑时真的会改」的证人。
+
 ## 已踩坑（勿再踩）
+
+- **`tree.length` 不是解析进度**（2026-10-08，第八节 16 的根因）：`cursiveMarkdown()` 外面套着 `yamlFrontmatter`，那是一层 `parseMixed` —— 外层一棵小语法（`Document → Frontmatter? Body`），**整篇 Markdown 挂在 `Body` 上**。一次事务的 20ms 预算（CM 的 `Work.Apply`）没解析完时，CM 用 `takeTree()` 把解析停在半路：外层早已全长，正文只到停下的地方（停点记在顶层一个没导出的 `stoppedInner` 上）。从前 `parsedTree` 的快照分支、`primeTree` 记缓存、标题缓存、块级装饰「后台解析推进了没有」全拿 `tree.length` 当进度，于是半截树被当成整棵钉进缓存 —— 导出 HTML 停在引用块后面（第三轮完整回归）、大纲降级之后偶发为空、表格公式不出现、回显判定解析到外层 `Body` 把整篇翻回源码，而且**都看着完好**。整篇替换（外部重载、探针收尾）一块碎片都复用不上，机器一忙就撞上。现在一律用 `editor/syntax.ts` 的 `parsedExtent`（按挂载点的内层树长度算）；`test/mixed-parse.test.ts` 拨快挂钟复现「外层全长、正文半截」。**两个连带的空守卫**：`syntax.test.ts` 从前用 `IterMode.IgnoreMounts` 比树结构 —— 不进挂载等于只比外层那三个节点，整篇正文都被跳过，要比 Markdown 的块结构得用 `IgnoreOverlays`（代码块里的嵌套语言是 overlay 挂载）；`export.test.ts` 拿 `primeTree(state).length === doc.length` 断言「整棵」，对混合解析永远成立。
 
 - **sheet 挂在离屏窗口上 = 「点了卡住」**（0.4.0 真打印机）。`PDFPrinter` 为了让 WebKit
   肯渲染，把 web view 挂在一只 x = -30000 的离屏窗口上（铁律 2）。导出那条不弹面板，

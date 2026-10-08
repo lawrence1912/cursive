@@ -692,19 +692,25 @@ export class BulletWidget extends WidgetType {
 
 /** 任务列表的 `[ ]` / `[x]` → 真复选框，点击直接改源码 */
 export class CheckboxWidget extends WidgetType {
-  constructor(readonly checked: boolean) {
+  /** `readOnly`（第八节 5）：只读时是一颗点不动的复选框。要进身份，切只读时才会换一颗 */
+  constructor(
+    readonly checked: boolean,
+    readonly readOnly = false
+  ) {
     super()
   }
   eq(other: CheckboxWidget): boolean {
-    return other.checked === this.checked
+    return other.checked === this.checked && other.readOnly === this.readOnly
   }
   toDOM(view: EditorView): HTMLElement {
     const box = document.createElement('input')
     box.type = 'checkbox'
     box.className = 'cm-lp-checkbox'
     box.checked = this.checked
+    box.disabled = this.readOnly
     box.addEventListener('mousedown', (e) => {
       e.preventDefault()
+      if (view.state.readOnly) return
       // 位置在文档变化后会漂移，所以点击时现查，不存构造时的位置
       const pos = view.posAtDOM(box)
       const line = view.state.doc.lineAt(pos)
@@ -862,7 +868,9 @@ function sizeHandle(
   tip.hidden = true
 
   handle.addEventListener('mousedown', (down) => {
-    if (down.button !== 0) return
+    // 只读（第八节 5）：把手本来就收起来了（`.cm-ro` 的 CSS），这一句挡的是「万一点到了」——
+    // 拖起来会先把图拉出一个虚影，松手写回又被挡下，图就停在一个文档里没有的尺寸上
+    if (down.button !== 0 || view.state.readOnly) return
     // 不挡的话按下这一下会先被当成一次正文选区（widget 外面还有 CM 的 mousedown）
     down.preventDefault()
     down.stopPropagation()

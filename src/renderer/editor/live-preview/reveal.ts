@@ -25,6 +25,12 @@ export class Reveal {
 
   constructor(state: EditorState, scope: RevealScope) {
     const raw: Span[] = []
+    // 第八节 5 只读：**渲染效果钉住**，光标走到哪儿都不翻回源码 —— 回显源码是为了改，
+    // 而只读的时候不改。选区、复制、查找照样落在源码坐标上，只是看的那一面一直是渲染态
+    if (state.readOnly) {
+      this.spans = []
+      return
+    }
     const selection = state.field(pointerSelection, false) ?? state.selection
     for (const range of selection.ranges) {
       raw.push(expand(state, range.from, range.to, scope))

@@ -11,6 +11,11 @@ export interface OutlineActions {
   setLevel: (pos: number, level: number) => void
   newSibling: (pos: number) => void
   copyAnchor: (pos: number) => void
+  /**
+   * 当前文档是不是只读（第八节 5）。是的话三个改文档的入口（右键里的新建同级 / 升降级、
+   * 拖拽重排）一起收起来 —— 跳转、折叠、复制锚点照旧
+   */
+  readOnly?: () => boolean
 }
 
 const FOLD_KEY = 'cursive.outlineFold'
@@ -348,6 +353,8 @@ export class Outline {
     if (!row) return
     // 上一次拖拽如果在面板外松手，就不会有 click 来清这个标记 —— 按下时先清一次
     this.swallowClick = false
+    // 只读：拖拽重排是一次改文档，不起手；点一下跳转走的是 click，不受影响
+    if (this.actions.readOnly?.()) return
     this.drag = { pos: Number(row.dataset['pos']), x: e.clientX, y: e.clientY, on: false }
 
     const move = (ev: MouseEvent): void => {
@@ -417,18 +424,20 @@ export class Outline {
     const item = this.items.find((h) => h.pos === pos)
     if (!item) return
 
+    // 只读时改文档的三条置灰（不藏）：菜单的形状不跟着模式变，人才记得住东西在哪儿
+    const ro = this.actions.readOnly?.() === true
     const items: MenuItem[] = [
       { label: t('ol.copyAnchor'), run: () => this.actions.copyAnchor(pos) },
-      { label: t('ol.newSibling'), run: () => this.actions.newSibling(pos) },
+      { label: t('ol.newSibling'), disabled: ro, run: () => this.actions.newSibling(pos) },
       {
         label: t('ol.promote'),
         separated: true,
-        disabled: item.level <= 1,
+        disabled: ro || item.level <= 1,
         run: () => this.actions.setLevel(pos, item.level - 1)
       },
       {
         label: t('ol.demote'),
-        disabled: item.level >= 6,
+        disabled: ro || item.level >= 6,
         run: () => this.actions.setLevel(pos, item.level + 1)
       }
     ]

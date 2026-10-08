@@ -18,6 +18,12 @@ export type MenuAction =
    */
   | 'file:next-tab'
   | 'file:prev-tab'
+  /**
+   * 重新打开关闭的标签（第八节 7，契约 v38，⌥⇧⌘T）。只认**有路径**的：误关的已保存文件
+   * 回来时带着光标、滚动与只读这一位；明确丢弃的无路径草稿首版不救。文件已经开着就激活它，
+   * 不再开第二个。⇧⌘T 是这类命令的通行键位，但在这份菜单里早就归了大纲
+   */
+  | 'file:reopen-closed-tab'
   | 'file:open-folder'
   // ---- P4-1 导出 HTML ----
   | 'file:export-html'
@@ -84,6 +90,11 @@ export type MenuAction =
   /** 版本历史：看这份文件历次保存留下的快照，并可整份回滚（契约 v22） */
   | 'file:history'
   | 'view:toggle-source'
+  /**
+   * 只读阅读模式（第八节 5，契约 v38，⌥⌘L）。**按标签**：态在那个标签自己的 EditorState 里
+   * （`editor/read-only.ts`），视图菜单的勾跟着活动标签走（`ViewFlags.readOnly`）
+   */
+  | 'view:toggle-read-only'
   | 'view:toggle-sidebar'
   | 'view:toggle-outline'
   | 'view:toggle-format-bar'
@@ -130,6 +141,14 @@ export type MenuAction =
    * 本来就是 macOS 上找它的地方。点一下拉一次 GitHub，结果进状态栏（契约 v27）
    */
   | 'app:check-update'
+  /**
+   * 后退 / 前进（第八节 6，契约 v38，⌥⌘← / ⌥⌘→，「前往」菜单）。记的是**明确的跳转** ——
+   * 大纲、`[TOC]`、链接与锚点、跨文件搜索的命中、快速打开、文件树、跳到行 —— 不记普通滚动
+   * 与切标签。⌘[ / ⌘] 没拿来用：那两个键落进 CodeMirror 是缩进 / 反缩进（判断 1 那条
+   * 「菜单里没有就落回编辑器」），占了就等于悄悄拿走一个现成的编辑键
+   */
+  | 'go:back'
+  | 'go:forward'
   // ---- P3-2 跨文件搜索 ----
   | 'edit:find-in-files'
   // ---- P2-1 格式化命令（见 fmt.ts）----
@@ -183,6 +202,16 @@ export interface ViewFlags {
   /** 契约 v29（0.3.0 T4）：自定义皮肤**停着**（勾上 = 停用）。与上面几条一样，
    *  真相在渲染层，壳只负责把那个勾画出来 */
   customOff: boolean
+  /** 契约 v38（第八节 5）：**活动标签**是不是只读。按标签的态，勾跟着切标签走 */
+  readOnly: boolean
+  /**
+   * 契约 v38（第八节 6 / 7）：三条命令此刻**有没有事可做**。不是勾，是菜单项的亮灭 ——
+   * 没有可后退的位置时「后退」灰着，比按下去什么都不发生诚实。同样是渲染层说了算
+   * （导航记录与关闭栈都在渲染层），壳只负责照着亮灭（`validateMenuItem`）
+   */
+  canBack: boolean
+  canForward: boolean
+  canReopen: boolean
 }
 
 /**

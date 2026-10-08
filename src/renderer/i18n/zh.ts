@@ -36,6 +36,9 @@ const zh = {
   'status.preview': '预览',
   'status.detailTitle': '点击查看详细统计',
   'status.zoomTitle': '正文缩放（点一下回到 100%）',
+  // 第八节 5 只读阅读模式
+  'status.ro': '只读',
+  'status.roTitle': '只读阅读模式（点一下退出，⌥⌘L）',
 
   // ---------- 标题栏按钮（main.ts）----------
   'tb.sidebar': '显示/隐藏文件树',
@@ -53,6 +56,10 @@ const zh = {
   'tab.closeOthers': '关闭其他标签',
   'tab.closeRight': '关闭右边的标签',
   'tab.closeAll': '关闭所有标签',
+  'tab.readOnly': '只读',
+  'tab.roOn': '设为只读',
+  'tab.roOff': '取消只读',
+  'tab.reopen': '重新打开关闭的标签',
 
   // ---------- 文件树（sidebar.ts）----------
   'sb.newFile': '新建文件',
@@ -187,6 +194,7 @@ const zh = {
   'cmd.save': '保存',
   'cmd.saveAs': '另存为…',
   'cmd.closeTab': '关闭标签',
+  'cmd.reopenTab': '重新打开关闭的标签',
   'cmd.nextTab': '下一个标签',
   'cmd.prevTab': '上一个标签',
   'cmd.history': '版本历史…',
@@ -210,6 +218,9 @@ const zh = {
   'cmd.focus': '专注模式',
   'cmd.typewriter': '打字机模式',
   'cmd.toggleFold': '折叠 / 展开',
+  'cmd.readOnly': '只读模式',
+  'cmd.navBack': '后退',
+  'cmd.navForward': '前进',
   // 0.4.1 正文缩放。名字里点明「正文」—— 这三条不再动窗口与两侧面板
   'cmd.zoomIn': '放大正文',
   'cmd.zoomOut': '缩小正文',
@@ -340,6 +351,13 @@ const zh = {
   'note.exportedPng': '长图已导出「{name}」（{w}×{h}）',
   'note.pngClipped': '文档太长：「{name}」只出了前 {h} 像素',
   'note.rolledBack': '已回到这个版本（⌘Z 可撤回）',
+  'ro.on': '只读：渲染效果固定，选择、复制、查找与跳转照常',
+  'ro.off': '已退出只读，可以编辑了',
+  'ro.blocked': '只读模式下不能修改这份文档',
+  'ro.exit': '退出只读',
+  'nav.noBack': '没有可以后退的位置',
+  'nav.noForward': '没有可以前进的位置',
+  'note.reopenNone': '没有可以重新打开的标签',
   'note.cellMultiline': '表格格子放不下换行：粘进来的 {n} 行已并成一行',
   'note.replaced': '已替换 {files} 个文件里的 {hits} 处',
   'note.replacedNone': '一处都没改 —— 文件可能在搜完之后变了，重搜一次再试',

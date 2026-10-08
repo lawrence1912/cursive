@@ -10,6 +10,8 @@ export interface TabItem {
   dirty: boolean
   /** 磁盘文件被外部修改且本标签有未保存改动 */
   stale?: boolean
+  /** 只读阅读模式（第八节 5）：标题前一把锁。按标签的状态，就该画在标签自己身上 */
+  readOnly?: boolean
 }
 
 /**
@@ -109,7 +111,7 @@ export class TabBar {
   render(tabs: TabItem[], activeId: number): void {
     // 连续输入时标签标题和脏标记通常没变；重建后立刻测量宽度会强制布局。
     const signature = JSON.stringify([getLang(), activeId, tabs.map((tab) =>
-      [tab.id, tab.title, tab.dirty, tab.stale === true])])
+      [tab.id, tab.title, tab.dirty, tab.stale === true, tab.readOnly === true])])
     if (signature === this.signature) return
     this.signature = signature
     const frag = document.createDocumentFragment()
@@ -122,6 +124,14 @@ export class TabBar {
         (tab.id === this.dragId ? ' is-dragging' : '')
       el.dataset['id'] = String(tab.id)
       el.title = tab.title
+
+      if (tab.readOnly) {
+        const lock = document.createElement('span')
+        lock.className = 'tab-ro'
+        lock.innerHTML = icon('lock')
+        lock.title = t('tab.readOnly')
+        el.appendChild(lock)
+      }
 
       const title = document.createElement('span')
       title.className = 'tab-title'

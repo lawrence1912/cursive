@@ -991,3 +991,24 @@ body.cursive-em-italic .cm-md-em {
   background: var(--code-bg);
   border: 1px dashed var(--border);
 }
+
+/* 第八节 5 只读阅读模式：`.cm-ro` 挂在编辑器根上（editor/read-only.ts）。
+   编辑才用的东西一律收起 —— 改尺寸的拖角、表格工具栏与行列把手（只读时 widget 本来就不建，
+   这里兜底）、查找面板里展开替换的三角和整条替换行。复选框照样画勾，只是不再像能点的样子。
+   挂在 CSS 上而不是逐个 widget 判断：切只读是一次 reconfigure，这一层当场就跟上，不等重画 */
+.cm-ro .cm-lp-img-handle,
+.cm-ro .cm-lp-tbl-bar,
+.cm-ro .cm-lp-tbl-handles,
+.cm-ro .cs-fold,
+.cm-ro .cs-replace {
+  display: none !important;
+}
+.cm-ro .cm-lp-checkbox {
+  cursor: default;
+}
+.cm-ro .cm-lp-checkbox:hover {
+  border-color: var(--muted);
+}
+.cm-ro .cm-lp-checkbox:checked:hover {
+  border-color: var(--accent);
+}

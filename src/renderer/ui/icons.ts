@@ -53,6 +53,8 @@ export type IconName =
   | 'moon'
   | 'sun'
   | 'column'
+  // 第八节 5 只读阅读模式：标签上那把锁、状态栏那一格
+  | 'lock'
   // 命令表补齐（P2-9）：行内 4 个 + 插入下拉 6 个（告示块复用 info，目录复用 list）
   | 'highlight'
   | 'sup'
@@ -185,6 +187,7 @@ const PATHS: Record<IconName, string> = {
     '<path d="M2.7 13.4h9.5l1.7-4.6a.7.7 0 0 0-.7-1H4.6a.7.7 0 0 0-.7.5z"/>',
   search: '<circle cx="7.1" cy="7.1" r="4.4"/><path d="m10.5 10.5 2.9 2.9"/>',
   'arrow-left': '<path d="M13.2 8H3.4M7.6 3.8 3.4 8l4.2 4.2"/>',
+  lock: '<rect x="3.4" y="7" width="9.2" height="6.4" rx="1.6"/><path d="M5.4 7V5.2a2.6 2.6 0 0 1 5.2 0V7"/>',
   pencil:
     '<path d="M11.2 2.6a1.7 1.7 0 0 1 2.4 2.4L5.4 13.2l-3.2.8.8-3.2z"/>' +
     '<path d="m10.1 3.7 2.4 2.4"/>',

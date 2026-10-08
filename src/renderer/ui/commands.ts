@@ -73,6 +73,7 @@ const GENERAL: Entry[] = [
   { action: 'file:save', labelKey: 'cmd.save', hint: '⌘S' },
   { action: 'file:save-as', labelKey: 'cmd.saveAs', hint: '⇧⌘S' },
   { action: 'file:close-tab', labelKey: 'cmd.closeTab', hint: '⌘W' },
+  { action: 'file:reopen-closed-tab', labelKey: 'cmd.reopenTab', hint: '⌥⇧⌘T' },
   { action: 'file:next-tab', labelKey: 'cmd.nextTab', hint: '⌃⇥' },
   { action: 'file:prev-tab', labelKey: 'cmd.prevTab', hint: '⌃⇧⇥' },
   { action: 'file:history', labelKey: 'cmd.history' },
@@ -95,6 +96,7 @@ const GENERAL: Entry[] = [
   { action: 'view:toggle-outline', labelKey: 'cmd.outline', hint: '⇧⌘T' },
   { action: 'view:toggle-format-bar', labelKey: 'cmd.formatBar' },
   { action: 'view:toggle-source', labelKey: 'cmd.source', hint: '⌘/' },
+  { action: 'view:toggle-read-only', labelKey: 'cmd.readOnly', hint: '⌥⌘L' },
   { action: 'view:toggle-focus', labelKey: 'cmd.focus', hint: '⌥⌘F' },
   { action: 'view:toggle-typewriter', labelKey: 'cmd.typewriter', hint: '⌥⌘T' },
   { action: 'view:toggle-fold', labelKey: 'cmd.toggleFold', hint: '⌥⌘[' },
@@ -104,7 +106,11 @@ const GENERAL: Entry[] = [
   { action: 'view:toggle-dark', labelKey: 'cmd.toggleDark', hint: '⌃⌘D' },
   { action: 'view:disable-custom-theme', labelKey: 'cmd.customOff' },
   { action: 'app:preferences', labelKey: 'cmd.prefs', hint: '⌘,' },
-  { action: 'app:check-update', labelKey: 'cmd.checkUpdate' }
+  { action: 'app:check-update', labelKey: 'cmd.checkUpdate' },
+
+  // 「前往」菜单（第八节 6）
+  { action: 'go:back', labelKey: 'cmd.navBack', hint: '⌥⌘←' },
+  { action: 'go:forward', labelKey: 'cmd.navForward', hint: '⌥⌘→' }
 ]
 
 /** 主题四态：名字借设置面板那份，右边一列标「主题」当分类 */

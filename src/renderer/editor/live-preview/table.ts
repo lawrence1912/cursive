@@ -256,6 +256,9 @@ export function tableAtCursor(state: EditorState): number | null {
  */
 export function adoptTableAtCursor(state: EditorState): EditorState {
   if (state.field(tableEditField, false) === undefined) return state // 源代码模式：没这个字段
+  // 只读（第八节 5）不进编辑态：表格本来就以渲染态出现（reveal 钉住了），进编辑态反而会把
+  // 光标那一格翻成源码、把格子变成可编辑的孤岛
+  if (state.readOnly) return state
   const at = tableAtCursor(state)
   return at == null ? state : state.update({ effects: setTableEdit.of(at) }).state
 }
@@ -976,13 +979,19 @@ export class TableWidget extends WidgetType {
   constructor(
     readonly data: TableData,
     readonly editing: boolean,
-    readonly active: ActiveCell | null
+    readonly active: ActiveCell | null,
+    /**
+     * 只读（第八节 5）：格子不开 contenteditable、不挂工具栏与把手。**要进身份**（`eq`）——
+     * 切只读是一次 reconfigure，文档一个字没变，不进身份的话 CM 照旧复用那份可编辑的 DOM
+     */
+    readonly readOnly = false
   ) {
     super()
   }
 
   eq(other: TableWidget): boolean {
     return (
+      other.readOnly === this.readOnly &&
       other.editing === this.editing &&
       sameCell(other.active, this.active) &&
       JSON.stringify(other.data) === JSON.stringify(this.data)
@@ -1051,9 +1060,15 @@ export class TableWidget extends WidgetType {
     const scroll = document.createElement('div')
     scroll.className = 'cm-lp-tablescroll'
     const table = document.createElement('table')
-    buildRows(table, this.data, (r, c) => this.richAt(r, c))
+    buildRows(table, this.data, (r, c) => this.richAt(r, c), !this.readOnly)
     scroll.appendChild(table)
-    wrap.append(scroll, buildHandles(view), buildToolbar(view))
+    // 只读：只留表本身。⌘+点击格里的链接照样要接（wire 里那一支），所以 wire 还是挂上
+    if (this.readOnly) {
+      wrap.dataset['ro'] = '1'
+      wrap.append(scroll)
+    } else {
+      wrap.append(scroll, buildHandles(view), buildToolbar(view))
+    }
     this.paintChrome(wrap)
     wire(wrap, view)
 
@@ -1097,6 +1112,8 @@ export class TableWidget extends WidgetType {
 
   updateDOM(dom: HTMLElement, view: EditorView): boolean {
     const doc = dom.ownerDocument
+    // 只读与否是这份 DOM 的形状（格子可不可编辑、有没有工具栏），对不上就别复用
+    if ((dom.dataset['ro'] === '1') !== this.readOnly) return false
     // 别把正在编辑的那份 DOM 抢走：CM 找不到 eq 的 widget 时，会拿所有同类 widget 的 DOM
     // 挨个试 updateDOM，谁先返回 true 谁拿走
     if (!this.editing && dom.contains(doc.activeElement)) return false
@@ -1107,7 +1124,7 @@ export class TableWidget extends WidgetType {
     let rewroteActive = false
     if (table.rows.length !== this.data.rows.length + 1 || table.rows[0]?.cells.length !== cols) {
       // 行列数变了（加行/删行/改结构）→ 整个表体重建，焦点随后由 active 补回来
-      buildRows(table, this.data, (r, c) => this.richAt(r, c))
+      buildRows(table, this.data, (r, c) => this.richAt(r, c), !this.readOnly)
       rewroteActive = true
       hideHandles(dom)
     } else {
@@ -1146,13 +1163,14 @@ export class TableWidget extends WidgetType {
 function buildRows(
   table: HTMLTableElement,
   data: TableData,
-  rich: (row: number, col: number) => CellToken[] | null
+  rich: (row: number, col: number) => CellToken[] | null,
+  edit = true
 ): void {
   table.replaceChildren()
   const head = table.createTHead().insertRow()
   data.header.forEach((cell, i) => {
     const th = document.createElement('th')
-    editable(th)
+    if (edit) editable(th)
     fillCell(th, cell, data.aligns[i] ?? 'left', rich(0, i))
     head.appendChild(th)
   })
@@ -1161,7 +1179,7 @@ function buildRows(
     const tr = body.insertRow()
     data.header.forEach((_, i) => {
       const td = tr.insertCell()
-      editable(td)
+      if (edit) editable(td)
       fillCell(td, row[i] ?? '', data.aligns[i] ?? 'left', rich(r + 1, i))
     })
   })
@@ -1489,6 +1507,7 @@ function hideHandles(dom: HTMLElement): void {
 
 function wire(wrap: HTMLElement, view: EditorView): void {
   const enter = (cell: HTMLTableCellElement, offset: number): void => {
+    if (view.state.readOnly) return
     const tf = tableFromDOM(view, cell)
     if (tf < 0) return
     const pos = cellPos(view.state, tf, rowOf(cell), cell.cellIndex)
@@ -1499,6 +1518,7 @@ function wire(wrap: HTMLElement, view: EditorView): void {
   }
 
   const flush = (cell: HTMLTableCellElement): void => {
+    if (view.state.readOnly) return
     const tf = tableFromDOM(view, cell)
     if (tf < 0) return
     const spec = writeCell(

@@ -6,6 +6,7 @@ import { destLiteral } from './link'
 import { docDir } from './live-preview'
 import { t } from '../i18n'
 import { note } from '../ui/note'
+import { readOnlyHost } from './read-only'
 
 /**
  * P2-4 智能粘贴。
@@ -120,6 +121,13 @@ async function pasteClipboardImage(view: EditorView): Promise<void> {
 export function smartPaste(): Extension {
   return EditorView.domEventHandlers({
     paste(event, view) {
+      // 只读（第八节 5）先挡在最前面：下面那条截图路会**先让壳把图写进 assets/** 再插链接 ——
+      // 链接插不进只读文档，盘上却平白多出一张图。CM 自己的粘贴也认只读，但它排在这一个后面
+      if (view.state.readOnly) {
+        event.preventDefault()
+        readOnlyHost.blocked?.()
+        return true
+      }
       const dt = event.clipboardData
       if (!dt) return false
       // 剪贴板里是图片（截图）→ 落盘插链接（判断 3：数据由壳从 NSPasteboard 取）

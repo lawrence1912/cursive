@@ -113,7 +113,7 @@ StateField 装一个 Set，key 用**块起点**，跟着 `changes.mapPos(…, Ma
    **基线（0.2.x 实测，折叠落地后未退化）**：一次按键 1.07 万行 **6.3ms** / 3.2 万行 **6.5ms**，
    其中块级装饰重建 0.11ms、全文 `ensureSyntaxTree` 0（快照够长就不做），剩下 6ms 是 CM 自己的增量解析；
    挪一次光标 0.0ms；大纲取数 7.8 / 25.6ms；首开第一次 `buildBlocks` 41 / 50ms。
-4. **契约三处同步** —— `types.ts` ↔ `main.swift` ↔ `CONTEXT.md`（当前 **v37**）。
+4. **契约三处同步** —— `types.ts` ↔ `main.swift` ↔ `CONTEXT.md`（当前 **v38**）。
    壳侧发现契约缺口，**先补文档再动代码**。
 5. **E2E 跟进** —— 每个新功能在 `release.sh` 里加一个 `run_case` 或一条断言。
 6. **壳与引擎的边界** —— `src/renderer` 只认 `window.api`，不碰任何原生能力。

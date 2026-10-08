@@ -22,6 +22,11 @@ export interface SessionTab {
   scroll: number
   /** 光标偏移 */
   cursor: number
+  /**
+   * 只读阅读模式（第八节 5）。**只在为真时写**：老会话里没有这一项，读出来就是「可编辑」，
+   * 版本号因此不用动（`SESSION_VERSION` 一变，所有人上次的标签就全丢了）
+   */
+  readOnly?: true
 }
 
 export interface Session {
@@ -54,7 +59,14 @@ export function parseSession(raw: string | null): Session | null {
       if (!t || typeof t !== 'object') continue
       const path = (t as SessionTab).path
       if (typeof path !== 'string' || !path) continue
-      tabs.push({ path, scroll: safeNum((t as SessionTab).scroll), cursor: safeNum((t as SessionTab).cursor) })
+      tabs.push({
+        path,
+        scroll: safeNum((t as SessionTab).scroll),
+        cursor: safeNum((t as SessionTab).cursor),
+        // 只认严格的 true：手改成 "yes"、1 之类的一律当可编辑 —— 认错了的代价是一份文档
+        // 莫名其妙打不了字，而当成可编辑最坏也就是少了一把锁
+        ...((t as SessionTab).readOnly === true ? { readOnly: true as const } : {})
+      })
     }
     if (!tabs.length) return null
     const active = typeof parsed.active === 'number' && parsed.active >= 0 && parsed.active < tabs.length

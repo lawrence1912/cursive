@@ -399,7 +399,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       if (revealed) return
       const checked = doc.sliceString(node.from, node.to).toLowerCase().includes('x')
       out.push(
-        Decoration.replace({ widget: new CheckboxWidget(checked) }).range(node.from, node.to)
+        Decoration.replace({ widget: new CheckboxWidget(checked, ctx.state.readOnly) }).range(node.from, node.to)
       )
       return false
     }

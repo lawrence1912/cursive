@@ -3,15 +3,43 @@ import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate
 
 const navigate = StateEffect.define<number>()
 
+/**
+ * 第八节 6：**每一次 `jumpTo` 都是一次明确的跳转** —— 大纲、`[TOC]`、锚点链接、跳到行
+ * 全走这儿，于是后退 / 前进只要在这一处挂一个钩子（main.ts 记位置）。不挂（单测、
+ * 别的 view）就只跳。跨文档的那几条（开标签再跳）由窗口那一层自己包住整趟，
+ * 里面这一下 jumpTo 不重复记 —— 那是钩子自己的事（main.ts 的 `navDepth`）。
+ */
+export const jumpHost: { around: ((view: EditorView, run: () => void) => void) | null } = {
+  around: null
+}
+
 /** 保留文档位置而非像素位置，让晚到的图片/图表也服从这次导航。 */
 export function jumpTo(view: EditorView, pos: number): void {
+  const run = (): void =>
+    view.dispatch({
+      selection: { anchor: pos },
+      effects: [
+        navigate.of(pos),
+        flashAt.of(pos),
+        EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })
+      ]
+    })
+  if (jumpHost.around) jumpHost.around(view, run)
+  else run()
+}
+
+/**
+ * 后退 / 前进回到一个记下来的位置（第八节 6）：光标放回 `pos`，**视口顶上那一行**摆回
+ * `top` —— 「刚才读到哪儿」靠的是后者，光标可能早就停在别处了。与 `jumpTo` 同一套
+ * 稳定导航（晚到的图片、公式不会把它推走），但**不闪落点**：这不是「去一个新地方」，
+ * 是回到人刚刚自己待过的地方，那一行不需要再指给他看。
+ */
+export function revisit(view: EditorView, pos: number, top: number): void {
   view.dispatch({
     selection: { anchor: pos },
-    effects: [
-      navigate.of(pos),
-      flashAt.of(pos),
-      EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 })
-    ]
+    // 边距与 jumpTo 同为 12：稳定导航（下面 `stableNavigation`）事后对齐时用的就是这个数，
+    // 两边不一致的话图片晚到那一下会把视口挪动 12px
+    effects: [navigate.of(top), EditorView.scrollIntoView(top, { y: 'start', yMargin: 12 })]
   })
 }
 

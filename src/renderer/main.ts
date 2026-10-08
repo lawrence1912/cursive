@@ -43,7 +43,9 @@ import {
 import { cursiveMarkdown } from './editor/markdown-lang'
 import { warmLazyModules } from './editor/warmup'
 import { anchorPos, destLiteral, linkHost } from './editor/link'
-import { jumpTo } from './editor/navigation'
+import { jumpHost, jumpTo, revisit } from './editor/navigation'
+import { readOnlyConf, readOnlyExt, readOnlyHost } from './editor/read-only'
+import { setTableEdit } from './editor/live-preview/table'
 import { writingModes } from './editor/writing-modes'
 import { applyFormat, formatStateAt } from './editor/fmt'
 import { latexFormatSpec } from './editor/latex-format'
@@ -70,6 +72,8 @@ import { isStaleWrite, readFailKind, readFailPath, readFailSticky } from './ui/r
 import { newSaveStatus, SAVING_AFTER, saveLabel, type SaveStatus } from './ui/save-state'
 import { reorderIds, TabBar } from './ui/tabbar'
 import { checkForUpdate } from './ui/update'
+import { ClosedTabs } from './ui/closed-tabs'
+import { NavHistory, type NavDoc, type NavSpot } from './ui/nav-history'
 import { Zoom } from './ui/zoom'
 import { toggleFoldAt } from './editor/fold'
 import { tagHost } from './editor/frontmatter'
@@ -130,9 +134,25 @@ let docEdits = 0
  */
 let activations = 0
 
+/**
+ * 第八节 6 后退 / 前进的那串记录、第八节 7 最近关掉的那几个标签。都只在内存里，一个窗口一份。
+ * **排在 updateListener 之前**：改文档时要把记录里的位置跟着挪（下面那句 `nav.map`），
+ * 模块级 const 在声明之前被碰到就是 TDZ（会话恢复那段踩过同一类坑）
+ */
+const nav = new NavHistory()
+const closedTabs = new ClosedTabs()
+/**
+ * 三条命令此刻亮不亮（契约 v38 的 `canBack` / `canForward` / `canReopen`）。单独存一份、
+ * 由 `refreshNav()` 算，而不是在 `syncViewFlags` 里现算：那个函数启动时就会被调到
+ * （`syncTitlebar`），比标签表的声明还早，现算就得去碰还没初始化的 `tabs`
+ */
+const navFlags = { canBack: false, canForward: false, canReopen: false }
+
 const listener = EditorView.updateListener.of((u) => {
   if (u.docChanged) {
     docEdits += 1
+    // 后退 / 前进记下的位置跟着改动挪（第八节 6）：在落点前面插一段字，回来时不该差那一段
+    if (viewTabId !== null) nav.map(viewTabId, u.changes)
     syncStatus()
     scheduleCount()
     scheduleAutosave()
@@ -236,10 +256,14 @@ elZoom.addEventListener('keydown', (e) => {
 })
 
 const sidebar = new Sidebar({
-  openFile: (path) => void openPath(path),
+  // 文件树点开一个文件是一次明确的跳转（第八节 6），记下来后退得回来
+  openFile: (path) => void navigation(() => openPath(path)),
   // 文件进了废纸篓：它开着的标签也得关掉，否则标签指着一个不存在的文件
   trashed: (path, trashed) => {
     for (const tab of tabs.filter((x) => x.path === path)) void closeTab(tab.id, true)
+    // 关着的那份也别再「重新打开」它（第八节 7）：回来的只会是一句「找不到文件」
+    closedTabs.forget(path)
+    refreshNav()
     // 0.2.x：删除是这个应用里唯一「点一下就没了」的动作，而它此前唯一的反悔路径
     // 是自己去废纸篓里翻。状态栏给一条 8 秒的回执，带一颗撤销（契约 v25）
     note(t('note.trashed', { name: basename(path) }), {
@@ -251,7 +275,7 @@ const sidebar = new Sidebar({
   // P3-1 收尾：重命名 / 拖走之后路径变了。开着的标签要跟着改，否则下一次保存
   // 会按旧路径写回去 —— 等于凭空复活一个已经不在那儿的文件
   moved: (from, to) => retargetTabs(from, to),
-  openHit: (hit) => void openHit(hit),
+  openHit: (hit) => void navigation(() => openHit(hit)),
   replaceInFiles: (targets, replacement) => replaceInFiles(targets, replacement),
   pickFolder: () => openFolder()
 })
@@ -339,6 +363,8 @@ function syncFormatBar(): void {
       ? FORMAT_BAR_COLLAPSED_SPACE
       : FORMAT_BAR_SPACE
   if (formatBar.visible) formatBar.setState(formatStateAt(view.state))
+  // 只读（第八节 5）：按钮置灰。收着、关着也照样设 —— 理由同上面那条「收起时也照算高亮」
+  formatBar.setReadOnly(view.state.readOnly)
 }
 
 /** 当前文档的标题表：updateOutline 重建，滚动跟随与大纲的几个命令都读它 */
@@ -373,7 +399,9 @@ const outline = new Outline({
     const i = headings.findIndex((x) => x.pos === pos)
     // 锚点按全文算重名后缀，所以整份一起算再取第 i 个
     if (i >= 0) window.api.writeClipboardText(`#${slugs(headings)[i]}`)
-  }
+  },
+  // 只读（第八节 5）：右键里改文档的三条置灰、拖拽重排不起手
+  readOnly: () => view.state.readOnly
 })
 document.getElementById('main')!.appendChild(outline.el)
 outline.el.classList.toggle('is-hidden', localStorage.getItem('cursive.outlineVisible') === '0')
@@ -528,7 +556,10 @@ function syncViewFlags(): void {
     source: sourceMode,
     focus: writingNow.focus,
     typewriter: writingNow.typewriter,
-    customOff: prefs.values.customOff
+    customOff: prefs.values.customOff,
+    // 契约 v38：活动标签的只读（按标签的态，勾跟着切标签走）与三条导航命令亮不亮
+    readOnly: view.state.readOnly,
+    ...navFlags
   })
 }
 
@@ -782,6 +813,9 @@ function activate(id: number): void {
   sourceMode = tab.sourceMode
   view.setState(tab.state)
   viewTabId = tab.id
+  // 换了一份文档，后退 / 前进亮不亮跟着变（人自己切的标签不记，见 ui/nav-history.ts）；
+  // 只算不发 —— 下面那句 syncMode() 会把整份视图标志一起推给壳
+  computeNavFlags()
   requestAnimationFrame(() => {
     view.scrollDOM.scrollTop = tab.scroll
   })
@@ -821,15 +855,29 @@ async function closeTab(id: number, discard = false): Promise<boolean> {
     if (choice === 'save' && !(await writeTab(t))) return false
   }
 
+  // 第八节 7：有路径的记进关闭栈，带着光标、滚动与只读（进了废纸篓的那条是 `discard`，
+  // 文件已经不在了，不记）。第八节 6：无路径的草稿关掉就再也回不去，导航记录里落在它
+  // 身上的那几格一并删掉
+  if (t.path && !discard) {
+    closedTabs.push({
+      path: t.path,
+      cursor: t.state.selection.main.head,
+      scroll: t.id === viewTabId ? view.scrollDOM.scrollTop : t.scroll,
+      readOnly: t.state.readOnly
+    })
+  } else if (!t.path) nav.forgetTab(t.id)
+
   const idx = tabs.findIndex((x) => x.id === id)
   tabs = tabs.filter((x) => x.id !== id)
   if (tabs.length === 0) {
     newUntitledTab()
+    refreshNav()
     return true
   }
   if (id === activeId) activate(tabs[Math.min(idx, tabs.length - 1)]!.id)
   else syncStatus(true)
   scheduleSession() // 关掉的那个不该在下次启动时又冒出来
+  refreshNav()
   return true
 }
 
@@ -891,7 +939,15 @@ function openTabMenu(id: number, e: MouseEvent): void {
       disabled: idx === tabs.length - 1,
       run: () => void closeTabs(id, 'right')
     },
-    { label: t('tab.closeAll'), run: () => void closeTabs(id, 'all') }
+    { label: t('tab.closeAll'), run: () => void closeTabs(id, 'all') },
+    // 第八节 5：只读按标签，右键的就是这个标签 —— 不必先切过去
+    {
+      label: t(tabReadOnly(tabs[idx]!) ? 'tab.roOff' : 'tab.roOn'),
+      separated: true,
+      run: () => setReadOnly(id, !tabReadOnly(tabs.find((x) => x.id === id)!))
+    },
+    // 第八节 7：与浏览器同一个位置
+    { label: t('tab.reopen'), disabled: closedTabs.size === 0, run: () => void reopenClosedTab() }
   ]
   tabbar.markContext(id)
   openMenu(e.clientX, e.clientY, items, {
@@ -926,6 +982,7 @@ function syncStatus(force = false): void {
       title: tabTitle(x),
       dirty: isTabDirty(x),
       stale: x.stale === true,
+      readOnly: tabReadOnly(x),
       path: x.path
     })),
     activeId
@@ -1050,7 +1107,226 @@ function syncMode(): void {
   })
   view.dom.classList.toggle('cursive-source', sourceMode)
   elMode.textContent = sourceMode ? t('status.source') : t('status.preview')
+  syncReadOnlyChip()
   syncViewFlags()
+}
+
+// ---------- 第八节 5：只读阅读模式（按标签）----------
+
+/** 状态栏那一格：只读时一把锁 +「只读」，点一下退出；不只读时为空（`:empty` 不露面） */
+const elRo = document.getElementById('status-ro')!
+
+function syncReadOnlyChip(): void {
+  const on = view.state.readOnly
+  // 空就是空：留一个空格都会让 `:empty` 失效，白占一格（同缩放那格）
+  elRo.innerHTML = on ? `${icon('lock')}<span>${t('status.ro')}</span>` : ''
+}
+
+elRo.addEventListener('mousedown', (e) => e.preventDefault())
+elRo.addEventListener('click', () => setReadOnly(activeId, false))
+elRo.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    setReadOnly(activeId, false)
+  }
+})
+
+/** 这个标签是不是只读。态在它自己的 state 里；视图里装着它时以视图为准（见 `viewTabId`） */
+function tabReadOnly(t: Tab): boolean {
+  return (t.id === viewTabId ? view.state : t.state).readOnly
+}
+
+/**
+ * 切一个标签的只读。视图里装着它就对视图 reconfigure，否则改它冻结的那份 state ——
+ * 右键一个后台标签「设为只读」不必先切过去。
+ *
+ * 表格的就地编辑态一并退出：只读时格子不再是可编辑的孤岛（`TableWidget` 的 `readOnly`），
+ * 留着编辑态会把光标那一格摆成源码。
+ */
+function setReadOnly(id: number, on: boolean): void {
+  const tab = tabs.find((x) => x.id === id)
+  if (!tab || tabReadOnly(tab) === on) return
+  const spec = {
+    effects: [readOnlyConf.reconfigure(readOnlyExt(on)), ...(on ? [setTableEdit.of(null)] : [])]
+  }
+  if (tab.id === viewTabId) {
+    view.dispatch(spec)
+    syncReadOnlyChip()
+    syncFormatBar()
+    syncViewFlags()
+    focusKeepScroll(view)
+  } else {
+    tab.state = tab.state.update(spec).state
+  }
+  syncStatus(true)
+  scheduleSession()
+  note(t(on ? 'ro.on' : 'ro.off'))
+}
+
+/**
+ * 编辑被只读挡下的那一下（`editor/read-only.ts` 的闸）：说一句 + 一颗「退出只读」。
+ * 连着按十个键只说一次 —— 同一句话刷十遍是噪音。挪到下一拍再说：闸是在事务**构造**
+ * 期间调过来的，那会儿碰 DOM 不要紧，但别在那一刻做任何可能回头派事务的事
+ */
+let roNotedAt = 0
+readOnlyHost.blocked = () => {
+  const now = Date.now()
+  if (now - roNotedAt < 2500) return
+  roNotedAt = now
+  setTimeout(() => {
+    note(t('ro.blocked'), { action: { label: t('ro.exit'), run: () => setReadOnly(activeId, false) } })
+  }, 0)
+}
+
+// ---------- 第八节 6：后退 / 前进 ----------
+
+/**
+ * 此刻在哪儿：哪个标签、光标、视口顶上那一行。顶上那一行按**文档位置**记
+ * （`lineBlockAtHeight`，扣掉正文上边距）—— 像素会被晚到的图片推走，文档位置不会
+ */
+function here(): NavSpot {
+  const top = view.lineBlockAtHeight(Math.max(0, view.scrollDOM.scrollTop - view.documentPadding.top)).from
+  return { tabId: activeId, path: docPath, pos: view.state.selection.main.head, top }
+}
+
+/** 三条命令此刻亮不亮。只算不发，变了返回 true（`activate` 里只算 —— 那边随后整份推给壳） */
+function computeNavFlags(): boolean {
+  const doc: NavDoc = { tabId: activeId, path: docPath }
+  const next = {
+    canBack: nav.canBack(doc),
+    canForward: nav.canForward(doc),
+    canReopen: closedTabs.size > 0
+  }
+  const changed =
+    next.canBack !== navFlags.canBack ||
+    next.canForward !== navFlags.canForward ||
+    next.canReopen !== navFlags.canReopen
+  Object.assign(navFlags, next)
+  return changed
+}
+
+function refreshNav(): void {
+  if (computeNavFlags()) syncViewFlags()
+}
+
+/**
+ * 正在记的那一趟跳转有几层。跨文档的那几条（开标签再跳到锚点）**由最外层整趟记一格**：
+ * 从这一份的此刻，到那一份的落点 —— 里面那一下 jumpTo 不另记（否则后退一步只退到
+ * 「刚打开那份文档的文首」）。
+ */
+let navDepth = 0
+
+/** 落点那一格：视口顶上就摆光标那一行（跳转都是把目标摆到顶上，见 `jumpTo`） */
+function landing(): NavSpot {
+  const spot = here()
+  return { ...spot, top: spot.pos }
+}
+
+/** 一次明确的跳转（异步那几条：开文件、搜索命中、链接、快速打开） */
+async function navigation(run: () => void | Promise<void>): Promise<void> {
+  if (navDepth > 0) {
+    await run()
+    return
+  }
+  const from = here()
+  navDepth += 1
+  try {
+    await run()
+  } finally {
+    navDepth -= 1
+  }
+  nav.record(from, landing())
+  refreshNav()
+}
+
+// 文档里的跳转（大纲、[TOC]、锚点链接、跳到行）全走 jumpTo，在那儿挂这一个钩子
+jumpHost.around = (v, run) => {
+  if (v !== view || navDepth > 0) {
+    run()
+    return
+  }
+  const from = here()
+  run()
+  nav.record(from, landing())
+  refreshNav()
+}
+
+async function goBack(): Promise<void> {
+  const spot = nav.back(here())
+  if (!spot) note(t('nav.noBack'))
+  else await travel(spot)
+  refreshNav()
+}
+
+async function goForward(): Promise<void> {
+  const spot = nav.forward(here())
+  if (!spot) note(t('nav.noForward'))
+  else await travel(spot)
+  refreshNav()
+}
+
+/**
+ * 回到记下来的一个位置。标签还开着就切过去；关了但有路径就重新打开（与文件树同一条路）；
+ * 无路径的草稿关了的那几格早被 `forgetTab` 删掉了，这里不会遇到。
+ *
+ * **换了标签就晚一帧再摆位置**：`activate` 会在下一帧把视图滚回那个标签自己记着的
+ * 滚动位置，同一帧里先摆的会被它盖掉
+ */
+async function travel(spot: NavSpot): Promise<void> {
+  let tab = tabs.find((x) => x.id === spot.tabId) ?? (spot.path ? tabs.find((x) => x.path === spot.path) : undefined)
+  if (!tab && spot.path) {
+    let doc: DocPayload
+    try {
+      doc = await window.api.read(spot.path)
+    } catch (e) {
+      openFailed(spot.path, e, () => void travel(spot))
+      return
+    }
+    tab = openTab(doc.content, doc.path, doc.fingerprint)
+  }
+  if (!tab) return
+  const switched = tab.id !== activeId
+  if (switched) activate(tab.id)
+  const place = (): void => {
+    const len = view.state.doc.length
+    revisit(view, Math.min(spot.pos, len), Math.min(spot.top, len))
+    view.focus()
+  }
+  if (switched) requestAnimationFrame(place)
+  else place()
+}
+
+// ---------- 第八节 7：重新打开关闭的标签 ----------
+
+/**
+ * 弹最近关掉的那一个，按路径重新读盘，带着光标、滚动与只读回来。读不到（删了、搬走了）
+ * 就说为什么、给下一步（与文件树点开一个打不开的文件同一句话），这一格不再留着。
+ * 已经开着的不会在栈里（`openTab` 一开就 `forget`），所以不会开出第二份。
+ */
+async function reopenClosedTab(): Promise<void> {
+  const entry = closedTabs.pop()
+  refreshNav()
+  if (!entry) {
+    note(t('note.reopenNone'))
+    return
+  }
+  const open = tabs.find((x) => x.path === entry.path)
+  if (open) {
+    activate(open.id)
+    return
+  }
+  let doc: DocPayload
+  try {
+    doc = await window.api.read(entry.path)
+  } catch (e) {
+    openFailed(entry.path, e)
+    return
+  }
+  openTab(doc.content, doc.path, doc.fingerprint, {
+    cursor: entry.cursor,
+    scroll: entry.scroll,
+    readOnly: entry.readOnly
+  })
 }
 
 // ---------- 文档生命周期 ----------
@@ -1059,7 +1335,13 @@ function syncMode(): void {
 /** 预热计时器：切标签切得快时只留最后那一份 */
 let warmTimer: number | undefined
 
-function openTab(content: string, path: string | null, fp: FileFingerprint): Tab {
+function openTab(
+  content: string,
+  path: string | null,
+  fp: FileFingerprint,
+  /** 重新打开关闭的标签（第八节 7）带回来的位置与只读；别的路都不传 */
+  back: { cursor?: number; scroll?: number; readOnly?: boolean } = {}
+): Tab {
   // 文档进编辑器**之前**把落盘的 widget 高度捞进内存：CM 先查 `estimatedHeight` 进高度表、
   // 再 `toDOM`，晚一步的话这份文档的第一个图/公式/图表照样跳一下（见 widgets.ts 那边的注释）
   primeHeights(view)
@@ -1073,14 +1355,28 @@ function openTab(content: string, path: string | null, fp: FileFingerprint): Tab
     return existing
   }
   const tab = spawnTab(
-    createState(content, listener, { dir: path ? dirname(path) : null, sourceMode }),
+    createState(content, listener, {
+      dir: path ? dirname(path) : null,
+      sourceMode,
+      ...(back.cursor === undefined ? {} : { cursor: back.cursor }),
+      ...(back.readOnly ? { readOnly: true } : {})
+    }),
     path,
-    fp
+    fp,
+    true,
+    back.scroll ?? 0
   )
   // **刚从盘上读进来的这一份，就是「我们以为盘上是什么」**（契约 v36 的 expect）。
   // 不在这儿记的话，第一次自动保存发不出比对依据 —— 而「打开、编辑、两秒后自动保存」
   // 正是最常走的那条路，也正是那条竞态最容易咬到的地方
-  if (path) tab.lastSeen = { text: content, fp: { ...fp } }
+  if (path) {
+    tab.lastSeen = { text: content, fp: { ...fp } }
+    // 又开着了：关闭栈里不再算它（第八节 7，不出第二份）；导航记录里按路径认的那几格
+    // 认这个新标签，之后改文档时位置才跟得上（第八节 6）
+    closedTabs.forget(path)
+    nav.rebind(path, tab.id)
+    refreshNav()
+  }
   return tab
 }
 
@@ -1089,6 +1385,10 @@ function openTab(content: string, path: string | null, fp: FileFingerprint): Tab
  * **目录也要认**：改名一个目录，它底下每个开着的文件路径都失效了，按前缀整体重写。
  */
 function retargetTabs(from: string, to: string): void {
+  // 关着的那几个与导航记录里的路径一样要跟着改（第八节 6 / 7）—— 不跟的话，
+  // 后退 / 重新打开会去一个已经不在那儿的路径上读盘
+  nav.retarget(from, to)
+  closedTabs.retarget(from, to)
   let touched = false
   for (const t of tabs) {
     if (t.path === from) t.path = to
@@ -1235,7 +1535,9 @@ async function openDocLink(path: string, slug: string | null): Promise<void> {
 }
 
 // 编辑器扩展只知道「这条链接通向一份本地文档」，开标签与报错都得回到窗口这一层来做
-linkHost.openDoc = (path, slug) => void openDocLink(path, slug)
+// 顺着链接去另一份文档是一次明确的跳转（第八节 6）。整趟包起来记：从这一份的此刻，
+// 到那一份的锚点 —— 里面那一下 jumpTo 由 `navDepth` 挡着，不另记一格
+linkHost.openDoc = (path, slug) => void navigation(() => openDocLink(path, slug))
 linkHost.note = note
 // 0.4.1：⌘+点击 front matter 里的标签 = 拿它去搜整个工作区。**不建索引**，
 // 走的就是 ⇧⌘F 那条路（见 editor/frontmatter.ts 里为什么只做到这一步）
@@ -1565,10 +1867,13 @@ function currentSession(): { tabs: SessionTab[]; active: number } {
   for (const t of tabs) {
     if (!t.path) continue // 无路径的草稿归 scratch 管，两边都记会开出两份
     if (t.id === activeId) active = out.length
+    const state = t.id === activeId ? view.state : t.state
     out.push({
       path: t.path,
       scroll: t.id === activeId ? view.scrollDOM.scrollTop : t.scroll,
-      cursor: (t.id === activeId ? view.state : t.state).selection.main.head
+      cursor: state.selection.main.head,
+      // 只读跟着会话走（第八节 5）：关掉再开，参考文档还该是锁着的
+      ...(state.readOnly ? { readOnly: true as const } : {})
     })
   }
   return { tabs: out, active }
@@ -1635,7 +1940,8 @@ async function restoreSession(): Promise<void> {
         // 光标要在**建 state 的时候**就给：建完再 update 一次的话，「光标落在表里」
         // 这件事已经错过了 adoptTableAtCursor，那张表会以管道符源码的样子开门。
         // 光标夹回文档里由 createState 做：磁盘上这份文件可能在上次之后被别的程序改短了
-        cursor: st?.cursor
+        cursor: st?.cursor,
+        readOnly: st?.readOnly === true
       }),
       doc.path,
       doc.fingerprint,
@@ -1710,6 +2016,10 @@ async function flushAutosave(): Promise<void> {
   const t = activeTab()
   if (t) await flushTabAutosave(t)
 }
+
+// 菜单是整个应用一份，勾与亮灭却是**每个窗口**各自的（侧栏开没开、活动标签只不只读、
+// 有没有可后退的）。窗口一拿到焦点就把自己那份推过去，否则菜单上挂着的是上一个窗口的状态
+window.addEventListener('focus', () => syncViewFlags())
 
 window.addEventListener('blur', () => {
   for (const t of [...tabs]) void flushTabAutosave(t)
@@ -1850,6 +2160,11 @@ let historyPanel: import('./ui/history').History | null = null
 async function openHistory(): Promise<void> {
   const { History } = await import('./ui/history')
   historyPanel ??= new History((content) => {
+    // 只读（第八节 5）：回滚是一次整份替换，落不进文档 —— 先说清楚，别接着报「已回到这个版本」
+    if (view.state.readOnly) {
+      readOnlyHost.blocked?.()
+      return
+    }
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: content },
       userEvent: 'input.restore'
@@ -1893,7 +2208,7 @@ async function openQuickOpen(): Promise<void> {
       path: true,
       labelAt: cut + 1,
       // `query` 是选中那一刻输入框里的原串：`readme:120` 的 `:120` 在这儿兑现
-      run: (query) => void openPath(path, parseGoto(query)?.line)
+      run: (query) => void navigation(() => openPath(path, parseGoto(query)?.line))
     }
   })
   palette.open(items, t('pl.filePlaceholder'), 'pl.noFile', quickOpenQuery)
@@ -1927,7 +2242,13 @@ function quickOpenQuery(raw: string): PaletteQuery {
 async function handleMenu(action: MenuAction): Promise<void> {
   switch (action) {
     case 'fmt:latex-format': {
-      if (view.composing || view.state.readOnly) break
+      // 只读（第八节 5）说一声：这条命令不经过那道 changeFilter 就先自己退了（latexFormatSpec
+      // 认 readOnly），不说的话就是「点了没反应」
+      if (view.state.readOnly) {
+        readOnlyHost.blocked?.()
+        break
+      }
+      if (view.composing) break
       const state = view.state
       const tabId = activeId
       const katex = await loadKatex()
@@ -1977,6 +2298,18 @@ async function handleMenu(action: MenuAction): Promise<void> {
     }
     case 'file:close-tab':
       await closeTab(activeId)
+      break
+    case 'file:reopen-closed-tab':
+      await reopenClosedTab()
+      break
+    case 'go:back':
+      await goBack()
+      break
+    case 'go:forward':
+      await goForward()
+      break
+    case 'view:toggle-read-only':
+      setReadOnly(activeId, !view.state.readOnly)
       break
     case 'file:next-tab':
       cycleTab(1)
@@ -2360,6 +2693,9 @@ function adoptDisk(tab: Tab, disk: DocPayload): void {
   tab.state = createState(disk.content, listener, {
     dir: dirname(disk.path),
     sourceMode: live ? sourceMode : tab.sourceMode,
+    // 换的是整份 state，只读这一位得原样带过去（第八节 5）—— 别人改了文件，
+    // 我这边的「只读」不该因此被悄悄撤掉
+    readOnly: (live ? view.state : tab.state).readOnly,
     ...(head === undefined ? {} : { cursor: head })
   })
   tab.savedDoc = tab.state.doc
@@ -2501,6 +2837,8 @@ function outlineSource(): { level: number; text: string }[] {
     },
     diagnostics: () => ({
       activeId, viewTabId,
+      navFlags: { ...navFlags },
+      closedTabs: closedTabs.size,
       tabs: tabs.map((tab) => ({
         id: tab.id, path: tab.path, dirty: isTabDirty(tab),
         save: { ...tab.save }, stale: tab.stale, conflict: !!tab.conflict,

@@ -74,6 +74,8 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.file.exportPng":  ["导出为长图…", "Export as Image…"],
     "menu.file.print":      ["打印…", "Print…"],
     "menu.file.closeTab":   ["关闭标签", "Close Tab"],
+    // 第八节 7（契约 v38）
+    "menu.file.reopenTab":  ["重新打开关闭的标签", "Reopen Closed Tab"],
     "menu.file.close":      ["关闭窗口", "Close Window"],
     // ---- 编辑 ----
     "menu.edit":            ["编辑", "Edit"],
@@ -135,6 +137,8 @@ let SHELL_TEXT: [String: [String]] = [
     "view.outline":     ["大纲", "Outline"],
     "view.formatBar":   ["格式栏", "Format Bar"],
     "view.source":      ["源代码模式", "Source Mode"],
+    // 第八节 5（契约 v38）：按标签，勾跟着活动标签走
+    "view.readOnly":    ["只读模式", "Read-Only Mode"],
     "view.focus":       ["专注模式", "Focus Mode"],
     "view.typewriter":  ["打字机模式", "Typewriter Mode"],
     "view.toggleFold": ["折叠 / 展开", "Fold / Unfold"],
@@ -151,6 +155,10 @@ let SHELL_TEXT: [String: [String]] = [
     "view.zoomIn":      ["放大正文", "Zoom In Text"],
     "view.zoomOut":     ["缩小正文", "Zoom Out Text"],
     "view.fullScreen":  ["全屏", "Full Screen"],
+    // ---- 前往（第八节 6，契约 v38）----
+    "menu.go":          ["前往", "Go"],
+    "go.back":          ["后退", "Back"],
+    "go.forward":       ["前进", "Forward"],
     // ---- 窗口 ----
     "menu.window":      ["窗口", "Window"],
     "win.minimize":     ["最小化", "Minimize"],
@@ -519,6 +527,9 @@ func findRendererRoot() -> URL {
     return exeDir.deletingLastPathComponent().appendingPathComponent("out/renderer")
 }
 
+/// 拖进窗口时当文档开的那几种后缀（其余的按图片落盘）。拖放的两头 —— 收不收、收了怎么办 —— 共用这一份
+let DROP_DOC_EXTS: Set<String> = ["md", "markdown", "mdown", "mkd"]
+
 // MARK: - 主 WebView
 // 关键：WKWebView 的 performKeyEquivalent 会把带 ⌘ 的按键吞掉转给网页进程，
 // 导致菜单快捷键（⌘\ ⌘S ⌘P ⌘W…）失灵 —— 这是「文件树隐藏不了」的真因。
@@ -526,6 +537,10 @@ func findRendererRoot() -> URL {
 final class MainWebView: WKWebView {
     /// P2-5：Finder 拖入文件（图片落盘 / .md 开新标签）。由 AppDelegate 处理。
     var dropHandler: (([URL]) -> Bool)?
+    /// 这一个文件此刻收不收（第八节 5）：活动标签只读时图片不收 —— 收了就得先把它复制进
+    /// `assets/`，而链接插不进只读文档，盘上平白多一张图。.md 照收（开新标签不改任何文档）。
+    /// 在**拖进来那一刻**就判：光标当场显示「不可放」，比松手之后什么都没发生诚实
+    var dropAccepts: ((URL) -> Bool)?
 
     /// 0.4.1：把一条菜单动作交给页面（眼下只有捏合缩放在用）。
     /// 走 `WindowController.send` 那条路而不是自己 `evaluateJavaScript` ——
@@ -613,7 +628,9 @@ final class MainWebView: WKWebView {
     private func droppedURLs(_ sender: NSDraggingInfo) -> [URL] {
         let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: opts)
-        return (items as? [URL]) ?? []
+        let urls = (items as? [URL]) ?? []
+        guard let accepts = dropAccepts else { return urls }
+        return urls.filter(accepts)
     }
 }
 
@@ -1973,6 +1990,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 0.4.0 还的第三条账：图片落到哪个 assets/（"doc" 文档同级 / "root" 工作区根）。
     /// 真相在渲染层的偏好，启动与切换时经契约 v31 推过来；壳不持久化（同主题 / 语言那条规矩）
     var imageDirMode = "doc"
+    /// 这个窗口的活动标签此刻是不是只读（第八节 5，契约 v38）。跟着 `setViewFlags` 走 ——
+    /// 菜单那一份是全应用共用的，拖放却要问**这一个窗口**自己的状态
+    var activeReadOnly = false
     /// 0.3.0 T3：长图那台快门。不拿住引用的话，`case "exportPng"` 一出作用域它就没了 ——
     /// 而整条路是异步的（加载 → 等字体图片 → 按快门），当场就成了「点了没反应」
     var pngShooter: PNGShooter?
@@ -2110,6 +2130,10 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         if let main = webView as? MainWebView {
             main.enableFileDrop()
             main.dropHandler = { [weak self] urls in self?.handleDroppedFiles(urls) ?? false }
+            // 只读时图片不收（见 `MainWebView.dropAccepts`）：.md 照收，开新标签不改任何文档
+            main.dropAccepts = { [weak self] url in
+                !(self?.activeReadOnly ?? false) || DROP_DOC_EXTS.contains(url.pathExtension.lowercased())
+            }
             // 捏合缩放：手势攒够一档，按菜单那条路发给页面
             main.menuHandler = { [weak self] action in self?.send(action) }
         }
@@ -2410,7 +2434,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         var handled = false
         for url in urls {
             let ext = url.pathExtension.lowercased()
-            if ["md", "markdown", "mdown", "mkd"].contains(ext) {
+            if DROP_DOC_EXTS.contains(ext) {
                 openPath(url.path)
                 handled = true
             } else if ["png", "jpg", "jpeg", "gif", "webp", "avif", "tiff", "tif", "heic", "bmp"].contains(ext),
@@ -2701,7 +2725,9 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
 
         case "setViewFlags":
-            appDelegate?.syncViewFlags(args.first as? [String: Any] ?? [:])
+            let flags = args.first as? [String: Any] ?? [:]
+            activeReadOnly = (flags["readOnly"] as? Bool) == true
+            appDelegate?.syncViewFlags(flags)
             respond(id, NSNull())
 
         case "setAppearance":
@@ -6188,11 +6214,18 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 /// `NSApp.delegate as? AppDelegate` 每次都要转型，不如存一份
 weak var appDelegate: AppDelegate?
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 视图 → 主题 的四个菜单项，setAppearance 回来时同步勾选
     private var themeItems: [NSMenuItem] = []
     /// 视图里带勾的开关项（键名与 types.ts 的 ViewFlags 字段一一对应）
     private var viewFlagItems: [String: NSMenuItem] = [:]
+    /// 三条命令此刻有没有事可做（契约 v38 的 `canBack` / `canForward` / `canReopen`）。
+    /// 真相在渲染层（导航记录与关闭栈），壳只照着亮灭 —— 见 `validateMenuItem`
+    private var commandEnabled: [String: Bool] = [:]
+    /// 哪条菜单动作看哪一个开关。不在表里的一律照旧（亮着）
+    private static let enableFlags = [
+        "go:back": "canBack", "go:forward": "canForward", "file:reopen-closed-tab": "canReopen"
+    ]
     /// 所有开着的窗口。强引用在这里 —— WindowController 自己不被别人持有
     private(set) var windows: [WindowController] = []
 
@@ -6349,6 +6382,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         file.addItem(.separator())
         // ⌘W 关标签（渲染层管标签表）、⇧⌘W 关窗口 —— macOS 上有标签的应用都是这么分的
         file.addItem(item(L("menu.file.closeTab"), "file:close-tab", key: "w"))
+        // 第八节 7：⇧⌘T 是这类命令的通行键位，可它在这份菜单里早就归了大纲 —— 退一档到 ⌥⇧⌘T，
+        // 紧挨着「关闭标签」摆，误关之后第一眼就找得到
+        file.addItem(item(L("menu.file.reopenTab"), "file:reopen-closed-tab", key: "t", modifiers: [.command, .option, .shift]))
         file.addItem(NSMenuItem(title: L("menu.file.close"), action: Selector(("performClose:")), keyEquivalent: "W"))
         fileItem.submenu = file
 
@@ -6455,6 +6491,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // P2-8 底部悬浮格式栏；不给快捷键 —— 视图菜单里这几个键位已经很挤了
             "formatBar": item(L("view.formatBar"), "view:toggle-format-bar", key: ""),
             "source": item(L("view.source"), "view:toggle-source", key: "/"),
+            // 第八节 5：只读阅读模式（⌥⌘L —— L 取 Lock）。勾跟着**活动标签**走：只读是按标签的态
+            "readOnly": item(L("view.readOnly"), "view:toggle-read-only", key: "l", modifiers: [.command, .option]),
             // 0.3.0 T4：勾上 = 皮肤停着。不给快捷键 —— 它是个「出事那次才用」的开关
             "customOff": item(L("view.customOff"), "view:disable-custom-theme", key: ""),
             // P3-3 写作模式。⌥⌘F / ⌥⌘T：⌘ 组合一律走菜单（判断 1），
@@ -6471,7 +6509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 所以「菜单里有、面板里没有」这种漂移不会发生
         view.addItem(item(L("menu.view.palette"), "view:command-palette", key: "p", modifiers: [.command, .shift]))
         view.addItem(.separator())
-        for key in ["source", "focus", "typewriter"] { view.addItem(viewFlagItems[key]!) }
+        for key in ["source", "readOnly", "focus", "typewriter"] { view.addItem(viewFlagItems[key]!) }
         // 0.4.0 F1 折叠一节 / 0.4.1 折叠一条列表。**不带勾** —— 它不是视图开关，
         // 是对光标手边那一层的一次动作（里层的列表项优先于外层的小节）。
         //
@@ -6515,6 +6553,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         view.addItem(fullScreen)
         viewItem.submenu = view
+
+        // 第八节 6：后退 / 前进。与 Finder 一样单独一个「前往」菜单。键位 ⌥⌘← / ⌥⌘→ 而不是
+        // Finder 的 ⌘[ / ⌘] —— 那两个键眼下落进 CodeMirror 是缩进 / 反缩进（判断 1：菜单里
+        // 没有的 ⌘ 组合落回编辑器），占了就等于悄悄拿走一个现成的编辑键。亮灭见 `validateMenuItem`
+        let goItem = NSMenuItem(); main.addItem(goItem)
+        let go = NSMenu(title: L("menu.go"))
+        let arrow = { (code: Int) in String(Character(Unicode.Scalar(UInt32(code))!)) }
+        go.addItem(item(L("go.back"), "go:back", key: arrow(NSLeftArrowFunctionKey), modifiers: [.command, .option]))
+        go.addItem(item(L("go.forward"), "go:forward", key: arrow(NSRightArrowFunctionKey), modifiers: [.command, .option]))
+        goItem.submenu = go
 
         let winItem = NSMenuItem(); main.addItem(winItem)
         let win = NSMenu(title: L("menu.window"))
@@ -6599,6 +6647,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 视图菜单的勾选状态。真相同样在渲染层，壳只是跟着显示
     func syncViewFlags(_ flags: [String: Any]) {
         for (key, mi) in viewFlagItems { mi.state = (flags[key] as? Bool) == true ? .on : .off }
+        for key in Set(Self.enableFlags.values) { commandEnabled[key] = (flags[key] as? Bool) == true }
+    }
+
+    /// 契约 v38：后退 / 前进 / 重新打开关闭的标签此刻有没有事可做。没有就灰着 ——
+    /// 比按下去什么都不发生诚实。**只管这三条**，别的一律照旧亮着
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(menuAction(_:)),
+              let action = menuItem.representedObject as? String,
+              let flag = Self.enableFlags[action] else { return true }
+        return commandEnabled[flag] ?? false
     }
 
     /// 主题菜单的勾选状态。真相在渲染层（localStorage），壳只是跟着显示

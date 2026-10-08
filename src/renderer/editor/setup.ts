@@ -24,6 +24,7 @@ import { scrollMarks } from './scroll-marks'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
 import { adoptTableAtCursor } from './live-preview/table'
 import { cursiveMarkdown } from './markdown-lang'
+import { readOnlyConf, readOnlyExt } from './read-only'
 import { cursiveTheme } from './theme'
 import { writingModes, WRITING_DEFAULT, type WritingModes } from './writing-modes'
 
@@ -81,6 +82,8 @@ export interface EditorOptions {
   sourceMode?: boolean
   /** 初始光标位置（会话恢复用）；超出文档长度会夹回来 */
   cursor?: number
+  /** 初始是否只读（第八节 5：会话恢复、重开关闭的标签把它原样带回来） */
+  readOnly?: boolean
 }
 
 /**
@@ -147,6 +150,8 @@ export function createState(
       // 0.2.x：查找命中画在滚动条上（见 editor/scroll-marks.ts）
       scrollMarks,
       livePreviewConf.of(options.sourceMode ? [] : livePreview()),
+      // 第八节 5：只读阅读模式。按标签 —— 态就在这份 state 里，切标签时跟着冻结
+      readOnlyConf.of(readOnlyExt(options.readOnly === true)),
       writingConf.of(writingModes(writingNow)),
       spellConf.of(spellcheckExt(spellNow.on)),
       keymap.of([

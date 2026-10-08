@@ -10,9 +10,12 @@ cd "$(dirname "$0")/.."
 echo "==> [1/4] 类型检查 + 单元测试 + 构建 renderer"
 npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm run build --silent
 
-echo "==> [2/4] 编译原生壳"
+echo "==> [2/4] 编译原生壳 + 原生专项（键盘焦点 / 第八节 5–7 核心流程）"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
 python3 shell-swift/check-focus.py
+# 第八节 5–7：只读阅读模式、后退 / 前进、重新打开关闭的标签。真窗口里走菜单那条路，
+# 每条「挡住了」都钉着一个「可编辑时真的会改」的证人（test/native-flow.js）
+python3 shell-swift/check-flow.py
 
 echo "==> [3/4] E2E 十一用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 ARTIFACTS=$(mktemp -d /tmp/cursive-e2e-results.XXXXXX)
