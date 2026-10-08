@@ -20,6 +20,7 @@ import { applyI18n, detectLang, getLang, localeOf, onLangChange, setLang, t } fr
 import {
   collectHeadings,
   headingBefore,
+  headingsSettled,
   levelChangeSpec,
   moveSectionSpec,
   newSiblingSpec,
@@ -1019,6 +1020,10 @@ function updateOutline(): void {
   headings = sections(view.state, collectHeadings(view.state))
   outline.setItems(headings)
   outline.setActive(activeHeadingPos())
+  // 这一份是在半截树上取的（ensure 超了预算：机器正忙、或者文档大到一次解析不完）——
+  // 标题表只有前半截，甚至一个都没有，而下一次刷新要等文档再变。过一会儿自己再取一次，
+  // 直到盖住全文：每一次 ensure 都接着上一次的进度往下解析，不会原地打转（第八节 16）
+  if (!headingsSettled(view.state)) scheduleOutline()
 }
 
 /** 视口顶部所在行 → 它之前最近的一个标题位置（滚动跟随高亮） */

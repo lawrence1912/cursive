@@ -8,7 +8,7 @@ import { tableEditField } from '../src/renderer/editor/live-preview/table'
 import { loadKatex } from '../src/renderer/editor/live-preview/widgets'
 import { plainInline } from '../src/renderer/editor/inline-text'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
-import { parsedTree, primeTree, rememberTree } from '../src/renderer/editor/syntax'
+import { parsedExtent, parsedTree, primeTree, rememberTree } from '../src/renderer/editor/syntax'
 import { collectCodeLangs, loadCodeLangs, renderBody } from '../src/renderer/export/render'
 import {
   EXPORT_CSS,
@@ -389,13 +389,18 @@ describe('导出排版跟随设置（0.2.x）', () => {
  * 屏幕上那是「先画一部分，后台 parse 跟上再补」，而导出**只有一次机会**：
  * 少的那一截就是交出去的文件里没有的内容，产物看着还完好。真摔过：E2E 里偶发地
  * 只导出了文档的前三分之一（正文停在代码围栏之前）。
+ *
+ * 2026-10-08 又摔了一次，这回 primeTree 也没拦住：快照被 `parsedTree` 的快照分支
+ * 当成整棵记进了缓存（量的是 `tree.length`，而外层 front matter 语法的树长度永远是全文），
+ * primeTree 一问缓存就命中了。那一幕在 `test/mixed-parse.test.ts`。
  */
 describe('导出前先把整棵树确保出来', () => {
   it('没预先 ensure 过的 state：primeTree 之后树盖住全文', () => {
     const doc = readFileSync(new URL('fixtures/export.md', import.meta.url), 'utf8')
     // **故意不 ensure** —— 复刻「刚开出来 / 刚改过」的那一刻
     const state = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
-    expect(primeTree(state).length).toBe(doc.length)
+    // 量的是 parsedExtent：外层 front matter 语法的树在正文停在半路时长度也是全文
+    expect(parsedExtent(primeTree(state))).toBe(doc.length)
   })
 
   it('确保之后第二次直接命中缓存，不重复解析', () => {
@@ -419,7 +424,7 @@ describe('导出前先把整棵树确保出来', () => {
     // ① 复刻「ensure 超预算、退回手上那棵快照」那一幕：把首开那棵半截树钉进缓存
     const short = EditorState.create({ doc, extensions: [cursiveMarkdown(), tableEditField] })
     const snap = syntaxTree(short)
-    expect(snap.length, '首开的快照本来就该是半截的').toBeLessThan(doc.length)
+    expect(parsedExtent(snap), '首开的快照本来就该是半截的').toBeLessThan(doc.length)
     rememberTree(short, snap, doc.length)
     // `blocks()` 按 topNode 的范围走 —— 树盖不住文档，正文就是这么悄悄少掉的
     const half = renderBody(short, {}).html

@@ -5,7 +5,7 @@ import { count } from '../../shared/wordcount'
 import type { MenuAction } from '../../shared/types'
 import { makeFormatSpec } from './fmt'
 import { plainInline } from './inline-text'
-import { parsedTree } from './syntax'
+import { parsedExtent, parsedTree } from './syntax'
 
 export interface Heading {
   /** 1–6 */
@@ -88,9 +88,21 @@ export function collectHeadings(state: EditorState): Heading[] {
     out[i]!.end = next ? next.pos : state.doc.length
   }
   // **半截树上的结果不记**：文档大到一次 ensure 解析不完时，这一份只有前半截的标题，
-  // 而下一次问同一个 state 时 ensure 可能就成功了 —— 记下来等于把「只有半截目录」钉死
-  if (tree.length >= state.doc.length) headingCache.set(state, out)
+  // 而下一次问同一个 state 时 ensure 可能就成功了 —— 记下来等于把「只有半截目录」钉死。
+  // 「半截」按 `parsedExtent` 量，不按 `tree.length`：外层那层 front matter 语法停在半路时
+  // 长度照样是全文（见 syntax.ts），从前就是这么把「降级之后大纲只剩前三个、甚至一个都没有」
+  // 记进缓存的（第八节 16）
+  if (parsedExtent(tree) >= state.doc.length) headingCache.set(state, out)
   return out
+}
+
+/**
+ * 这个 state 的标题表是不是在**整棵树**上取的（`collectHeadings` 记进了缓存）。
+ * false = 上一次取数时 ensure 超了预算、只拿到半截树：表里只有前半截的标题，
+ * 甚至一个都没有。大纲拿它决定要不要过一会儿自己再取一次（见 main.ts 的 `updateOutline`）。
+ */
+export function headingsSettled(state: EditorState): boolean {
+  return headingCache.has(state)
 }
 
 /** 给每节补上字数。全文切片相加 = 扫一遍全文，所以只在（防抖过的）大纲刷新时调 */

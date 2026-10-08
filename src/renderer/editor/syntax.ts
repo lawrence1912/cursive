@@ -1,6 +1,6 @@
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
-import type { Tree } from '@lezer/common'
+import { IterMode, NodeProp, type Tree } from '@lezer/common'
 
 /**
  * 同一个 state 上的结果记在这儿。`ensureSyntaxTree` **不是**「解析过了就空操作」：
@@ -31,6 +31,52 @@ const treeCache = new WeakMap<EditorState, { upto: number; tree: Tree }>()
  * 预算花光（默认 50ms）时退回快照：有多少画多少，剩下的等后台 parse 推进后，
  * 由 `blockField` 的「树换了就重建」补上。
  */
+/**
+ * 一棵树**真解析到哪儿** —— 不是 `tree.length`（2026-10-08，第八节 16 的根因）。
+ *
+ * `cursiveMarkdown()` 外面套着 `yamlFrontmatter`，那是一层 `parseMixed`：外层一棵小语法
+ * （`Document → Frontmatter? Body`），整篇 Markdown 挂在 `Body` 上、front matter 里的
+ * YAML 挂在 `FrontmatterContent` 上。一次事务的 20ms 预算（CM 的 `Work.Apply`）没解析完
+ * 全文时，CM 用 `takeTree()` 把解析停在半路 —— 外层那棵小语法往往早就解析完了，
+ * **长度就是全文**，挂在 Body 上的正文却只到停下的地方（停点 Lezer 记在顶层一个没导出的
+ * `stoppedInner` 属性上）。实测 911 字的 kitchen-sink：外层 911，正文只到 232。
+ * 拿 `tree.length` 当进度，后半篇就整段不见了，而且**看着完好**：导出的 HTML 停在引用块
+ * 后面、大纲只剩前三个标题、表格公式不出现 —— 整篇替换（外部重载、探针收尾）一块碎片都
+ * 复用不上，机器一忙就撞上。
+ *
+ * 按挂载点自己的长度算：挂上了，正文就到 `挂载点.from + 内层树长度`；该挂而没挂上
+ * （外层解析途中就停了 —— `startInner` 不进停点之后的节点），这一段一个字都没解析。
+ * 只走外层那棵小语法（`IgnoreMounts`），几个节点的事；同一棵树记一次。
+ * 没套 `parseMixed` 的语言（单测里的 `markdown()`）没有挂载点，就是 `tree.length`。
+ */
+const NESTED = new Set(['Body', 'FrontmatterContent'])
+const extentCache = new WeakMap<Tree, number>()
+
+export function parsedExtent(tree: Tree): number {
+  const hit = extentCache.get(tree)
+  if (hit !== undefined) return hit
+  let end = tree.length
+  tree.iterate({
+    mode: IterMode.IgnoreMounts,
+    enter: (node) => {
+      if (node.from >= end) return false
+      const mount = node.tree?.prop(NodeProp.mounted)
+      if (mount && !mount.overlay) {
+        const reach = node.from + mount.tree.length
+        if (reach < node.to) end = Math.min(end, reach)
+        return false
+      }
+      if (NESTED.has(node.name)) {
+        if (node.to > node.from) end = Math.min(end, node.from)
+        return false
+      }
+      return undefined
+    }
+  })
+  extentCache.set(tree, end)
+  return end
+}
+
 /**
  * 已经解析出来、且覆盖到 upto 的那棵树 —— **一点解析都不会触发**，没有就是 null。
  * 给「文档一个字没变、只有选区动了」那条路用（`live-preview` 的 `patchBlocks`）：
@@ -74,7 +120,7 @@ export function primeTree(state: EditorState, timeout = 5000): Tree {
   const hit = treeCache.get(state)
   if (hit && hit.upto >= want) return hit.tree
   const tree = ensureSyntaxTree(state, want, timeout) ?? syntaxTree(state)
-  rememberTree(state, tree, Math.min(tree.length, want))
+  rememberTree(state, tree, Math.min(parsedExtent(tree), want))
   return tree
 }
 
@@ -93,22 +139,26 @@ export function parsedTree(state: EditorState, upto = state.doc.length): Tree {
    * 而每次按键之后快照的覆盖率实测中位数是 **100%**（CM 自己在每个事务里就把改动那一段
    * 重新解析好了），也就是说这 10ms 绝大多数时候买不到任何东西。
    *
-   * **为什么快照当得起**：`tree.length` 就是这棵树真解析到哪儿（`takeTree()` 把树停在
-   * `parsedPos` 上），所以 `>= upto` 意味着这一段是真解析过的、不是占位。至于嵌套语言
-   * 的内层挂载可能还没做 —— 本仓库没有一个 `parsedTree` 的消费者读它：块级装饰、大纲、
-   * 表格取数、行内文本、链接引用、导出全都只看**外层块结构**（导出的代码高亮是自己
-   * `parser.parse(src)` 另起一棵树，编辑器里的则走 CM 自带的高亮器、读的本来就是这份快照）。
+   * **为什么快照当得起**：`parsedExtent` 量的是这棵树真解析到哪儿，`>= upto` 意味着
+   * 这一段是真解析过的、不是占位。**量的不能是 `tree.length`** —— 这里从前就是这么写的，
+   * 而外层那层 `yamlFrontmatter`（parseMixed）停在半路时长度照样是全文，正文只到一半
+   * （见 `parsedExtent`）：快照于是被当成整棵收下、记进缓存，导出、大纲、块级装饰
+   * 全跟着少了后半篇。至于代码块里嵌套语言的内层树（overlay 挂载）可能还没做 ——
+   * 本仓库没有一个 `parsedTree` 的消费者读它：块级装饰、大纲、表格取数、行内文本、
+   * 链接引用、导出全都只看**Markdown 的块结构**（导出的代码高亮是自己 `parser.parse(src)`
+   * 另起一棵树，编辑器里的则走 CM 自带的高亮器、读的本来就是这份快照）。
    *
    * 不够长（打开文件那一刻只解析前 3000 字）才落到下面真 ensure —— 那正是上面那段
    * 记的坑，`test/block.test.ts`「首开长文档」守着它。
    */
   const snap = syntaxTree(state)
-  if (snap.length >= upto) {
-    treeCache.set(state, { upto: snap.length, tree: snap })
+  const reach = parsedExtent(snap)
+  if (reach >= upto) {
+    treeCache.set(state, { upto: reach, tree: snap })
     return snap
   }
   const tree = ensureSyntaxTree(state, upto)
-  if (!tree) return syntaxTree(state)
+  if (!tree) return snap
   treeCache.set(state, { upto, tree })
   return tree
 }

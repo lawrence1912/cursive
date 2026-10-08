@@ -1,6 +1,6 @@
 import { pointerSelection } from '../pointer-selection'
-import { syntaxTree } from '@codemirror/language'
 import { Facet, type EditorState } from '@codemirror/state'
+import { parsedTree } from '../syntax'
 
 /**
  * 光标「碰到」多大范围就回显原始标记，直接决定手感：
@@ -66,8 +66,11 @@ function expand(state: EditorState, from: number, to: number, scope: RevealScope
     return { from: state.doc.lineAt(from).from, to: state.doc.lineAt(to).to }
   }
 
-  // block：往上找到 Document 的直接子节点，也就是所在的顶层块
-  let node = syntaxTree(state).resolveInner(from, 1)
+  // block：往上找到 Document 的直接子节点，也就是所在的顶层块。
+  // 树要盖住光标那一点（`parsedTree`，不是裸快照）：正文没解析到的那一段落在外层
+  // front matter 语法的 `Body` 上，往上撑就是从 front matter 之后到文末的整篇 ——
+  // 一次没解析完的整篇替换之后，整篇文档会一齐翻回源码（见 syntax.ts 的 `parsedExtent`）
+  let node = parsedTree(state, Math.min(from + 1, state.doc.length)).resolveInner(from, 1)
   while (node.parent && node.parent.name !== 'Document') node = node.parent
   return {
     from: Math.min(node.from, from),

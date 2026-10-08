@@ -26,7 +26,7 @@ import { followTag } from '../frontmatter'
 import { docDir } from '../doc-dir'
 import { HEADING_RE } from '../headings'
 import { followLink } from '../link'
-import { knownTree, parsedTree, rememberTree } from '../syntax'
+import { knownTree, parsedExtent, parsedTree, rememberTree } from '../syntax'
 import { extractFence } from './code'
 import { buildDecorations, calloutAt } from './decorate'
 import { pointerSelection, pointerSelectionEvents } from '../pointer-selection'
@@ -152,7 +152,10 @@ export const blockField = StateField.define<DecorationSet>({
     // 比的是**覆盖长度**而不是树对象：`ensureSyntaxTree` 每跑一次都会换一个新的 Tree
     // 对象（内容一字不差也换），写成 `!==` 就成了「上一次重建自己造成下一次重建」——
     // 全量重建永远停不下来，下面那条增量的路一次都轮不上（实测 40/40 次全落在这儿）。
-    const grew = syntaxTree(tr.state).length > syntaxTree(tr.startState).length
+    // 覆盖长度按 `parsedExtent` 量：`tree.length` 在外层 front matter 语法解析完之后就是
+    // 全文，正文停在半路也一样 —— 拿它比，这条路一次都走不到（见 syntax.ts）
+    const reachBefore = parsedExtent(syntaxTree(tr.startState))
+    const grew = parsedExtent(syntaxTree(tr.state)) > reachBefore
     const pointerChanged = tr.startState.field(pointerSelection, false) !== tr.state.field(pointerSelection, false)
     if (!tr.docChanged && !effect && !grew && tr.state.field(pointerSelection, false))
       return carryToc(tr.startState, tr.state, value)
@@ -168,7 +171,7 @@ export const blockField = StateField.define<DecorationSet>({
         tr.startState,
         tr.state,
         tr.docChanged ? tr.changes : null,
-        grew ? syntaxTree(tr.startState).length : null
+        grew ? reachBefore : null
       )
       if (patched) return patched
     }
@@ -304,7 +307,10 @@ export function patchBlocks(
     dirtyNow(fromB, toB)
   })
   // 后台 parse 新解析出来的那一段。左边界撑到顶层块：旧快照很可能断在某个块的中间
-  if (grownFrom !== null) dirtyNow(Math.min(grownFrom, tree.length), tree.length)
+  if (grownFrom !== null) {
+    const reach = parsedExtent(tree)
+    dirtyNow(Math.min(grownFrom, reach), reach)
+  }
 
   // 0.4.0 F1：脏区碰到折叠区，就把**整段折叠区**吞进来。药丸那条替换装饰从标题行末尾
   // 一直盖到本节最后一行，而脏区只按块撑 —— 只盖住半条的话，RangeSet 那趟 filter
@@ -381,8 +387,10 @@ function blockSpan(tree: Tree, from: number, to: number): Span {
   const grow = (pos: number, side: -1 | 1): void => {
     // 先把落点夹进树里：树可能是半截的（ensure 超预算就只解析到一半），而脏区是按
     // **文档**坐标来的 —— 树外的位置 resolveInner 给不出有意义的节点。夹的是解析的
-    // 起点，不是 out：脏区右边界照旧留在文档坐标上，过期装饰才清得干净
-    pos = Math.max(0, Math.min(pos, tree.length))
+    // 起点，不是 out：脏区右边界照旧留在文档坐标上，过期装饰才清得干净。
+    // 夹到 `parsedExtent` 而不是 `tree.length`：正文没解析到的那一段落在外层的 `Body`
+    // 上，往上撑就是整篇（见 syntax.ts）
+    pos = Math.max(0, Math.min(pos, parsedExtent(tree)))
     // 往上走到 Document 的直接子节点 —— 与 `reveal.ts` 的 block 档同一条规矩。
     // 「一路走到再往上就是整棵树」那种写法在这里是错的：带 YAML frontmatter 的文档里，
     // 正文被套在**第二层 Document** 里（Document 0-N → [FrontMatter, Document 96-N]），
