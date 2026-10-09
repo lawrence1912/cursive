@@ -372,11 +372,14 @@ if sys.argv[1] == 'dialect.md':
     tp = r.get('tabProbe') or {}
     ok = ok and not tp.get('err')
     ok = ok and tp.get('added') == 3           # 从侧栏点开三个文件，就该多三个标签
+    # 五条关闭之后是第八节 5 / 7 加的两条：「设为只读」「重新打开关闭的标签」（追加在末尾，
+    # 下面按下标点的「关闭右边 / 左边 / 其他」不受影响）
     ok = ok and tp.get('labels') == ['关闭', '关闭左边的标签', '关闭其他标签',
-                                     '关闭右边的标签', '关闭所有标签']
-    # 灰掉的位置要跟着右键的是哪一个走：第一个没有「左边」，最后一个没有「右边」
-    ok = ok and tp.get('offAtFirst') == [False, True, False, False, False]
-    ok = ok and tp.get('offAtLast') == [False, False, False, True, False]
+                                     '关闭右边的标签', '关闭所有标签', '设为只读', '重新打开关闭的标签']
+    # 灰掉的位置要跟着右键的是哪一个走：第一个没有「左边」，最后一个没有「右边」。
+    # 「重新打开」第一次右键时还没关过标签 → 灰着；② 关掉右边三个之后 → 亮着
+    ok = ok and tp.get('offAtFirst') == [False, True, False, False, False, False, True]
+    ok = ok and tp.get('offAtLast') == [False, False, False, True, False, False, False]
     # 命令作用在哪个标签，那个就亮着；菜单收起要跟着灭
     ok = ok and tp.get('marked') is True and tp.get('stillContext') is False
     # 关闭右边 / 关闭左边：被右键的那个是唯一的幸存者

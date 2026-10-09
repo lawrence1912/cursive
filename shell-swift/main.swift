@@ -5544,7 +5544,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
               checkpoint('tabs:picked:' + idx)
             }
 
-            // ① 三个标签加原来那个，右键第一个：菜单五条，只有「关闭左边」该是灰的。
+            // ① 三个标签加原来那个，右键第一个：菜单七条（五条关闭 + 设为只读 + 重新打开关闭的标签），
+            //    该灰的是「关闭左边」与「重新打开」（这会儿还一个标签都没关过）。
             //    起手可能不止一个标签（崩溃恢复的草稿会先开一个），所以数**增量**
             const before = tabEls().length
             await openSide('callout.md'); await openSide('crlf.md'); await openSide('math.md')
