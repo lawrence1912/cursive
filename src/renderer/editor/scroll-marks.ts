@@ -1,6 +1,7 @@
 import { getSearchQuery, searchPanelOpen } from '@codemirror/search'
 import type { EditorState } from '@codemirror/state'
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { searchIndex } from './search-index'
 
 /**
  * 查找命中画在滚动条上（0.2.x）。
@@ -20,8 +21,6 @@ import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 
 /** 画出来的刻度上限：再多也只是叠在同一排像素上 */
 const MAX_MARKS = 400
-/** 扫描上限（同 `search-panel.ts` 的 CAP 精神）：别为一个 `.` 把整篇数一遍 */
-const SCAN_CAP = 5000
 
 interface Layout {
   top: number
@@ -49,23 +48,20 @@ export function collectMarks(view: EditorView): Layout | null {
   // 不用滚 = 整篇都在眼前，没有「在哪儿」这回事
   if (height <= 0 || total <= height + 1) return null
 
+  // 命中位置与查找计数共用一份（`search-index.ts`，跟着事务增量更新，最多 CAP 处）——
+  // 从前这里自己再扫一遍全文，每打一个字就在测量阶段多花十几毫秒
+  const found = searchIndex(view.state)
+  // 正则在这一刻跑不起来（边打边搜时必然路过）：这次不画，下一次再说
+  if (!found) return null
   const marks: number[] = []
   let last = -1
-  try {
-    const cursor = getSearchQuery(view.state).getCursor(view.state)
-    let scanned = 0
-    for (let r = cursor.next(); !r.done && scanned < SCAN_CAP; r = cursor.next()) {
-      scanned++
-      const y = Math.round((view.lineBlockAt(r.value.from).top / total) * height)
-      // 命中是升序来的，所以只比上一条就够：同一排像素上的几处合成一条
-      if (y === last) continue
-      last = y
-      marks.push(y)
-      if (marks.length >= MAX_MARKS) break
-    }
-  } catch {
-    // 正则在这一刻不合法（边打边搜时必然路过）：这次不画，下一次再说
-    return null
+  for (const from of found.starts) {
+    const y = Math.round((view.lineBlockAt(from).top / total) * height)
+    // 命中是升序来的，所以只比上一条就够：同一排像素上的几处合成一条
+    if (y === last) continue
+    last = y
+    marks.push(y)
+    if (marks.length >= MAX_MARKS) break
   }
   return marks.length ? { top: scroller.offsetTop, height, marks } : null
 }

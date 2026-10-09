@@ -15,6 +15,7 @@ import { runScopeHandlers, type EditorView, type Panel, type ViewUpdate } from '
 import { applyI18n, onLangChange, t } from '../i18n'
 import { icon } from '../ui/icons'
 import { keepScroll } from './focus'
+import { searchIndex } from './search-index'
 
 /**
  * 文档内查找 / 替换面板（换掉 @codemirror/search 的默认那一版）。
@@ -68,42 +69,24 @@ export interface SearchStat {
   capped: boolean
 }
 
-const CAP = 5000
 const EMPTY: SearchStat = { empty: true, invalid: false, total: 0, index: 0, capped: false }
 
 let statFor: EditorState | null = null
 let statValue: SearchStat = EMPTY
-let matchesFor: { doc: EditorState['doc']; query: SearchQuery; wordChars: string; starts: number[] } | null = null
 
 /**
- * 「第几处 / 共几处」。面板和状态栏都要，所以**算在一处**：
- * 同一次 update 共用结果；选区变化只在已缓存的命中位置里查序号。
- * 正文、查询或整词规则变化才重扫，避免长文档每按一次方向键都扫描全文。
+ * 「第几处 / 共几处」。面板和状态栏都要，所以**算在一处**：同一次 update 共用结果。
+ * 命中位置取自 `search-index.ts` 那份跟着事务走的位置表（滚动条刻度读的也是它）：
+ * 选区变化只在里面二分查序号，改正文只重扫改动所在的那几行。
  */
 export function searchStat(state: EditorState): SearchStat {
   if (statFor === state) return statValue
   statFor = state
   const q = getSearchQuery(state)
   if (!q.search) return (statValue = EMPTY)
-  if (!q.valid) return (statValue = { ...EMPTY, empty: false, invalid: true })
-
-  // 整词规则由光标所在语言决定：进入代码块后可能与正文不同。
-  const wordChars = q.wholeWord ? state.languageDataAt<string>('wordChars', state.selection.main.head)[0] ?? '' : ''
-  // 自定义匹配器可以读取整个 state，不能复用其他选区下的结果。
-  if (matchesFor?.doc !== state.doc || matchesFor.query !== q || matchesFor.wordChars !== wordChars || q.test) {
-    const starts: number[] = []
-    try {
-      const cursor = q.getCursor(state)
-      for (let r = cursor.next(); !r.done; r = cursor.next()) {
-        starts.push(r.value.from)
-        if (starts.length >= CAP) break
-      }
-    } catch {
-      return (statValue = { ...EMPTY, empty: false, invalid: true })
-    }
-    matchesFor = { doc: state.doc, query: q, wordChars, starts }
-  }
-  const { starts } = matchesFor
+  const found = q.valid ? searchIndex(state) : null
+  if (!found) return (statValue = { ...EMPTY, empty: false, invalid: true })
+  const { starts, capped } = found
   const total = starts.length
   const head = state.selection.main.from
   let lo = 0
@@ -113,7 +96,7 @@ export function searchStat(state: EditorState): SearchStat {
     if (starts[mid]! < head) lo = mid + 1
     else hi = mid
   }
-  return (statValue = { empty: false, invalid: false, total, index: lo < total ? lo + 1 : 0, capped: total >= CAP })
+  return (statValue = { empty: false, invalid: false, total, index: lo < total ? lo + 1 : 0, capped })
 }
 
 /** ⌥⌘R：开面板并把替换那一行摊开（面板已经开着也照样摊开） */

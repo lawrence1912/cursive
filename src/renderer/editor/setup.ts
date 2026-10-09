@@ -19,6 +19,7 @@ import { expandOnEnter } from './input-rules'
 import { t } from '../i18n'
 import { changeListIndent } from './list-ops'
 import { smartPaste } from './paste'
+import { searchIndexField } from './search-index'
 import { cursiveSearchPanel } from './search-panel'
 import { scrollMarks } from './scroll-marks'
 import { docDir, livePreview, revealScope, type RevealScope } from './live-preview'
@@ -136,6 +137,8 @@ export function createState(
       // 组字期间不提交、计数画在框里。默认那版的文案在 phrases facet 里，
       // 换掉之后只剩读屏播报还走它
       search({ top: true, createPanel: cursiveSearchPanel }),
+      // 第八节 18：命中位置跟着事务增量更新（计数与滚动条刻度共用，见 editor/search-index.ts）
+      searchIndexField,
       EditorState.phrases.of(SEARCH_PHRASES),
       EditorState.allowMultipleSelections.of(true),
       EditorView.lineWrapping,
