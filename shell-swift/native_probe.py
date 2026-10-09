@@ -91,6 +91,12 @@ class Window:
         if r.returncode:
             raise RuntimeError(r.stderr.strip())
 
+    def bounds(self):
+        """测试窗口在屏幕上的位置（点，左上为原点）—— 页面坐标 + 它 = CGEvent 要的屏幕坐标"""
+        r = subprocess.run([str(self.driver), 'bounds', self.pid], capture_output=True, text=True, check=True)
+        x, y, w, h = map(float, r.stdout.split())
+        return x, y, w, h
+
     def type(self, text, gap=35):
         self.drv('type', text, str(gap))
 

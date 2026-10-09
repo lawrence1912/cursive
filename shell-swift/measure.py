@@ -33,20 +33,21 @@ from native_probe import ROOT, Window, compile_driver
 
 out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('/tmp/cursive-perf.json')
 
-# 回归预算（ms，除标注外）。由 2026-10-08 在 MacBookPro18,3（M1 Pro）上的基线定：
-# 取基线 p95 的约 1.5 倍、向上取整到好记的数 —— 宽到不被一次系统抖动误伤，
-# 窄到一次真的退化（比如每键全文 ensure 又回来了）一定越线
+# 回归预算（ms，除标注外）。由 2026-10-09 在 MacBookPro18,3（M1 Pro，32GB，macOS 27.0，60Hz）上
+# 连跑三次的基线定（docs/perf-baseline-2026-10-09.md）：取三次里最差的 p95 约 1.5 倍、取整到好记的数 ——
+# 宽到不被一次系统抖动误伤，窄到一次真的退化（比如每键全文 ensure 又回来了）一定越线
 BUDGETS = {
-    'typing.plain.frame.p95': 33,
-    'typing.plain.sync.p95': 12,
-    'typing.ime.frame.p95': 33,
-    'typing.find.frame.p95': 40,
-    'typing.table.frame.p95': 40,
-    'tabs.frame.p95': 120,
-    'scroll.slowFrames.ratio': 0.10,   # 超过 1.5 个刷新周期的帧占比
-    'coldStart.painted.p50': 1200,
-    'export.html.p50': 1500,
-    'idle.cpu.percent': 1.0,           # 应用 + WebContent，%
+    'typing.plain.frame.p95': 60,      # 基线 33–40
+    'typing.plain.sync.p95': 24,       # 基线 14–15
+    'typing.ime.frame.p95': 80,        # 基线 52–53（大头是输入法自己的往返）
+    'typing.find.frame.p95': 110,      # 基线 64–72（每键同步约 29ms：最该先优化的一处）
+    'typing.table.frame.p95': 95,      # 基线 48–62（每键同步约 30ms：第二处）
+    'tabs.frame.p95': 160,             # 基线 103–107
+    'scroll.slowFrames.ratio': 0.05,   # 超过 1.5 个刷新周期的帧占比；基线 0–0.3%
+    'coldStart.painted.p50': 1700,     # 基线 1120–1152
+    'export.html.p50': 150,            # 基线 47–60
+    'idle.cpu.percent': 5.0,           # 应用 + WebKit 三个进程，%；基线 2.6–2.7
+    'memory.tabs6.total': 400,         # MB，应用 + WebKit 三个进程；基线 252
 }
 
 
@@ -73,7 +74,7 @@ def build_fixture(d: Path) -> None:
         if sec % 13 == 0 and formula < 50:
             formula += 1
             lines += ['$$', f'\\sum_{{i=1}}^{{{sec}}} i^2 = \\frac{{n(n+1)(2n+1)}}{{6}}', '$$', '']
-        if sec % 66 == 0 and img < 10:
+        if sec % 60 == 0 and img < 10:
             img += 1
             lines += [f'![图 {img}](img-{img}.svg)', '']
         if sec % 15 == 0:
@@ -103,6 +104,23 @@ def webkit_pids(before: set) -> list:
         if int(pid) not in before and 'WebKit' in comm:
             pids.append(pid)
     return pids
+
+
+def proc_names(pids: list) -> dict:
+    out = {}
+    for p in pids:
+        out[p] = subprocess.run(['ps', '-o', 'comm=', '-p', p], capture_output=True, text=True).stdout.strip().split('/')[-1]
+    return out
+
+
+def settled_mb(pids: list) -> dict:
+    """内存在 GC 与图层回收前后会晃：稳一会儿，隔两秒采三次取中位数"""
+    time.sleep(3.0)
+    samples = []
+    for _ in range(3):
+        samples.append({p: footprint_mb(p) for p in pids})
+        time.sleep(2.0)
+    return {p: sorted(x[p] for x in samples)[1] for p in pids}
 
 
 def footprint_mb(pid: str) -> float:
@@ -187,6 +205,22 @@ with tempfile.TemporaryDirectory(prefix='cursive-perf-') as directory:
         time.sleep(1.0)
         results['window'] = win.cmd('info')
 
+        # 多标签内存：**排在打字、滚动、导出这些会大量分配的测量之前** —— 第二次就量到了 GC 之前的峰值
+        # （3 个标签比 6 个还多两百兆）。1 → 3 → 6 个标签，各自稳住再采；量完把多开的三个关掉
+        pids = [win.pid] + webkit_pids(before)
+        results['processes'] = proc_names(pids)
+        mem = {'tabs1': settled_mb(pids)}
+        win.cmd('open', name='small.md')
+        win.cmd('open', name='perf-2.md')
+        mem['tabs3'] = settled_mb(pids)
+        for name in ('perf-3.md', 'perf-4.md', 'perf-5.md'):
+            win.cmd('open', name=name)
+        mem['tabs6'] = settled_mb(pids)
+        results['memoryMB'] = {k: {'total': round(sum(v.values()), 1), 'byPid': v} for k, v in mem.items()}
+        for name in ('perf-3.md', 'perf-4.md', 'perf-5.md'):
+            win.cmd('close', name=name)
+        win.cmd('open', name='perf.md')
+
         def typing(label, keys, gap=0.1, before_keys=None):
             win.cmd('arm')
             for k in keys:
@@ -216,9 +250,7 @@ with tempfile.TemporaryDirectory(prefix='cursive-perf-') as directory:
         win.cmd('place', where='table')
         typing('table', list('1234567890' * 4))
 
-        # 切标签：三个标签之间 ⌃⇥ 二十次（菜单那条路，起点是菜单动作进页面）
-        win.cmd('open', name='small.md')
-        win.cmd('open', name='perf-2.md')
+        # 切标签：三个标签（perf / small / perf-2）之间 ⌃⇥ 二十次（菜单那条路，起点是菜单动作进页面）
         win.cmd('arm')
         for _ in range(20):
             win.key('tab', 'ctrl')
@@ -244,25 +276,20 @@ with tempfile.TemporaryDirectory(prefix='cursive-perf-') as directory:
         r = win.cmd('export', runs=3, timeout=120)
         results['export'] = {'html': summary(r['times']), 'bytes': r['bytes']}
 
-        # 多标签内存：此刻三个标签（perf / small / perf-2）→ 再开三个 1 万行的
-        pids = [win.pid] + webkit_pids(before)
-        results['processes'] = pids
-        mem = {'tabs3': {p: footprint_mb(p) for p in pids}}
-        for name in ('perf-3.md', 'perf-4.md', 'perf-5.md'):
-            win.cmd('open', name=name)
-        time.sleep(2.0)
-        pids = [win.pid] + webkit_pids(before)
-        mem['tabs6'] = {p: footprint_mb(p) for p in pids}
-        results['memoryMB'] = {k: {'total': round(sum(v.values()), 1), 'byPid': v} for k, v in mem.items()}
-
         # 闲置 CPU（30 秒不动）与阅读时的能耗（同一段闲置 + 一段逐帧滚动）
         win.cmd('open', name='perf.md')
         time.sleep(3.0)
+        # 闲置：探针停下指令循环（`rest`），这 30 秒里页面上什么都不发生
+        idle = {}
+        t = Thread(target=lambda: idle.update(power=power(pids, 30)))
         c0 = {p: cputime(p) for p in pids}
-        time.sleep(30)
+        t.start()
+        win.cmd('rest', ms=36000, timeout=60)
         c1 = {p: cputime(p) for p in pids}
-        results['idle'] = {'cpu.percent': round(sum(c1[p] - c0[p] for p in pids) / 30 * 100, 2)}
-        results['idle']['power'] = power(pids, 30)
+        t.join()
+        results['idle'] = {'cpu.percent': round(sum(c1[p] - c0[p] for p in pids) / 36 * 100, 2),
+                           'byPid': {p: round((c1[p] - c0[p]) / 36 * 100, 2) for p in pids},
+                           'power': idle.get('power', -1.0)}
         holder = {}
         t = Thread(target=lambda: holder.update(p=power(pids, 25)))
         t.start()
@@ -284,6 +311,7 @@ flat = {
     'coldStart.painted.p50': results['coldStart']['painted'].get('p50'),
     'export.html.p50': results['export']['html'].get('p50'),
     'idle.cpu.percent': results['idle']['cpu.percent'],
+    'memory.tabs6.total': results['memoryMB']['tabs6']['total'],
 }
 over = {k: v for k, v in flat.items() if v is None or v > BUDGETS[k]}
 results['flat'] = flat

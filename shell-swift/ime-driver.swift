@@ -12,6 +12,7 @@
 //   ime-driver type  <pid> <text> [间隔ms]    逐个敲字母 / 数字 / 空格 / = / -（走当前键盘布局）
 //   ime-driver key   <pid> <名字> [cmd|ctrl|opt|shift ...]   escape return tab left right up down delete z …
 //   ime-driver click <pid> <x> <y>            在屏幕坐标（点，左上为原点）上点一下
+//   ime-driver bounds <pid>                   目标最大那个窗口在屏幕上的位置与大小：x y w h（点，左上为原点）
 //
 // 编译：swiftc -O shell-swift/ime-driver.swift -o <输出>（check-ime.py 会自己编到临时目录）
 import AppKit
@@ -81,6 +82,17 @@ let target = pid(args[2])
 switch args[1] {
 case "front":
     ensureFront(target)
+case "bounds":
+    // 页面坐标换成屏幕坐标要的那个原点。不用页面里的 window.screenX/outerHeight 去推：
+    // 全尺寸内容视图下网页从窗口顶边就开始了，拿 outerHeight - innerHeight 当标题栏会整整偏一截
+    let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+    let mine = list.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == target && ($0[kCGWindowLayer as String] as? Int) == 0 }
+    let rects = mine.compactMap { w -> CGRect? in
+        guard let b = w[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: b as CFDictionary)
+    }
+    guard let r = rects.max(by: { $0.width * $0.height < $1.width * $1.height }) else { fail("no window for \(target)") }
+    print("\(r.origin.x) \(r.origin.y) \(r.width) \(r.height)")
 case "type":
     guard args.count >= 4 else { fail("type needs text") }
     let gap = UInt32((args.count >= 5 ? Int(args[4]) : nil) ?? 35) * 1000

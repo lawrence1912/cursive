@@ -59,7 +59,12 @@ void (async () => {
     switch (cmd.op) {
       case 'place': {
         if (cmd.where === 'table') {
-          view.dispatch({ selection: { anchor: lineOf('【格测量】') - 4 }, scrollIntoView: true })
+          // 光标先停在表格**前面**那一行：落在表格源码里的话整张表回显成管道符，就没有格子可点了
+          const text = view.state.doc.toString()
+          const head = text.lastIndexOf('| 列一', text.indexOf('【格测量】'))
+          view.focus()
+          view.dispatch({ selection: { anchor: head - 2 }, scrollIntoView: true })
+          await sleep(300)
           await tick()
           const td = [...document.querySelectorAll('.cm-lp-tableview td')].find((c) => c.textContent.includes('【格测量】'))
           td.focus()
@@ -90,6 +95,11 @@ void (async () => {
         await sleep(200)
         return { open: !!document.querySelector('.cm-panels input[name="search"]') }
       }
+      case 'rest':
+        // 量闲置 CPU / 能耗的那段：指令循环自己也停下来（平时每 40ms 读一次指令文件，
+        // 那本身就是一笔持续的 IPC 与磁盘读，会把「闲置」抬成好几个百分点 —— 第一次就这么量歪了）
+        await sleep(cmd.ms ?? 30000)
+        return {}
       case 'arm':
         rec = []
         current = null
@@ -140,6 +150,16 @@ void (async () => {
         for (let i = 0; i < 100 && document.querySelector('.tab-item.is-active')?.title !== title; i++) await sleep(50)
         await sleep(400)
         return { ok: document.querySelector('.tab-item.is-active')?.title === title, tabs: document.querySelectorAll('.tab-item').length }
+      }
+      case 'close': {
+        // 先切到它（文件树那一行），再走菜单关掉
+        const row = [...document.querySelectorAll('.sb-row')].find((r) => r.dataset.path?.endsWith('/' + cmd.name))
+        row?.click()
+        const title = cmd.name.replace(/\.md$/, '')
+        for (let i = 0; i < 100 && document.querySelector('.tab-item.is-active')?.title !== title; i++) await sleep(50)
+        window.__shellEmit('menu', 'file:close-tab')
+        await sleep(400)
+        return { tabs: document.querySelectorAll('.tab-item').length }
       }
       case 'info': {
         // 屏幕刷新率：空转 60 帧量一下 rAF 的间隔（ProMotion 屏上 WKWebView 未必跑 120）

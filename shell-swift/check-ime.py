@@ -53,6 +53,20 @@ def check(name, ok, **detail):
         failures.append(name)
 
 
+def marked(log):
+    """输入框里最后正显示着的那段组字（最后一次 insertCompositionText），被打断时 WebKit 原样留下的就是它"""
+    texts = [e['data'] for e in log if e['type'] == 'beforeinput' and e.get('inputType') == 'insertCompositionText']
+    return texts[-1] if texts else ''
+
+
+def landed(before, after, at):
+    """after 比 before 在 at 处多出来的那一段；两头对不上（别处也动了）就是 None"""
+    tail = len(before) - at
+    if len(after) < len(before) or not (after.startswith(before[:at]) and after.endswith(before[at:])):
+        return None
+    return after[at:len(after) - tail]
+
+
 def commits(log):
     """输入法提交了什么。内嵌组字的输入法派 compositionend（data 就是提交的那段）；
     不把拼音嵌进输入框的（候选全在它自己的窗里）只派一次 insertText 的 beforeinput"""
@@ -230,28 +244,34 @@ with tempfile.TemporaryDirectory(prefix='cursive-ime-') as directory:
               and s6b['active'] == 'find', committed=c2)
         cmd('escape-find')
 
-        # ---- S7 候选期间打开命令面板、在面板里输入、关掉面板 ----
+        # ---- S7 候选期间用快捷键打开浮层（⌘T 快速打开）、在浮层里用输入法、关掉浮层 ----
+        # 预期落点（被浮层打断）：正在组的那段按当时显示的样子留在原处，或者由输入法提交成词、
+        # 或者整段取消 —— 三种都不丢已提交的字；不进浮层的输入框、不重复
         s = cmd('prepare', where='paragraph')
         at, before = s['sel'][1], s['text']
         typ('zhong')
         time.sleep(0.3)
-        s7 = cmd('menu', action='view:command-palette', wait=400)
-        c = commits(s7['log'])
-        check('S7 候选期间打开浮层：合成收尾，提交的那段至多落一次、落在原处，不进面板',
+        mid = cmd('state')
+        key('t', 'cmd')
+        time.sleep(0.5)
+        s7 = cmd('state')
+        log7 = mid['log'] + s7['log']
+        got = landed(before, s7['text'], at)
+        check('S7 候选期间按 ⌘T 打开浮层：合成收尾，落下的至多一段、落在原处，不进浮层',
               s7['paletteOpen'] and s7['active'] == 'palette' and not s7['composing']
-              and s7['text'] == before[:at] + c + before[at:] and (not c or c not in (s7['palette'] or '')),
-              committed=c, landed='正文原处' if c else '取消（没有落字）')
+              and got in (marked(log7), commits(log7), '') and not (got and got in (s7['palette'] or '')),
+              shown=marked(log7), committed=commits(log7), landed=got)
         typ('mingling')
         key('space')
         time.sleep(0.4)
         s7b = cmd('state')
         c2 = commits(s7b['log'])
-        check('S7b 浮层里用输入法：提交的那段进了面板的输入框，正文不动', len(c2) >= 1
+        check('S7b 浮层里用输入法：提交的那段进了浮层的输入框，正文不动', len(c2) >= 1
               and s7b['palette'] == c2 and s7b['text'] == s7['text'], committed=c2)
         key('escape')
         time.sleep(0.4)
         s7c = cmd('state')
-        check('S7c Esc 关掉面板：焦点回到正文', not s7c['paletteOpen'] and s7c['active'] == 'editor')
+        check('S7c Esc 关掉浮层：焦点回到正文', not s7c['paletteOpen'] and s7c['active'] == 'editor')
         before7 = s7c['text']
         at7 = s7c['sel'][1]
         typ('hao')
@@ -259,7 +279,7 @@ with tempfile.TemporaryDirectory(prefix='cursive-ime-') as directory:
         time.sleep(0.4)
         s7d = cmd('state')
         c3 = commits(s7d['log'])
-        check('S7d 关掉面板之后接着输入照常', len(c3) >= 1 and s7d['text'] == before7[:at7] + c3 + before7[at7:],
+        check('S7d 关掉浮层之后接着输入照常', len(c3) >= 1 and s7d['text'] == before7[:at7] + c3 + before7[at7:],
               committed=c3)
 
         # ---- S8 候选期间点到别处 ----
@@ -267,15 +287,20 @@ with tempfile.TemporaryDirectory(prefix='cursive-ime-') as directory:
         at, before = s['sel'][1], s['text']
         typ('dianji')
         time.sleep(0.3)
+        mid = cmd('state')
         p = cmd('point')
-        drv('click', str(p['x']), str(p['y']))
+        bx, by, _, _ = win.bounds()
+        drv('click', str(bx + p['cx']), str(by + p['cy']))
         time.sleep(0.5)
         s8 = cmd('state')
-        c = commits(s8['log'])
-        target = p['pos'] + (len(c) if p['pos'] > at else 0)
-        check('S8 候选期间点到别处：提交的那段至多落一次、落在原处，光标到了点的地方',
-              not s8['composing'] and s8['text'] == before[:at] + c + before[at:] and abs(s8['sel'][1] - target) <= 3,
-              committed=c, clickedAt=p['pos'], cursor=s8['sel'][1])
+        log8 = mid['log'] + s8['log']
+        got = landed(before, s8['text'], at)
+        # 点的位置是在组字**期间**算的：那时文档里还带着正显示的那段（比如 7 个字的 dian'ji），
+        # 收尾之后换成落下的那段（6 个字的 dianji）—— 点在它后面的位置跟着挪这个差
+        target = p['pos'] + (len(got or '') - len(marked(mid['log'])) if p['pos'] > at else 0)
+        check('S8 候选期间点到别处：输入法收尾的那段至多落一次、落在原处，光标到了点的地方',
+              not s8['composing'] and got in (marked(log8), commits(log8), '') and abs(s8['sel'][1] - target) <= 3,
+              shown=marked(log8), committed=commits(log8), landed=got, clickedAt=p['pos'], cursor=s8['sel'][1])
         before8, at8 = s8['text'], s8['sel'][1]
         typ('hao')
         key('space')
@@ -285,29 +310,35 @@ with tempfile.TemporaryDirectory(prefix='cursive-ime-') as directory:
         check('S8b 点过去之后接着输入，落在点的地方', len(c2) >= 1 and s8b['text'] == before8[:at8] + c2 + before8[at8:],
               committed=c2)
 
-        # ---- S9 候选期间切标签 ----
+        # ---- S9 候选期间切标签（真按键 ⌃⇥ / ⌃⇧⇥）----
+        # 预期：另一个标签一个字都不多（最怕的是组字的尾巴落进刚切过去的那一份）；原标签里落下的
+        # 至多一段、落在原处；切过去之后接着输入照常
         opened = cmd('open-b')  # 第二个标签从文件树开，开完切回原标签
         s = cmd('prepare', where='paragraph')
         tab_a, at, before = s['tab'], s['sel'][1], s['text']
         typ('qiehuan')
         time.sleep(0.3)
+        mid = cmd('state')
         key('tab', 'ctrl')
         time.sleep(0.6)
         s9 = cmd('state')
-        c = commits(s9['log'])
-        check('S9 候选期间切标签：另一个标签里一个字都没有多', s9['tab'] != tab_a
-              and s9['text'] == opened['bText'] and not s9['composing'], committed=c, landedIn=s9['tab'])
+        log9 = mid['log'] + s9['log']
+        check('S9 候选期间按 ⌃⇥ 切标签：切过去了，另一个标签里一个字都没有多', s9['tab'] != tab_a
+              and s9['text'] == opened['bText'] and not s9['composing'], landedIn=s9['tab'])
+        bat = s9['sel'][1]
         typ('hao')
         key('space')
         time.sleep(0.4)
         s9b = cmd('state')
         c2 = commits(s9b['log'])
-        bat = s9['sel'][1]
         check('S9b 切过去之后在新标签里输入照常', len(c2) >= 1
               and s9b['text'] == s9['text'][:bat] + c2 + s9['text'][bat:], committed=c2)
-        s9c = cmd('menu', action='file:prev-tab', wait=400)
-        check('S9c 切回原标签：组字时提交的那段至多落一次、落在原处', s9c['tab'] == tab_a
-              and s9c['text'] == before[:at] + c + before[at:], committed=c)
+        key('tab', 'ctrl', 'shift')
+        time.sleep(0.6)
+        s9c = cmd('state')
+        got = landed(before, s9c['text'], at)
+        check('S9c ⌃⇧⇥ 切回原标签：组字时显示的那段至多落一次、落在原处', s9c['tab'] == tab_a
+              and got in (marked(log9), commits(log9), ''), shown=marked(log9), landed=got)
     finally:
         win.close()
 

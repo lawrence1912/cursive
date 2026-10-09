@@ -92,11 +92,12 @@ void (async () => {
         await sleep(cmd.wait ?? 200)
         return state()
       case 'point': {
-        // 某一行在屏幕上的位置（点，左上为原点）：窗口左上角 + 标题栏（全尺寸内容视图时为 0）+ 元素坐标
+        // 「第二段」那一行里某个字的**页面坐标**。换成屏幕坐标要加窗口在屏幕上的原点，那个数由驱动
+        // 从窗口服务器读（`ime-driver bounds`）—— 全尺寸内容视图下网页从窗口顶边就开始了，
+        // 拿 outerHeight - innerHeight 当标题栏去推会整整偏一截（2026-10-08 点进了下面的表格）
         const at = lineFrom('第二段：点到这里。') - 3
         const c = view.coordsAtPos(at)
-        const chrome = window.outerHeight - window.innerHeight
-        return { x: window.screenX + c.left + 2, y: window.screenY + chrome + (c.top + c.bottom) / 2, pos: at }
+        return { cx: c.left + 2, cy: (c.top + c.bottom) / 2, pos: at }
       }
       case 'open-b': {
         const row = [...document.querySelectorAll('.sb-row')].find((r) => r.dataset.path?.endsWith('/b.md'))

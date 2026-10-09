@@ -578,6 +578,11 @@ final class MainWebView: WKWebView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if smokeAuto && !smokeKeys { return true }
         if event.modifierFlags.contains(.command) { return false }
+        // ⌃⇥ / ⌃⇧⇥（切标签）是菜单里仅有的两条**不带 ⌘** 的键（判断 1 的同一条理由）。交给
+        // WKWebView 的话它把这一下当成普通按键派进页面（落成一次 Tab 的 keydown），菜单永远收不到 ——
+        // 从 0.2.x 加上这两条起键盘就切不了标签，菜单点得动。探针派的都是菜单动作，所以一直没现形；
+        // 2026-10-08 第八节 17 的真按键走查才第一次逮到
+        if event.modifierFlags.contains(.control) && event.keyCode == 48 { return false }
         return super.performKeyEquivalent(with: event)
     }
 
