@@ -322,6 +322,15 @@ if sys.argv[1] == 'tables.md':
     ok = ok and th.get('firstOn') is True and th.get('secondOn') is True
     ok = ok and th.get('stillRendered') == 2
     ok = ok and th.get('bar') is True          # 工具栏跟着走到第二张
+    # 第八节 9：从第一张表第一格起贴一块 2×3（Excel 的 TSV，带引号那一格里有换行）——
+    # 往右补一列、往下补一行，只换目标格子那一段（a / b 后面的 padding 原样留着）；
+    # 菜单撤销一次，文档逐字节回到原样
+    gp = r.get('gridPasteProbe') or {}
+    ok = ok and not gp.get('err')
+    ok = ok and gp.get('pasted') == ['| 一表左 | 一表右 |   |', '| ------ | ------ | --- |',
+                                     '| 甲      | 乙      | 丙 |', '| 丁 | 戊 己 | 庚 |']
+    ok = ok and gp.get('note') == '粘进了 2 行 × 3 列（⌘Z 一次全部撤回）'
+    ok = ok and gp.get('undone') is True
 if sys.argv[1] == 'table.md':
     ok = ok and (r['counts'].get('cm-lp-tableview', 0) >= 1)
     # P2-6：点单元格 → 表格**留在渲染态**、焦点落进 contenteditable 的格子里

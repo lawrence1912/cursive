@@ -373,6 +373,7 @@ const zh = {
   'nav.noForward': '没有可以前进的位置',
   'note.reopenNone': '没有可以重新打开的标签',
   'note.cellMultiline': '表格格子放不下换行：粘进来的 {n} 行已并成一行',
+  'note.gridPasted': '粘进了 {rows} 行 × {cols} 列（⌘Z 一次全部撤回）',
   'note.replaced': '已替换 {files} 个文件里的 {hits} 处',
   'note.replacedNone': '一处都没改 —— 文件可能在搜完之后变了，重搜一次再试',
   'note.replaceSkipped': '（{n} 个文件跳过了：内容与搜到时对不上）',

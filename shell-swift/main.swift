@@ -4246,6 +4246,46 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           }
         }
 
+        // 第八节 9：往表格里粘 Excel / Numbers 复制来的几行几列。真的派一次 paste 事件
+        // （WKWebView 里 DataTransfer 造得出来、也带得上数据），从第一张表的第一格起贴 2×3 ——
+        // 那张表往右补一列、往下补一行，带引号的那一格里的换行压成空格；
+        // 然后走菜单撤销**一次**，文档必须逐字节回到原样（整次粘贴是一个事务）。
+        // **贴第一张、不贴第二张**：前面的探针在文末紧贴着第二张表追加过几行字，没有空行隔开，
+        // 按 GFM 那几行就是第二张表的行 —— 贴上去会填进它们里面，结果随别的探针飘
+        let gridPasteProbe = null
+        if (path.indexOf('tables.md') >= 0) {
+          try {
+            const gv = window.__cursive.view
+            const before = gv.state.doc.toString()
+            const firstView = document.querySelectorAll('.cm-lp-tableview')[0]
+            const target = firstView ? firstView.querySelector('td') : null
+            if (target) {
+              target.focus()
+              await wwait(160)
+              // 聚焦会让那张表进就地编辑态、格子可能被换掉 —— 派事件之前重新取一次
+              const cell = document.querySelectorAll('.cm-lp-tableview')[0].querySelector('td')
+              const dt = new DataTransfer()
+              dt.setData('text/plain', '甲\\t乙\\t丙\\n丁\\t"戊\\n己"\\t庚\\n')
+              cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+              await wwait(300)
+              const text = gv.state.doc.toString()
+              const from = text.indexOf('| 一表左')
+              const pasted = text.slice(from, text.indexOf('\\n\\n', from)).split('\\n')
+              const noteEl = document.getElementById('status-note')
+              const note = noteEl.firstChild ? noteEl.firstChild.textContent : ''
+              window.__shellEmit('menu', 'edit:undo')
+              await wwait(200)
+              gridPasteProbe = { pasted, note, undone: gv.state.doc.toString() === before }
+              noteEl.textContent = ''
+              gv.dispatch({ selection: { anchor: 0 } })
+              gv.focus()
+              await wwait(120)
+            }
+          } catch (e) {
+            gridPasteProbe = { err: String(e) }
+          }
+        }
+
         // 走查④：**切源码模式，阅读位置要稳**。切换是一次 reconfigure：文档没变，
         // 可整篇的高度全变了（图/公式/表换成源码），滚动位置按像素留在原地 =
         // 看的那一行早跑没了。量的是「视口顶上那一行的行号」，切过去、切回来各一次
@@ -6561,6 +6601,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           dragProbe,
           mathTailProbe,
           tableHopProbe,
+          gridPasteProbe,
           modeProbe,
           imeProbe,
           sbToggle: { afterToggle: sbAfterToggle, sbClassAfter, restored: sbRestored },

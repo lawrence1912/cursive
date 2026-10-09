@@ -354,6 +354,7 @@ const en: Record<Key, string> = {
   'nav.noForward': 'Nothing to go forward to',
   'note.reopenNone': 'No closed tabs to reopen',
   'note.cellMultiline': 'Table cells can’t hold line breaks: the {n} pasted lines were joined into one',
+  'note.gridPasted': 'Pasted {rows} rows × {cols} columns (⌘Z undoes all of it)',
   'note.replaced': 'Replaced {hits} hits in {files} files',
   'note.replacedNone': 'Nothing was replaced — the files may have changed since the search; search again',
   'note.replaceSkipped': '({n} files skipped: contents no longer match the search)',

@@ -15,6 +15,7 @@ import { EMOJI } from '../emoji'
 import { openTarget, resolveLink } from '../link'
 import { isHiddenInline } from '../inline-text'
 import { clipboardMarkdown } from '../paste'
+import { clipboardGrid } from '../table-paste'
 import { note } from '../../ui/note'
 import { parsedTree } from '../syntax'
 import { Reveal, revealScope } from './reveal'
@@ -510,6 +511,95 @@ export function insertColAt(
     effects: setTableEdit.of(tableFrom),
     userEvent: 'input'
   }
+}
+
+/**
+ * 把一块矩形数据（Excel / Numbers 复制来的几行几列，见 `editor/table-paste.ts`）从第 row 行第 col 格起
+ * 往右下填（第八节 9）。行不够往下补、列不够往右补；**整次一个事务**，一次撤销全部恢复。
+ *
+ * 与改一格（`writeCell`）同一个分寸：只替换目标格子那一段文字，行里其余字节（padding、竖线）
+ * 一个不动；补列走「追加列」那套写法（分隔行补 ` --- `），补出来的行一律带首尾竖线。
+ * 填进去的字照样过 `escapeCell`：`|` 转义、换行压成空格。光标落在起点那一格的末尾。
+ */
+export function pasteGrid(
+  state: EditorState,
+  tableFrom: number,
+  row: number,
+  col: number,
+  grid: string[][]
+): TransactionSpec | null {
+  const { first, last } = tableLines(state, tableFrom)
+  if (last < first + 1 || !grid.length || row < 0 || col < 0) return null
+  const doc = state.doc
+  const delimNo = first + 1
+  const width = Math.max(...grid.map((r) => r.length))
+  const cols = Math.max(slots(doc.line(delimNo).text).length, col + width)
+  const bodyRows = last - delimNo
+  const lastRow = Math.max(bodyRows, row + grid.length - 1)
+
+  /** 第 domRow 行（0 = 表头）要填的那一行数据；不在这次粘贴范围里是 undefined */
+  const dataFor = (domRow: number): string[] | undefined => grid[domRow - row]
+  const fill = (text: string, cells: string[] | undefined): string => {
+    if (!cells) return text
+    // 从右往左写：左边那几格的位置不受右边改动影响
+    for (let j = cells.length - 1; j >= 0; j--) text = setCellText(text, col + j, escapeCell(cells[j] ?? ''))
+    return text
+  }
+
+  const changes: { from: number; to?: number; insert: string }[] = []
+  let anchor = -1
+  let delta = 0
+  for (let no = first; no <= last; no++) {
+    const line = doc.line(no)
+    const domRow = no === first ? 0 : no - delimNo
+    let text = widenRow(line.text, cols, no === delimNo)
+    if (no !== delimNo) text = fill(text, dataFor(domRow))
+    if (domRow === row && no !== delimNo) anchor = line.from + delta + (cellSpan(text, col)?.to ?? 0)
+    if (text !== line.text) {
+      changes.push({ from: line.from, to: line.to, insert: text })
+      delta += text.length - line.text.length
+    }
+  }
+  // 往下补的行**一律带首尾竖线**：没有边框的写法（`a | b`）表达不了空的首格 —— 开头那根竖线
+  // 会被当成边框吃掉，后面的格子整排左移一格。同一张表里两种写法混用是合法的 GFM
+  let tail = ''
+  for (let r = bodyRows + 1; r <= lastRow; r++) {
+    const text = fill(`|${Array.from({ length: cols }, () => '   ').join('|')}|`, dataFor(r))
+    if (r === row) anchor = doc.line(last).to + delta + tail.length + 1 + (cellSpan(text, col)?.to ?? 0)
+    tail += `\n${text}`
+  }
+  if (tail) changes.push({ from: doc.line(last).to, insert: tail })
+  if (!changes.length) return null
+  return {
+    changes,
+    ...(anchor >= 0 ? { selection: { anchor } } : {}),
+    effects: setTableEdit.of(tableFrom),
+    userEvent: 'input.paste'
+  }
+}
+
+/** 一行补到 `cols` 格：在行尾追加空格子（分隔行补 ` --- `）。写法同 `insertColAt` 追加到末尾那一支 */
+function widenRow(text: string, cols: number, delim: boolean): string {
+  const body = delim ? ' --- ' : '   '
+  let out = text
+  for (let have = slots(out).length; have < cols; have++) {
+    const rel = out.replace(/\s+$/, '').length
+    const head = out.slice(0, rel)
+    out = head + (/\|$/.test(head) ? `${body}|` : ` |${body}|`) + out.slice(rel)
+  }
+  return out
+}
+
+/** 把一行里第 index 格的文字换成 value（同 `cellEdit`：空格子连两边的空白一起换，落成 `| x |`） */
+function setCellText(text: string, index: number, value: string): string {
+  const span = cellSpan(text, index)
+  if (!span) return text
+  if (span.from < span.to || !value) return text.slice(0, span.from) + value + text.slice(span.to)
+  let f = span.from
+  let t = span.to
+  while (f > 0 && text[f - 1] === ' ') f--
+  while (t < text.length && text[t] === ' ') t++
+  return `${text.slice(0, f)} ${value} ${text.slice(t)}`
 }
 
 /** 删掉第 col 列（含它的分隔符）；只剩一列时拒绝 —— 那就不是表格了 */
@@ -1201,6 +1291,10 @@ function editable(cell: HTMLTableCellElement): void {
  *
  * 换行另说：Markdown 的表格行就是一行，**格子里放不下换行**。多行并成一空格分隔的
  * 一行，并且**说一句** —— 从前是默默压扁，人只会觉得「怎么少了两行」。
+ *
+ * **从电子表格复制来的几行几列**（第八节 9）不走这条路：按矩形从这一格起往右下填，
+ * 行列不够就补，一次撤销全部恢复（`pasteGrid`）。只复制了一格的，取那一格的字插在光标处。
+ * 认不认得出来见 `editor/table-paste.ts`；普通的多行文字照旧并成一行。
  */
 function onCellPaste(e: ClipboardEvent, cell: HTMLTableCellElement): void {
   const data = e.clipboardData
@@ -1208,6 +1302,24 @@ function onCellPaste(e: ClipboardEvent, cell: HTMLTableCellElement): void {
   e.preventDefault()
   const plain = data.getData('text/plain')
   const html = data.getData('text/html') || null
+  const grid = clipboardGrid(plain, html)
+  if (grid && (grid.length > 1 || grid[0]!.length > 1)) {
+    // `findFromDOM` 认的是编辑器的根（它在给的元素**里面**找 `.cm-content`）—— 拿格子去问永远是 null
+    const root = cell.closest<HTMLElement>('.cm-editor')
+    const view = root ? EditorView.findFromDOM(root) : null
+    const tf = view ? tableFromDOM(view, cell) : -1
+    const spec = view && tf >= 0 ? pasteGrid(view.state, tf, rowOf(cell), cell.cellIndex, grid) : null
+    if (view && spec) {
+      view.dispatch(spec)
+      note(t('note.gridPasted', { rows: grid.length, cols: grid[0]!.length }))
+    }
+    return
+  }
+  if (grid) {
+    cell.focus()
+    document.execCommand('insertText', false, grid[0]![0]!.replace(/[\r\n]+/g, ' '))
+    return
+  }
   void clipboardMarkdown(plain, html).then((md) => {
     const { text, lines } = cellPasteText(md)
     if (lines > 1) note(t('note.cellMultiline', { n: lines }))
