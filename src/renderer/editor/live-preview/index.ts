@@ -7,7 +7,8 @@ import {
   type EditorState,
   type Extension,
   type Range,
-  type Text
+  type Text,
+  type Transaction
 } from '@codemirror/state'
 import {
   Decoration,
@@ -144,6 +145,25 @@ const openLinkOnClick = EditorView.domEventHandlers({
  * 光标碰到时由 decorate.ts 回显源码（两个集合不会重叠：同一套 reveal 判定）。
  * 三种块共用一次全文遍历 —— 各开一个 StateField 就是白跑三遍语法树。
  */
+/**
+ * 表格编辑态**换了一张表**：进表、出表、从一张跳到另一张。
+ *
+ * 格子里每打一个字（`writeCell`）、格与格之间每挪一下（`enter` / `move`），都会再发一次
+ * `setTableEdit` —— 编辑态要靠它续命（见 `tableEditField`），可它指的还是同一张表，
+ * 编辑态一点没变：那只是一次普通的打字 / 挪光标，脏区就是这张表自己。从前见到这个效应
+ * 一律全量重建，一万行的文档里格子每打一个字就把全文的块重扫一遍（第八节 19）。
+ *
+ * 「还是同一张」按位置认：老的起点跟着这次改动映射过来，两个方向有一个对得上就是同一张
+ * （没有前导竖线的表，第一格的改动就从表的起点开始，只认一个方向会把它误判成换了表）。
+ */
+function tableEditMoved(tr: Transaction): boolean {
+  if (!tr.effects.some((e) => e.is(setTableEdit))) return false
+  const before = tableEditAt(tr.startState)
+  const after = tableEditAt(tr.state)
+  if (before == null || after == null) return before !== after
+  return tr.changes.mapPos(before, -1) !== after && tr.changes.mapPos(before, 1) !== after
+}
+
 /** 导出给单测：`test/block.test.ts` 要能从 state 上取出这份装饰，验证增量那条路 */
 export const blockField = StateField.define<DecorationSet>({
   create: buildBlocks,
@@ -151,10 +171,8 @@ export const blockField = StateField.define<DecorationSet>({
     // 只读切换（第八节 5）同样是「每一个块都可能跟着变样」：回显钉住、表格换成不可编辑的那一份
     const effect =
       tr.startState.readOnly !== tr.state.readOnly ||
-      tr.effects.some(
-        (e) =>
-          e.is(themeEffect) || e.is(setTableEdit) || e.is(toggleCalloutFold) || e.is(toggleSectionFold)
-      )
+      tableEditMoved(tr) ||
+      tr.effects.some((e) => e.is(themeEffect) || e.is(toggleCalloutFold) || e.is(toggleSectionFold))
     // 后台 parse 推进（空事务）也要认：文档大到一次 ensure 解析不完时，块级装饰
     // 只在这条路上才等得到剩下的树 —— 否则半截表格就一直半截着。
     // 比的是**覆盖长度**而不是树对象：`ensureSyntaxTree` 每跑一次都会换一个新的 Tree
@@ -162,7 +180,11 @@ export const blockField = StateField.define<DecorationSet>({
     // 全量重建永远停不下来，下面那条增量的路一次都轮不上（实测 40/40 次全落在这儿）。
     // 覆盖长度按 `parsedExtent` 量：`tree.length` 在外层 front matter 语法解析完之后就是
     // 全文，正文停在半路也一样 —— 拿它比，这条路一次都走不到（见 syntax.ts）
-    const reachBefore = parsedExtent(syntaxTree(tr.startState))
+    //
+    // 老的覆盖长度要**先按这次改动映射过来**再比（第八节 19 顺带修的）：插进一个字，覆盖长度
+    // 本来就跟着长一个字，那不是后台 parse 推进了 —— 拿原始长度比的话每插一个字都算
+    // 「长出来了」，从老末尾到新末尾那一段被当成新解析出来的，文末那个块每打一个字白建一遍
+    const reachBefore = tr.changes.mapPos(parsedExtent(syntaxTree(tr.startState)), 1)
     const grew = parsedExtent(syntaxTree(tr.state)) > reachBefore
     const pointerChanged = tr.startState.field(pointerSelection, false) !== tr.state.field(pointerSelection, false)
     if (!tr.docChanged && !effect && !grew && tr.state.field(pointerSelection, false))
@@ -171,8 +193,8 @@ export const blockField = StateField.define<DecorationSet>({
       return carryToc(tr.startState, tr.state, value.map(tr.changes))
     // 三条路共用同一台增量机器（见 `patchBlocks`）：挪光标只重建翻面的那两个块
     // （3602 行实测 10.9ms → 0.3ms）、打字只重建改动落在的那个块、后台 parse 推进
-    // 只重建新长出来的那一段。效应那三个（主题 / 表格编辑态 / 折叠）是**每一个**块
-    // 都可能跟着变样，没有脏区可言，只能全量。
+    // 只重建新长出来的那一段。效应那几个（主题 / 表格编辑态换了一张表 / 折叠）是
+    // **每一个**块都可能跟着变样，没有脏区可言，只能全量。
     if (!effect) {
       const patched = patchBlocks(
         value,

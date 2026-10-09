@@ -2,7 +2,7 @@ import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
-import { setTableEdit, tableEditField } from '../src/renderer/editor/live-preview/table'
+import { cellPos, setTableEdit, tableEditField, writeCell } from '../src/renderer/editor/live-preview/table'
 import { blockField, buildBlocks, livePreview, patchBlocks } from '../src/renderer/editor/live-preview/index'
 import { revealScope } from '../src/renderer/editor/live-preview/reveal'
 
@@ -544,5 +544,123 @@ describe('打字时不重扫全文', () => {
       ensureSyntaxTree(state, state.doc.length, 5000)
       expect(tableWidget(state), `第 ${i} 个字`).toBe(first)
     }
+  })
+})
+
+describe('插字不算后台 parse 推进（第八节 19 顺带修的）', () => {
+  it('文档以一张表收尾：在开头打字，文末那张表原样保留', () => {
+    const body = Array.from({ length: 80 }, (_, i) => `第 ${i + 1} 段正文。`).join('\n\n')
+    const doc = `${body}\n\n| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n`
+    let state = EditorState.create({ doc, extensions: [cursiveMarkdown(), livePreview()] })
+    ensureSyntaxTree(state, doc.length, 5000)
+    // 先走一个事务让快照追平（理由同上面「打字时不重扫全文」那条）
+    state = state.update({ selection: { anchor: 3 } }).state
+    const tableAt = () => state.doc.toString().indexOf('| 甲')
+    const widget = (): unknown => {
+      let found: unknown = null
+      state.field(blockField).between(tableAt(), tableAt() + 1, (_f, _t, v) => {
+        found = (v.spec as { widget?: unknown }).widget
+      })
+      return found
+    }
+    const first = widget()
+    expect(first).toBeTruthy()
+    // 覆盖长度跟着插进来的字长：从前拿原始长度比，每个字都被当成「后台又解析出一段」，
+    // 从老文末到新文末那一段（正好是这张表）跟着白建一遍
+    for (let i = 1; i <= 5; i++) {
+      state = state.update({ changes: { from: 3 + i, insert: '字' }, selection: { anchor: 4 + i } }).state
+      ensureSyntaxTree(state, state.doc.length, 5000)
+      expect(widget(), `第 ${i} 个字`).toBe(first)
+    }
+  })
+})
+
+describe('表格格子里打字走增量（第八节 19）', () => {
+  // 两张表隔得很远：在第一张的格子里连打，第二张的 widget 一次都不该被重建
+  const far = Array.from({ length: 120 }, (_, i) => `第 ${i + 1} 段正文，离两张表都很远。`)
+  const doc = [
+    '| 甲 | 乙 |', '| --- | --- |', '| 1 | 2 |', '',
+    ...far.flatMap((line) => [line, '']),
+    '| 丙 | 丁 |', '| --- | --- |', '| 3 | 4 |', ''
+  ].join('\n')
+
+  function dump(set: ReturnType<typeof buildBlocks>, state: EditorState): string[] {
+    const out: string[] = []
+    set.between(0, state.doc.length, (f, t, v) => {
+      const widget = (v.spec as { widget?: { constructor: { name: string } } }).widget
+      out.push(`${f}-${t}:${widget?.constructor.name ?? '?'}`)
+    })
+    return out
+  }
+
+  function widgetAt(state: EditorState, pos: number): unknown {
+    let found: unknown = null
+    state.field(blockField).between(pos, pos + 1, (_f, _t, v) => {
+      found = (v.spec as { widget?: unknown }).widget
+    })
+    return found
+  }
+
+  /** 每一步先把树钉死再读字段（理由同上面「打字时不重扫全文」那条） */
+  function next(state: EditorState, spec: Parameters<EditorState['update']>[0]): EditorState {
+    const now = state.update(spec).state
+    ensureSyntaxTree(now, now.doc.length, 5000)
+    return now
+  }
+
+  function opened(): EditorState {
+    const state = EditorState.create({ doc, extensions: [cursiveMarkdown(), livePreview()] })
+    ensureSyntaxTree(state, doc.length, 5000)
+    // 进第一张表的第 1 行第 0 格 —— 与点进格子那条路（table.ts 的 enter）同一个事务形状
+    return next(state, { selection: { anchor: cellPos(state, 0, 1, 0)!.to }, effects: setTableEdit.of(0) })
+  }
+
+  it('同一张表里连打：远处那张表原样保留，增量与全量逐项相同', () => {
+    let state = opened()
+    const farAt = () => state.doc.toString().indexOf('| 丙')
+    const first = widgetAt(state, farAt())
+    expect(first).toBeTruthy()
+    // writeCell 每一笔都带着 setTableEdit（编辑态靠它续命）：从前一见这个效应就全量重建
+    let text = '1'
+    for (let i = 0; i < 10; i++) {
+      text += String(i)
+      state = next(state, writeCell(state, 0, 1, 0, text, text.length)!)
+      expect(state.field(tableEditField), `第 ${i} 个字`).toBe(0)
+      expect(widgetAt(state, farAt()), `第 ${i} 个字`).toBe(first)
+      expect(dump(state.field(blockField), state)).toEqual(dump(buildBlocks(state), state))
+    }
+    // 格与格之间挪一下（同样带着效应）也不重建远处那张
+    state = next(state, { selection: { anchor: cellPos(state, 0, 1, 1)!.from }, effects: setTableEdit.of(0) })
+    expect(widgetAt(state, farAt())).toBe(first)
+    expect(dump(state.field(blockField), state)).toEqual(dump(buildBlocks(state), state))
+  })
+
+  it('没有前导竖线的表：第一格的改动从表的起点开始，照样认得出是同一张', () => {
+    const bare = ['甲 | 乙', '--- | ---', '1 | 2', '', ...far.flatMap((line) => [line, '']), '| 丙 | 丁 |', '| --- | --- |', '| 3 | 4 |', ''].join('\n')
+    let state = EditorState.create({ doc: bare, extensions: [cursiveMarkdown(), livePreview()] })
+    ensureSyntaxTree(state, bare.length, 5000)
+    state = next(state, { selection: { anchor: 1 }, effects: setTableEdit.of(0) })
+    const farAt = () => state.doc.toString().indexOf('| 丙')
+    const first = widgetAt(state, farAt())
+    expect(first).toBeTruthy()
+    state = next(state, writeCell(state, 0, 0, 0, '甲乙', 2)!)
+    expect(state.doc.sliceString(0, 2)).toBe('甲乙')
+    expect(widgetAt(state, farAt())).toBe(first)
+    expect(dump(state.field(blockField), state)).toEqual(dump(buildBlocks(state), state))
+  })
+
+  it('换一张表、退出编辑：编辑态真的变了，照旧全量，与全量逐项相同', () => {
+    let state = opened()
+    const farFrom = state.doc.toString().indexOf('| 丙')
+    const before = widgetAt(state, farFrom)
+    // 跳到远处那张表：它要从「渲染态」换成「编辑态」，widget 必须换新
+    state = next(state, { selection: { anchor: cellPos(state, farFrom, 1, 0)!.from }, effects: setTableEdit.of(farFrom) })
+    expect(state.field(tableEditField)).toBe(farFrom)
+    expect(widgetAt(state, farFrom)).not.toBe(before)
+    expect(dump(state.field(blockField), state)).toEqual(dump(buildBlocks(state), state))
+    // Esc：退出编辑，光标留在原处（表格回落源码）
+    state = next(state, { selection: state.selection, effects: setTableEdit.of(null) })
+    expect(state.field(tableEditField)).toBe(null)
+    expect(dump(state.field(blockField), state)).toEqual(dump(buildBlocks(state), state))
   })
 })
