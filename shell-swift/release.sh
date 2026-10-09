@@ -854,9 +854,10 @@ run_case links.md
 
 # P4-2 真分页：拿一份足够长的文档单独导一次 PDF。八个夹具都只有一两页，而页数又随
 # 探针改文档而变 —— 只有专门造一份长文档，「分页」这件事才断言得住（老实现无论多长都是一页）
+# 500 段而不是 200 段：查找刻度那条断言要有超过 400 排像素落着命中（见下面 MARKS）
 python3 - > "$FIX/long.md" <<'LONG'
 print('# 长文档（真分页用）\n')
-for i in range(200):
+for i in range(500):
     print('第 %d 段。' % (i + 1) + '中文正文内容，用来把文档撑到好几页。' * 2 + '\n')
 LONG
 rm -f /tmp/cursive-shell-pdf.json /tmp/cursive-shell-e2e.json
@@ -906,6 +907,22 @@ print(('PASS ' if ok else 'FAIL ') + '全选选的是全文 '
       + str({k: s.get(k) for k in ('from', 'to', 'docLen', 'viewport', 'awayOK', 'refocused')}))
 sys.exit(0 if ok else 1)
 SELALL
+
+# 第八节 18 顺带修的：**查找刻度从前最多画 400 条**。命中一密（这份夹具一千处、五百行），
+# 第 400 条落在滚动条六成高的地方，下面那四成的命中一条都不画。同样只有长文档测得出来
+python3 - <<'MARKS'
+import json, sys
+m = json.load(open('/tmp/cursive-shell-e2e.json'))['result'].get('marksProbe') or {}
+# 有超过 400 排落着命中，这条用例才证明得了东西（老代码在这儿正好截断）
+ok = m.get('shown') is True and m.get('rows', 0) > 400
+# 刻度一路画到底：最后一段正文在文末，它那条刻度贴着滚动条下沿
+ok = ok and m.get('height', 0) > 0 and m.get('bottom', 0) >= 0.95 * m['height']
+# 计数与刻度读的是同一份位置表：一千处，一处不少
+ok = ok and str(m.get('count', '')).endswith('/1000')
+print(('PASS ' if ok else 'FAIL ') + '查找刻度铺满整根滚动条 '
+      + str({k: m.get(k) for k in ('runs', 'rows', 'bottom', 'height', 'count')}))
+sys.exit(0 if ok else 1)
+MARKS
 
 # 崩溃恢复不许抢焦点：种一份 scratch 草稿，再把 scratchList 的应答拖慢到 1.2s，
 # 逼出「文件先到、恢复后到」那条顺序 —— 正常顺序下 scratchList 几毫秒就回来，测不到。

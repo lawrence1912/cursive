@@ -5997,6 +5997,51 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             await swait(60)
           }
         }
+        // 第八节 18 顺带修的：滚动条上的查找刻度从前**最多画 400 条** —— 命中一密，
+        // 第 400 条落在滚动条六成高的地方，下面那四成的命中一条都不画。同样**只有长文档
+        // 测得出来**，而且得有超过 400 排像素落着命中（long.md 因此是 500 段；`rows`
+        // 守的是「这条用例还证明得了东西」，同 selectAllProbe 的 viewportSmaller）
+        let marksProbe = null
+        {
+          const mwait = (ms) => new Promise(r => setTimeout(r, ms))
+          const mv = window.__cursive.view
+          if (mv.state.doc.length > 4000) {
+            window.__shellEmit('menu', 'edit:find')
+            await mwait(120)
+            const minput = document.querySelector('.cs-panel input[name="search"]')
+            if (minput) {
+              minput.value = '正文'
+              minput.dispatchEvent(new Event('input', { bubbles: true }))
+              // 刻度走 CM 的测量周期（rAF 里读几何、再写 DOM），给它几帧
+              await mwait(400)
+              const box = document.querySelector('.cm-scroll-marks')
+              const els = box ? [...box.querySelectorAll('.cm-scroll-mark')] : []
+              let rows = 0
+              let bottom = 0
+              for (const el of els) {
+                // 一排一条高 2px；连成一段的盖住 n 排就是 n + 1 px 高
+                const tall = el.offsetHeight
+                rows += tall - 1
+                bottom = Math.max(bottom, parseFloat(el.style.top) + tall)
+              }
+              marksProbe = {
+                shown: !!box && !box.hidden,
+                runs: els.length,
+                rows,
+                bottom,
+                height: box ? box.getBoundingClientRect().height : 0,
+                count: (document.querySelector('.cs-count') || {}).textContent || ''
+              }
+              // 收干净：查询清空、面板关掉 —— 查询留在 state 里的话，状态栏那格计数会一路跟到后面
+              minput.value = ''
+              minput.dispatchEvent(new Event('input', { bubbles: true }))
+              await mwait(60)
+              const mclose = document.querySelector('.cs-panel button[name="close"]')
+              if (mclose) mclose.click()
+              await mwait(60)
+            }
+          }
+        }
         // P3-7 多窗口：放在**最末尾** —— 新窗口会抢走 key，前面那些量位置/焦点的断言
         // 必须都跑完了。窗口数由壳侧在写 JSON 时补上（网页看不到原生的窗口表）
         // 契约 v14：带文件夹开新窗口（「打开文件夹 = 新窗口」走的就是这条）
@@ -6034,6 +6079,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           tableEdit,
           trace,
           selectAllProbe,
+          marksProbe,
           handles,
           treeProbe,
           findProbe,

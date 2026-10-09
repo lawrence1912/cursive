@@ -19,13 +19,11 @@ import { searchIndex } from './search-index'
  *   这根轴上真正的位置（高度还没量准的那些用的是 CM 的估值，随后 `geometryChanged` 会重画）。
  */
 
-/** 画出来的刻度上限：再多也只是叠在同一排像素上 */
-const MAX_MARKS = 400
-
 interface Layout {
   top: number
   height: number
-  marks: number[]
+  /** 有命中的像素行，挨着的连成一段：`[第一排, 最后一排]` */
+  runs: [number, number][]
 }
 
 /** 查询签名：面板关着就是空串（= 不画）。文本或三个开关一变就重扫 */
@@ -34,6 +32,29 @@ function signature(state: EditorState): string {
   const q = getSearchQuery(state)
   if (!q.search || !q.valid) return ''
   return `${q.search}\u0000${q.caseSensitive}\u0000${q.regexp}\u0000${q.wholeWord}`
+}
+
+/**
+ * 命中落在滚动条的哪几排像素上：每处按它那一行的顶边折算（`topOf`），同一排的合成一处，
+ * 挨着的几排连成一段。刻度本来就是 2px 高、一排一条，挨着的画出来就是一整条，
+ * 合成一段只是少建几个节点 —— 有几排、在哪几排，与一排一条画出来的一模一样。
+ *
+ * 从前这里**最多画 400 条**（「再多也只是叠在同一排像素上」）：那句话只在滚动条不到
+ * 400px 高时成立。一万行、四千处命中、650px 的滚动条，第 400 条刻度落在六成高度上，
+ * 下面那四成的命中一条都没画 —— 正好把「命中都在哪儿」答错了一半。
+ * 现在不设上限：按排合并之后，段数天然不超过滚动条的像素高度。
+ */
+export function markRuns(starts: readonly number[], topOf: (pos: number) => number,
+                         total: number, height: number): [number, number][] {
+  const runs: [number, number][] = []
+  let last: [number, number] | undefined
+  for (const from of starts) {
+    const y = Math.round((topOf(from) / total) * height)
+    // 命中是升序来的，所以只比上一段就够
+    if (last && y <= last[1] + 1) last[1] = Math.max(last[1], y)
+    else runs.push((last = [y, y]))
+  }
+  return runs
 }
 
 /**
@@ -53,29 +74,31 @@ export function collectMarks(view: EditorView): Layout | null {
   const found = searchIndex(view.state)
   // 正则在这一刻跑不起来（边打边搜时必然路过）：这次不画，下一次再说
   if (!found) return null
-  const marks: number[] = []
-  let last = -1
-  for (const from of found.starts) {
-    const y = Math.round((view.lineBlockAt(from).top / total) * height)
-    // 命中是升序来的，所以只比上一条就够：同一排像素上的几处合成一条
-    if (y === last) continue
-    last = y
-    marks.push(y)
-    if (marks.length >= MAX_MARKS) break
-  }
-  return marks.length ? { top: scroller.offsetTop, height, marks } : null
+  const runs = markRuns(found.starts, (pos) => view.lineBlockAt(pos).top, total, height)
+  return runs.length ? { top: scroller.offsetTop, height, runs } : null
+}
+
+/** 与上一次画的一样就不动 DOM：打一个字通常一排刻度都不变 */
+function sameLayout(a: Layout | null, b: Layout | null): boolean {
+  if (!a || !b) return a === b
+  return a.top === b.top && a.height === b.height && a.runs.length === b.runs.length &&
+    a.runs.every((r, i) => r[0] === b.runs[i]![0] && r[1] === b.runs[i]![1])
 }
 
 export const scrollMarks = ViewPlugin.fromClass(
   class {
     private readonly dom: HTMLElement
     private sig: string
+    /** 上一次真的画上去的那一份（`paint` 拿它比，一样就不动 DOM） */
+    private painted: Layout | null = null
 
     constructor(private readonly view: EditorView) {
       this.dom = document.createElement('div')
       this.dom.className = 'cm-scroll-marks'
       // 读屏没必要念它：它说的事查找框里那个计数已经念过了
       this.dom.setAttribute('aria-hidden', 'true')
+      // 与 `painted = null`（什么都没画）对上：头一次量出来也是 null 时，paint 直接跳过
+      this.dom.hidden = true
       view.dom.appendChild(this.dom)
       this.sig = signature(view.state)
       this.schedule()
@@ -103,6 +126,8 @@ export const scrollMarks = ViewPlugin.fromClass(
     }
 
     private paint(layout: Layout | null): void {
+      if (sameLayout(layout, this.painted)) return
+      this.painted = layout
       if (!layout) {
         if (this.dom.childElementCount) this.dom.replaceChildren()
         this.dom.hidden = true
@@ -112,10 +137,12 @@ export const scrollMarks = ViewPlugin.fromClass(
       this.dom.style.top = `${layout.top}px`
       this.dom.style.height = `${layout.height}px`
       const frag = document.createDocumentFragment()
-      for (const y of layout.marks) {
+      for (const [first, lastRow] of layout.runs) {
         const el = document.createElement('div')
         el.className = 'cm-scroll-mark'
-        el.style.top = `${y}px`
+        el.style.top = `${first}px`
+        // 一排一条是 2px（CSS 里的默认高）；连成一段的拉长到盖住最后一排那 2px
+        if (lastRow > first) el.style.height = `${lastRow - first + 2}px`
         frag.appendChild(el)
       }
       this.dom.replaceChildren(frag)
