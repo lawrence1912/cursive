@@ -3597,6 +3597,41 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         }
     }
 
+    /// 菜单里每一条带快捷键的命令：`combo` 是规整过的写法（⌃⌥⇧⌘ 按固定顺序 + 小写键名），
+    /// 两条一样就是撞键。大写字母的键（"N" / "W"）在 AppKit 里本身就隐含 ⇧，规整时补上
+    static func menuKeys(_ menu: NSMenu, _ path: String = "") -> [[String: String]] {
+        var out: [[String: String]] = []
+        for mi in menu.items where !mi.isSeparatorItem {
+            // 菜单栏上那一排条目是 `NSMenuItem()` 建的，标题是 AppKit 给的默认值「NSMenuItem」——
+            // 名字在它的子菜单上（有子菜单的一律取子菜单的标题）
+            let title = mi.submenu?.title ?? mi.title
+            let here = path.isEmpty ? title : path + " › " + title
+            if let sub = mi.submenu {
+                out += menuKeys(sub, here)
+                continue
+            }
+            let key = mi.keyEquivalent
+            if key.isEmpty { continue }
+            var mods = mi.keyEquivalentModifierMask
+            let lower = key.lowercased()
+            if lower != key { mods.insert(.shift) }
+            var combo = ""
+            if mods.contains(.control) { combo += "⌃" }
+            if mods.contains(.option) { combo += "⌥" }
+            if mods.contains(.shift) { combo += "⇧" }
+            if mods.contains(.command) { combo += "⌘" }
+            let name: String
+            switch lower {
+            case "\t": name = "⇥"
+            case String(Character(Unicode.Scalar(UInt32(NSLeftArrowFunctionKey))!)): name = "←"
+            case String(Character(Unicode.Scalar(UInt32(NSRightArrowFunctionKey))!)): name = "→"
+            default: name = lower
+            }
+            out.append(["path": here, "combo": combo + name])
+        }
+        return out
+    }
+
     private func writeJSON(_ obj: Any, to path: String) {
         if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: path))
@@ -3711,13 +3746,18 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             }
             // 0.4.0 还的第四条账（真打印机）：菜单是原生的，网页那侧看不见 ——
             // 把「文件」菜单里那几条的键位报上去，让 release.sh 对账：
-            // ⌘P 必须是「打印…」，导出 PDF 让到 ⇧⌘P
+            // ⌘P 必须是「打印…」，导出 PDF 在 ⌥⌘P（第八节 21 从 ⇧⌘P 挪过来，那个键归命令面板）
             if let file = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == L("menu.file") })?.submenu {
                 obj["fileMenu"] = file.items.filter { !$0.isSeparatorItem }.map { mi -> [String: Any] in
                     ["title": mi.title, "key": mi.keyEquivalent,
-                     "shift": mi.keyEquivalentModifierMask.contains(.shift)]
+                     "shift": mi.keyEquivalentModifierMask.contains(.shift),
+                     "option": mi.keyEquivalentModifierMask.contains(.option)]
                 }
             }
+            // 第八节 21：**整份菜单**的快捷键，按「键 + 修饰键」规整之后报上去，release.sh 对账
+            // 「不许两条命令共用一个键」—— 撞了的话 AppKit 只认排在前面的那条，后面那条的键
+            // 一声不响地死掉（⇧⌘P：导出 PDF 与命令面板；⌘H：隐藏与隐藏其他，都这么死过）
+            if let main = NSApp.mainMenu { obj["menuKeys"] = Self.menuKeys(main) }
             // 0.3.0 T5：位置记忆按工作区分的键（release.sh 拿工作区根的 SHA-256 前 16 位对账）。
             // 报的是**算出来的键**，不是窗口上挂着的名字 —— 自检下压根不挂（见 applyFrameAutosave），
             // 而要守的正是「键是按工作区算的」这件事
@@ -6396,7 +6436,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         appMenu.addItem(item(L("menu.app.settings"), "app:preferences", key: ","))
         appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: L("menu.app.hide"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
-        appMenu.addItem(NSMenuItem(title: L("menu.app.hideOthers"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h"))
+        // ⌥⌘H（macOS 的通行键位）。从前漏了 ⌥：`NSMenuItem(title:action:keyEquivalent:)`
+        // 默认只带 ⌘，于是菜单上写着两条 ⌘H，按下去永远是上面那条「隐藏」
+        // （第八节 21 给整份菜单做撞键对账时查出来的）
+        let hideOthers = NSMenuItem(title: L("menu.app.hideOthers"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
         appMenu.addItem(NSMenuItem(title: L("menu.app.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
 
@@ -6425,13 +6470,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         file.addItem(item(L("menu.file.history"), "file:history", key: ""))
         file.addItem(.separator())
         file.addItem(item(L("menu.file.exportHtml"), "file:export-html", key: "e", modifiers: [.command, .shift]))
-        // 0.4.0 还的第四条账之后 **⌘P 归「打印」**（macOS 的通行键位），导出 PDF 让到 ⇧⌘P。
+        // 0.4.0 还的第四条账之后 **⌘P 归「打印」**（macOS 的通行键位）。
         // 从前的安排是「⌘P 直接导出 PDF」，理由是「那才是按 ⌘P 的人想要的」——
         // 有了真打印机路径之后这条理由不成立了：系统打印面板左下角就有「存为 PDF」，
-        // 而一台真打印机在从前那套里**根本够不着**
+        // 而一台真打印机在从前那套里**根本够不着**。
+        //
+        // 导出 PDF 当时让到 ⇧⌘P，**撞上了 0.2.0 的命令面板**：AppKit 取菜单里第一个匹配，
+        // 「文件」排在「视图」前面，于是 ⇧⌘P 一直是导出 PDF，命令面板的键从那时起就是死的
+        // （README 还写着 ⇧⌘P）。第八节 21 定下来：⇧⌘P 还给命令面板（同类编辑器的通行键位，
+        // 也比导出用得勤），导出 PDF 挪到 ⌥⌘P —— 紧挨着 ⌘P 打印，这份菜单里空着。
+        // 整份菜单不许两条命令共用一个键，release.sh 拿自检报上去的 `menuKeys` 对账
         let pdfItem = NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)),
                                  keyEquivalent: "p")
-        pdfItem.keyEquivalentModifierMask = [.command, .shift]
+        pdfItem.keyEquivalentModifierMask = [.command, .option]
         file.addItem(pdfItem)
         // 0.3.0 T3：三条导出连在一起。不给快捷键 —— ⌘P/⇧⌘E 已经占了两条顺手的键位，
         // 而剩下的空位没有一个是「导出长图」按下去顺理成章的（命令面板里一样找得到）

@@ -362,10 +362,22 @@ ok = ok and (v.get('plainItems') or []) == []
 li = v.get('linkItems') or []
 ok = ok and len(li) >= 2 and not any(it.startswith('/') for it in li)
 ok = ok and v.get('completeRestored') is True
-# 0.4.0 还的第四条账：⌘P 归「打印…」，导出 PDF 让到 ⇧⌘P（菜单是原生的，网页那侧看不见）
+# 0.4.0 还的第四条账：⌘P 归「打印…」；导出 PDF 当时让到 ⇧⌘P，撞上了命令面板，
+# 第八节 21 再挪到 ⌥⌘P（菜单是原生的，网页那侧看不见）
 fm = c.get('fileMenu') or []
-ok = ok and any(i['title'].startswith('打印') and i['key'] == 'p' and not i['shift'] for i in fm)
-ok = ok and any('PDF' in i['title'] and i['key'] == 'p' and i['shift'] for i in fm)
+ok = ok and any(i['title'].startswith('打印') and i['key'] == 'p' and not i['shift'] and not i['option'] for i in fm)
+ok = ok and any('PDF' in i['title'] and i['key'] == 'p' and i['option'] and not i['shift'] for i in fm)
+# 第八节 21：**整份菜单不许两条命令共用一个键** —— 撞了的话 AppKit 只认排在前面的那条，
+# 后面那条的键一声不响地死掉（⇧⌘P 导出 PDF / 命令面板、⌘H 隐藏 / 隐藏其他都这么死过）
+mk = c.get('menuKeys') or []
+seen = {}
+for row in mk:
+    seen.setdefault(row['combo'], []).append(row['path'])
+clash = {k: v for k, v in seen.items() if len(v) > 1}
+ok = ok and len(mk) > 40 and not clash
+ok = ok and seen.get('⇧⌘p') == ['视图 › 命令面板…'] and len(seen.get('⌥⌘h') or []) == 1
+if clash:
+    print('撞键：' + str(clash))
 
 # ---- 0.2.0 标签右键菜单（只在 dialect.md 这条用例上跑）----
 if sys.argv[1] == 'dialect.md':
