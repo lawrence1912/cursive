@@ -5,12 +5,13 @@
 所见即所得的 macOS Markdown 编辑器。**Swift 壳（AppKit + WKWebView）+ `src/renderer`（CodeMirror 6）**；Electron 版已彻底删除（P0-4），构建链只剩 Vite → `out/renderer`。
 产品名写作 **Cursive**（菜单、窗口标题、`Cursive.app`）；**目录名 / 环境变量 / localStorage 键 / 可执行文件仍是小写 `cursive`** —— 那些是标识符，改了等于给自己造一次数据迁移。
 
-## 当前收尾（2026-10-08）
+## 当前收尾（2026-10-09）
 
 完整交付范围与逐项证据见 [交付检查](docs/experience-completion-2026-10-04.md)，未验证项目保持未勾选。
-- **第 16 项已定因并修复**（`b136fdc`）：两处偶发失败同一个根因 —— 混合解析停在半路时外层树全长、正文半截，`parsedTree` 拿 `tree.length` 当进度（见下面「已踩坑」第一条）。待连续三轮完整回归确认。
+- **第 16 项已定因并修复**（`b136fdc`）：两处偶发失败同一个根因 —— 混合解析停在半路时外层树全长、正文半截，`parsedTree` 拿 `tree.length` 当进度（见下面「已踩坑」第一条）。2026-10-09 从头连续三轮完整回归一次通过（`01fddf3`）。
 - **5–7 已完成**（`919a98c`，契约 v38）：只读阅读模式、后退 / 前进、重新打开关闭的标签；原生专项 `check-flow.py` 30 项接入 `release.sh`。
-- **13** 补查了浮层与切标签的组合（`check-focus.py` 39 项），整项待 17 验收；**15 / 17** 的真实窗口工具已就绪（`measure.py` / `check-ime.py`，会真的往测试窗口里打字，依赖 `CURSIVE_SMOKE_KEYS`），**尚未运行**。
+- **13 / 15 / 17 已完成**：真实输入法走查 20 项（[记录](docs/ime-acceptance-2026-10-09.md)）、真实窗口性能三次基线与回归预算（[基线](docs/perf-baseline-2026-10-09.md)）。真按键走查顺带修掉了**键盘 ⌃⇥ / ⌃⇧⇥ 切不了标签**（`04ea021`，见「已踩坑」）。
+- **后续 18–21** 记在 ROADMAP 第八节末尾：开着查找 / 表格单元格里打字每键 ~30ms、输入法组字被打断时留下的拼音、⇧⌘P 两条命令抢一个键。
 历史的「通过」记录不能代替当前完整发布验证。
 
 ## 功能要点（renderer）
@@ -137,7 +138,7 @@
 ## 已踩坑（勿再踩）
 
 - **`tree.length` 不是解析进度**（2026-10-08，第八节 16 的根因）：`cursiveMarkdown()` 外面套着 `yamlFrontmatter`，那是一层 `parseMixed` —— 外层一棵小语法（`Document → Frontmatter? Body`），**整篇 Markdown 挂在 `Body` 上**。一次事务的 20ms 预算（CM 的 `Work.Apply`）没解析完时，CM 用 `takeTree()` 把解析停在半路：外层早已全长，正文只到停下的地方（停点记在顶层一个没导出的 `stoppedInner` 上）。从前 `parsedTree` 的快照分支、`primeTree` 记缓存、标题缓存、块级装饰「后台解析推进了没有」全拿 `tree.length` 当进度，于是半截树被当成整棵钉进缓存 —— 导出 HTML 停在引用块后面（第三轮完整回归）、大纲降级之后偶发为空、表格公式不出现、回显判定解析到外层 `Body` 把整篇翻回源码，而且**都看着完好**。整篇替换（外部重载、探针收尾）一块碎片都复用不上，机器一忙就撞上。现在一律用 `editor/syntax.ts` 的 `parsedExtent`（按挂载点的内层树长度算）；`test/mixed-parse.test.ts` 拨快挂钟复现「外层全长、正文半截」。**两个连带的空守卫**：`syntax.test.ts` 从前用 `IterMode.IgnoreMounts` 比树结构 —— 不进挂载等于只比外层那三个节点，整篇正文都被跳过，要比 Markdown 的块结构得用 `IgnoreOverlays`（代码块里的嵌套语言是 overlay 挂载）；`export.test.ts` 拿 `primeTree(state).length === doc.length` 断言「整棵」，对混合解析永远成立。
-
+- **不带 ⌘ 的菜单键会被 WKWebView 吞掉**（2026-10-09，`04ea021`）：判断 1 说「⌘ 组合一律交还给菜单」，`MainWebView.performKeyEquivalent` 只放行了带 ⌘ 的 —— 而「窗口」菜单里的 ⌃⇥ / ⌃⇧⇥ 不带 ⌘，交给 `super` 之后 WKWebView 把它当普通按键派进页面（一次 Tab 的 keydown），菜单永远收不到，**从加上这两条起键盘就切不了标签**。原生专项与 E2E 派的都是菜单动作（`__shellEmit('menu', …)`），绕过了按键这一层，所以一直没现形；真按键走查（`check-ime.py`，第八节 17）第一次就逮到。以后往菜单里加不带 ⌘ 的键，`performKeyEquivalent` 里要同样放行，并用真按键验一次。
 - **sheet 挂在离屏窗口上 = 「点了卡住」**（0.4.0 真打印机）。`PDFPrinter` 为了让 WebKit
   肯渲染，把 web view 挂在一只 x = -30000 的离屏窗口上（铁律 2）。导出那条不弹面板，
   所以一直没事；**打印那条要弹系统打印面板，而 `runModal(for:)` 的面板是 sheet** ——
