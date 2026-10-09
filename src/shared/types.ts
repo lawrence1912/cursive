@@ -256,6 +256,13 @@ export interface SearchOptions {
   caseSensitive: boolean
   wholeWord: boolean
   regex: boolean
+  /**
+   * 契约 v41（第八节 11）：包含 / 排除条件。**正则源码**，按文件相对搜索根的路径匹配
+   * （`/` 分隔、不带前导斜杠）；由 `ui/search-scope.ts` 从人写的路径模式编出来。
+   * 排除命中一条就跳过（文件夹整棵不往里走）；包含有的话至少得命中一条
+   */
+  include?: string[]
+  exclude?: string[]
 }
 
 /**

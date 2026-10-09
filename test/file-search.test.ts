@@ -115,7 +115,8 @@ describe('临时开关不许污染人工搜索', () => {
   })
 
   it('搜的时候用的是「生效的那套」', () => {
-    expect(src).toContain('window.api.searchFiles(this.token, this.root, query, this.effectiveOpts())')
+    // 第八节 11：范围（在哪个文件夹里）与包含 / 排除条件一起送过去，开关仍是生效的那套
+    expect(src).toContain('window.api.searchFiles(this.token, this.scope ?? this.root, query, { ...this.effectiveOpts(), ...scope })')
     expect(src).toContain('return { ...this.opts, ...this.once }')
   })
 
@@ -185,5 +186,31 @@ describe('点一颗开关', () => {
     toggleOpt(opts, once, 'regex')
     expect(opts).toEqual(OFF)
     expect(once).toEqual({ regex: true })
+  })
+})
+
+describe('缩小搜索范围（第八节 11）', () => {
+  const src = readFileSync(new URL('../src/renderer/ui/file-search.ts', import.meta.url), 'utf8')
+  const method = (name: string): string => {
+    const at = src.indexOf(`\n  ${name}(`)
+    expect(at, `没找着 ${name}`).toBeGreaterThan(0)
+    return src.slice(at, src.indexOf('\n  }', at))
+  }
+
+  it('命中触顶时状态行给一颗「缩小范围」，点它摊开条件那一行', () => {
+    const body = method('private renderStatus')
+    expect(body).toMatch(/s\.kind === 'hits' && s\.truncated/)
+    expect(body).toContain("btn.className = 'fs-narrow'")
+    expect(src).toMatch(/closest\('\.fs-narrow'\)\) return\s+this\.setFiltersOpen\(true, true\)/)
+  })
+
+  it('条件改了照常防抖重搜；收着的按钮上写着有几条在生效', () => {
+    expect(src).toMatch(/box\.addEventListener\('input', \(\) => \{\s+this\.paintFilterBtn\(\)\s+this\.schedule\(\)/)
+    expect(method('private paintFilterBtn')).toContain("t('fs.filtersOn', { n })")
+  })
+
+  it('换了工作区、或者那个文件夹已经不在新根底下：范围退回整个工作区', () => {
+    expect(method('setRoot')).toContain('if (this.scope && !(root && inside(this.scope, root)))')
+    expect(method('setScope')).toMatch(/dir !== this\.root && inside\(dir, this\.root\)/)
   })
 })

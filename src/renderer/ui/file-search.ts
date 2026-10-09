@@ -1,11 +1,19 @@
 import { basename } from '../../shared/path'
 import { applyI18n, onLangChange, t } from '../i18n'
 import { icon } from './icons'
+import { compileScope, parsePatterns } from './search-scope'
 import type { ReplaceHit, ReplaceTarget, SearchHit, SearchOptions } from '../../shared/types'
 
 /** macOS 上 /tmp、/var 都是 /private 下的软链，路径两边可能一边带一边不带 */
 function unprivate(p: string): string {
   return p.startsWith('/private/') ? p.slice(8) : p
+}
+
+/** `dir` 在 `root` 底下（或就是它）。同样要抹平 `/private` 那层软链 */
+function inside(dir: string, root: string): boolean {
+  const a = unprivate(dir)
+  const b = unprivate(root)
+  return a === b || a.startsWith(`${b}/`)
 }
 
 /** 中间目录太长就从左边截：尾巴（离文件最近的那几层）才是有信息量的一段 */
@@ -88,6 +96,11 @@ export function buildTargets(groups: Group[], excluded: ReadonlySet<string>): Re
 }
 
 const OPT_KEY = 'cursive.searchOpts'
+/** 条件那一行摊开过就记住（同文档内查找的替换那一行） */
+const FILTERS_KEY = 'cursive.searchFilters'
+
+/** 那三颗开关（`SearchOptions` 里另外两个字段是范围条件，不是开关） */
+export type OptKey = 'caseSensitive' | 'wholeWord' | 'regex'
 const DEBOUNCE = 220
 
 /**
@@ -115,7 +128,7 @@ type Status =
 export function toggleOpt(
   opts: SearchOptions,
   once: Partial<SearchOptions> | null,
-  key: keyof SearchOptions
+  key: OptKey
 ): { opts: SearchOptions; once: Partial<SearchOptions> | null } {
   const seen = { ...opts, ...once }[key]
   const rest: Partial<SearchOptions> = { ...once }
@@ -165,6 +178,16 @@ export class FileSearch {
   /** 0.4.0 F2：被勾掉的那些命中（默认一个都没勾掉 = 全改） */
   private excluded = new Set<string>()
   private replacing = false
+  /**
+   * 第八节 11：在哪个文件夹里搜（文件树右键「在此文件夹中搜索…」）。null = 整个工作区。
+   * 结果里的目录照旧相对工作区根显示 —— 范围是这一次的筛子，不是新的坐标系
+   */
+  private scope: string | null = null
+  private readonly includeInput: HTMLInputElement
+  private readonly excludeInput: HTMLInputElement
+  private readonly filtersEl: HTMLElement
+  private readonly filterBtn: HTMLButtonElement
+  private readonly scopeEl: HTMLElement
 
   constructor(
     private readonly onOpenHit: (hit: SearchHit) => void,
@@ -192,6 +215,23 @@ export class FileSearch {
         <button data-opt="caseSensitive" title="${t('fs.case')}" data-i18n-title="fs.case">Aa</button>
         <button data-opt="wholeWord" title="${t('fs.word')}" data-i18n-title="fs.word">ab|</button>
         <button data-opt="regex" title="${t('fs.regex')}" data-i18n-title="fs.regex">.*</button>
+        <button class="fs-filter-btn" type="button" aria-expanded="false" title="${t('fs.filtersTip')}"
+                data-i18n-title="fs.filtersTip">${icon('chevron')}<span></span></button>
+      </div>
+      <div class="fs-scope" hidden>
+        <span class="fs-scope-label"></span>
+        <button class="fs-scope-clear" type="button" aria-label="${t('fs.scopeClear')}" title="${t('fs.scopeClear')}"
+                data-i18n-aria="fs.scopeClear" data-i18n-title="fs.scopeClear">${icon('close')}</button>
+      </div>
+      <div class="fs-filters" hidden>
+        <div class="fs-box">
+          <input class="fs-input fs-include" type="text" placeholder="${t('fs.include')}" aria-label="${t('fs.include')}"
+                 data-i18n-ph="fs.include" data-i18n-aria="fs.include" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="fs-box">
+          <input class="fs-input fs-exclude" type="text" placeholder="${t('fs.exclude')}" aria-label="${t('fs.exclude')}"
+                 data-i18n-ph="fs.exclude" data-i18n-aria="fs.exclude" autocomplete="off" spellcheck="false" />
+        </div>
       </div>
       <div class="fs-box fs-box-replace">
         <span class="fs-icon">${icon('pencil')}</span>
@@ -209,6 +249,40 @@ export class FileSearch {
     this.clearBtn = this.el.querySelector('.fs-clear')!
     this.statusEl = this.el.querySelector('.fs-status')!
     this.listEl = this.el.querySelector('.fs-list')!
+    this.includeInput = this.el.querySelector('.fs-include')!
+    this.excludeInput = this.el.querySelector('.fs-exclude')!
+    this.filtersEl = this.el.querySelector('.fs-filters')!
+    this.filterBtn = this.el.querySelector('.fs-filter-btn')!
+    this.scopeEl = this.el.querySelector('.fs-scope')!
+
+    // 第八节 11：范围条件。改了就照常防抖重搜；Esc 回到查找框（同结果列表那一支）
+    for (const box of [this.includeInput, this.excludeInput]) {
+      box.addEventListener('input', () => {
+        this.paintFilterBtn()
+        this.schedule()
+      })
+      box.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          this.input.focus()
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          this.run()
+        }
+      })
+    }
+    this.filterBtn.addEventListener('click', () => this.setFiltersOpen(this.filtersEl.hidden, true))
+    this.el.querySelector('.fs-scope-clear')!.addEventListener('click', () => {
+      this.setScope(null)
+      this.input.focus()
+    })
+    this.statusEl.addEventListener('click', (e) => {
+      if (!(e.target as Element).closest('.fs-narrow')) return
+      this.setFiltersOpen(true, true)
+    })
+    this.setFiltersOpen(this.loadFiltersOpen(), false)
 
     this.input.addEventListener('input', () => {
       // [hidden] 压不过作者写的 display（同 P3-6 大纲清空键那条坑）
@@ -257,7 +331,7 @@ export class FileSearch {
     this.el.querySelector('.fs-opts')!.addEventListener('click', (e) => {
       const btn = (e.target as Element).closest<HTMLElement>('button[data-opt]')
       if (!btn) return
-      const key = btn.dataset['opt'] as keyof SearchOptions
+      const key = btn.dataset['opt'] as OptKey
       const next = toggleOpt(this.opts, this.once, key)
       this.opts = next.opts
       this.once = next.once
@@ -325,13 +399,28 @@ export class FileSearch {
     onLangChange(() => {
       this.renderStatus()
       this.relabelHits()
+      this.paintScope(this.scope)
+      this.paintFilterBtn()
     })
   }
 
   setRoot(root: string | null): void {
     if (root === this.root) return
     this.root = root
+    // 换了工作区，或者那个文件夹已经不在新根底下：范围退回整个工作区
+    if (this.scope && !(root && inside(this.scope, root))) this.paintScope((this.scope = null))
     if (this.el.hidden) return
+    this.run()
+  }
+
+  /**
+   * 在哪个文件夹里搜（第八节 11：文件树右键「在此文件夹中搜索…」）。null 或树根本身 = 整个工作区。
+   * 范围变了就重搜（查询为空时只是摆好范围，等人打字）
+   */
+  setScope(dir: string | null): void {
+    const next = dir && this.root && dir !== this.root && inside(dir, this.root) ? dir : null
+    this.scope = next
+    this.paintScope(next)
     this.run()
   }
 
@@ -457,7 +546,51 @@ export class FileSearch {
       return
     }
     this.setStatus({ kind: 'searching' })
-    window.api.searchFiles(this.token, this.root, query, this.effectiveOpts())
+    const scope = compileScope(this.includeInput.value, this.excludeInput.value)
+    window.api.searchFiles(this.token, this.scope ?? this.root, query, { ...this.effectiveOpts(), ...scope })
+  }
+
+  /** 范围那枚小条：不是整个工作区时才挂出来，写的是相对工作区根的那一段 */
+  private paintScope(dir: string | null): void {
+    this.scopeEl.hidden = !dir
+    if (!dir) return
+    const label = this.scopeEl.querySelector<HTMLElement>('.fs-scope-label')!
+    label.textContent = t('fs.scopeIn', { dir: relativePath(dir, this.root) })
+    label.title = dir
+  }
+
+  /** 条件那一行摊开 / 收起。`remember` = 人自己按的（记住），程序摊开的（引导缩小范围）也记 */
+  private setFiltersOpen(open: boolean, remember: boolean): void {
+    this.filtersEl.hidden = !open
+    this.filterBtn.classList.toggle('is-open', open)
+    this.filterBtn.setAttribute('aria-expanded', String(open))
+    if (remember) {
+      try {
+        localStorage.setItem(FILTERS_KEY, open ? '1' : '0')
+      } catch {
+        /* 存不下就算了 */
+      }
+      if (open) this.includeInput.focus()
+    }
+    this.paintFilterBtn()
+  }
+
+  private loadFiltersOpen(): boolean {
+    try {
+      return localStorage.getItem(FILTERS_KEY) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 按钮上那几个字：**收着也看得见条件在不在生效**（「范围条件 · 2」）——
+   * 一条看不见的排除条件让搜索静悄悄地少一半结果，是最难自查的那种
+   */
+  private paintFilterBtn(): void {
+    const n = parsePatterns(this.includeInput.value).length + parsePatterns(this.excludeInput.value).length
+    this.filterBtn.classList.toggle('is-on', n > 0)
+    this.filterBtn.querySelector('span')!.textContent = n ? t('fs.filtersOn', { n }) : t('fs.filters')
   }
 
   private setStatus(status: Status): void {
@@ -479,6 +612,15 @@ export class FileSearch {
             : s.kind === 'noMatch'
               ? t('fs.noMatch')
               : hits() + (s.truncated ? t('fs.truncated') : '')
+    // 第八节 11：触顶了就给一条出路 —— 摊开范围条件（或者回文件树右键一个文件夹搜）
+    if (s.kind === 'hits' && s.truncated) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'fs-narrow'
+      btn.textContent = t('fs.narrow')
+      btn.title = t('fs.narrowTip')
+      this.statusEl.append(' ', btn)
+    }
   }
 
   /** 已经画出来的命中行：行号提示跟着语言换（行本身是数字，不用重画） */
@@ -555,7 +697,7 @@ export class FileSearch {
   private syncOpts(): void {
     const eff = this.effectiveOpts()
     for (const btn of this.el.querySelectorAll<HTMLElement>('.fs-opts button')) {
-      const on = eff[btn.dataset['opt'] as keyof SearchOptions]
+      const on = eff[btn.dataset['opt'] as OptKey]
       btn.classList.toggle('is-on', on)
       btn.setAttribute('aria-pressed', String(on))
     }

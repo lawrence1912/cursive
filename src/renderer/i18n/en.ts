@@ -65,6 +65,7 @@ const en: Record<Key, string> = {
   'sb.deleteDir': 'Delete Folder',
   'sb.deleteFile': 'Delete File',
   'sb.reveal': 'Reveal in Finder',
+  'sb.searchHere': 'Search in This Folder…',
 
   // ---------- 跨文件搜索 ----------
   'fs.placeholder': 'Search in folder',
@@ -84,6 +85,15 @@ const en: Record<Key, string> = {
   'fs.noFolder': 'Open a folder first',
   'fs.searching': 'Searching…',
   'fs.line': 'Line {line}',
+  'fs.scopeIn': 'In “{dir}”',
+  'fs.scopeClear': 'Search the whole workspace',
+  'fs.filters': 'Filters',
+  'fs.filtersOn': 'Filters · {n}',
+  'fs.filtersTip': 'Paths to include / exclude, comma-separated: * matches within one segment, ** across segments; a pattern without a slash matches at any depth (drafts excludes every drafts folder)',
+  'fs.include': 'Include: *.md, docs/**',
+  'fs.exclude': 'Exclude: drafts, archive/**',
+  'fs.narrow': 'Narrow it down',
+  'fs.narrowTip': 'Add an include / exclude filter, or right-click a folder in the file tree and choose Search in This Folder',
 
   // ---------- 大纲 ----------
   'ol.title': 'Outline',

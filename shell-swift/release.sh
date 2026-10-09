@@ -105,6 +105,12 @@ cat > "$FIX/links.md" <<'LINKS'
 
 检查引用的靶子：![好图](<assets/中文 图.png>) 与 ![坏图](不存在的图.png) 与 [锚点不在的文档](link-target.md#没有的小节)
 LINKS
+# 第八节 11：缩小跨文件搜索的范围。三份都有「范围探针」：一份在 scope/ 里、一份在 scope/drafts/ 里、
+# 一份在根下 —— kitchen-sink 那条用例的 scopeProbe 拿它们验「在此文件夹中搜索」与包含 / 排除条件
+mkdir -p "$FIX/scope/drafts"
+printf '# 夹里\n\n范围探针 在 scope 里。\n' > "$FIX/scope/a.md"
+printf '# 草稿\n\n范围探针 在 drafts 里。\n' > "$FIX/scope/drafts/b.md"
+printf '# 夹外\n\n范围探针 在根下。\n' > "$FIX/scope-outer.md"
 # 第八节 10：挪动之后的引用检查。一份带相对图片、相对链接的文档摆在根目录，探针把它挪进
 # moved/ —— 两条相对路径跟着文档走，挪完都该找不到了；本文锚点不受影响
 mkdir -p "$FIX/moved"
@@ -592,6 +598,19 @@ if sys.argv[1] == 'kitchen-sink.md':
     ok = ok and tp.get('autoQuiet') is True
     ok = ok and not os.path.exists('/tmp/cursive-e2e/e2e-外来.md')
     # P3-2 跨文件搜索：壳侧流式回推 → 结果分组 → 点命中跳到别的文件并选中那一处
+    # 第八节 11：缩小跨文件搜索的范围（夹具见上面 scope/ 那三份）
+    so = r.get('scopeProbe') or {}
+    ok = ok and not so.get('err')
+    ok = ok and '在此文件夹中搜索…' in (so.get('menu') or [])
+    ok = ok and so.get('chipText') == '在「scope」中'
+    # 只在这个文件夹里搜：夹外那份不出来
+    ok = ok and so.get('inScope') == ['scope/a.md', 'scope/drafts/b.md']
+    # 排除 drafts：那一层整个不搜；收着的按钮上也看得见有一条条件在生效
+    ok = ok and so.get('excluded') == ['scope/a.md'] and so.get('btnLabel') == '范围条件 · 1'
+    # × 回到整个工作区：夹外那份回来，排除条件照样生效
+    ok = ok and so.get('chipGone') is True and so.get('whole') == ['scope-outer.md', 'scope/a.md']
+    # 包含 scope-*.md：只剩名字对得上的那一份
+    ok = ok and so.get('included') == ['scope-outer.md']
     fi = r.get('findProbe') or {}
     ok = ok and fi.get('groups', 0) >= 2 and fi.get('hits', 0) >= 2
     ok = ok and fi.get('marks') == fi.get('hits') and fi.get('markText') == '表格'

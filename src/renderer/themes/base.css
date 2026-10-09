@@ -1317,6 +1317,56 @@ body.is-dragging-row * { cursor: grabbing !important; }
   color: var(--muted);
   min-height: 15px;
 }
+/* 第八节 11：缩小搜索范围。条件按钮靠右挂在开关那一行；收着也看得见条件在不在生效 */
+.fs-opts .fs-filter-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+}
+.fs-filter-btn svg { width: 12px; height: 12px; transition: none; }
+.fs-filter-btn.is-open svg { transform: rotate(90deg); }
+.fs-filters { flex: none; display: flex; flex-direction: column; gap: 6px; }
+.fs-filters[hidden] { display: none; }   /* display:flex 会盖掉 UA 的 [hidden] */
+.fs-scope {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-size: var(--chrome-label);
+}
+.fs-scope[hidden] { display: none; }
+.fs-scope-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-scope-clear {
+  flex: none;
+  display: flex;
+  border: none;
+  background: none;
+  padding: 2px;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+}
+.fs-scope-clear svg { width: 12px; height: 12px; }
+.fs-scope-clear:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.fs-narrow {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.fs-narrow:hover { text-decoration: underline; }
 .fs-list {
   flex: 1 1 auto;
   min-height: 0;

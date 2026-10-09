@@ -424,6 +424,14 @@ export class Sidebar {
     return true
   }
 
+  /** 第八节 11：打开搜索面板，范围就是这个文件夹（树根本身 = 整个工作区） */
+  searchIn(dir: string): void {
+    if (!this.root) return
+    this.openSearch()
+    this.search.setScope(dir)
+    this.search.focus()
+  }
+
   closeSearch(): void {
     this.search.hide()
     this.el.classList.remove('is-searching')
@@ -759,10 +767,14 @@ export class Sidebar {
         }
       )
     }
+    // 第八节 11：在这个文件夹里搜。文件那一行就用它所在的那个文件夹（`dir` 已经是它了）。
+    // **只在缩得小范围时才给**：树根本身就是整个工作区，那与工具栏那颗放大镜是一回事
+    const narrows = dir !== this.root
+    if (narrows) items.push({ label: t('sb.searchHere'), run: () => this.searchIn(dir), separated: true })
     items.push({
       label: t('sb.reveal'),
       run: () => window.api.revealInFinder(path ?? this.root!),
-      separated: true
+      separated: !narrows
     })
     // 树摊开好几层之后，够回工具栏那颗按钮要横穿整条侧栏 —— 就地给一条
     if (this.expanded.size) {

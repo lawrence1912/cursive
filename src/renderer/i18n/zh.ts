@@ -75,6 +75,7 @@ const zh = {
   'sb.deleteDir': '删除文件夹',
   'sb.deleteFile': '删除文件',
   'sb.reveal': '在 Finder 中显示',
+  'sb.searchHere': '在此文件夹中搜索…',
 
   // ---------- 跨文件搜索（file-search.ts）----------
   'fs.placeholder': '在文件夹中搜索',
@@ -94,6 +95,16 @@ const zh = {
   'fs.noFolder': '先打开一个文件夹',
   'fs.searching': '搜索中…',
   'fs.line': '第 {line} 行',
+  // 第八节 11：缩小搜索范围
+  'fs.scopeIn': '在「{dir}」中',
+  'fs.scopeClear': '回到整个工作区',
+  'fs.filters': '范围条件',
+  'fs.filtersOn': '范围条件 · {n}',
+  'fs.filtersTip': '包含 / 排除的路径，逗号分隔：* 只在一节里通配，** 跨节；不带斜杠的认任何一层（drafts 排掉每一层的 drafts）',
+  'fs.include': '包含：*.md, docs/**',
+  'fs.exclude': '排除：drafts, archive/**',
+  'fs.narrow': '缩小范围',
+  'fs.narrowTip': '加一条包含 / 排除条件；也可以在文件树里右键一个文件夹「在此文件夹中搜索」',
 
   // ---------- 大纲（outline.ts）----------
   'ol.title': '大纲',

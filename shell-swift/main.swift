@@ -1786,6 +1786,10 @@ final class SearchOperation: Operation, @unchecked Sendable {
     private let token: Int
     private let root: String
     private let regex: NSRegularExpression?
+    /// 第八节 11（契约 v41）：包含 / 排除条件，按文件相对搜索根的路径匹配。
+    /// 规则在渲染层（`ui/search-scope.ts`）编成正则，这里只套用；编不过的当没写
+    private let include: [NSRegularExpression]
+    private let exclude: [NSRegularExpression]
     private let emit: (String, Any) -> Void
 
     /// 上限：命中 800 处 / 扫 6000 个文件 / 单文件 2 MB。触顶就停，UI 会说明结果不完整
@@ -1808,7 +1812,26 @@ final class SearchOperation: Operation, @unchecked Sendable {
         let options: NSRegularExpression.Options =
             (opts["caseSensitive"] as? Bool == true) ? [] : [.caseInsensitive]
         self.regex = try? NSRegularExpression(pattern: pattern, options: options)
+        let compile = { (key: String) -> [NSRegularExpression] in
+            ((opts[key] as? [Any]) ?? []).compactMap { ($0 as? String).flatMap { try? NSRegularExpression(pattern: $0) } }
+        }
+        self.include = compile("include")
+        self.exclude = compile("exclude")
         super.init()
+    }
+
+    /// 相对搜索根的那一段路径（`/` 分隔、不带前导斜杠）。`/tmp` 这类是 `/private` 下的软链，
+    /// 遍历出来的路径与根可能一边带一边不带（同渲染层的 `unprivate`）
+    private func relative(_ path: String) -> String {
+        let strip = { (p: String) -> String in p.hasPrefix("/private/") ? String(p.dropFirst(8)) : p }
+        let a = strip(path)
+        let b = strip(root).hasSuffix("/") ? strip(root) : strip(root) + "/"
+        return a.hasPrefix(b) ? String(a.dropFirst(b.count)) : a
+    }
+
+    private func matchesAny(_ res: [NSRegularExpression], _ rel: String) -> Bool {
+        let range = NSRange(location: 0, length: (rel as NSString).length)
+        return res.contains { $0.firstMatch(in: rel, range: range) != nil }
     }
 
     override func main() {
@@ -1828,10 +1851,18 @@ final class SearchOperation: Operation, @unchecked Sendable {
             if isCancelled { break }
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             if isDir {
-                if skipDirs.contains(url.lastPathComponent) { walker?.skipDescendants() }
+                // 排除条件认到的文件夹整棵不往里走：里面的文件不占下面那个 6000 的预算
+                if skipDirs.contains(url.lastPathComponent) || matchesAny(exclude, relative(url.path)) {
+                    walker?.skipDescendants()
+                }
                 continue
             }
             guard exts.contains(url.pathExtension.lowercased()) else { continue }
+            if !exclude.isEmpty || !include.isEmpty {
+                let rel = relative(url.path)
+                if matchesAny(exclude, rel) { continue }
+                if !include.isEmpty, !matchesAny(include, rel) { continue }
+            }
             files += 1
             if files > maxFiles { truncated = true; break }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
@@ -5862,6 +5893,63 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             findProbe = { err: String(e) }
           }
         }
+        // 第八节 11：缩小跨文件搜索的范围。release.sh 写了三份都有「范围探针」的夹具：
+        // scope/a.md、scope/drafts/b.md、根下的 scope-outer.md。右键 scope 文件夹 →「在此文件夹中搜索…」
+        // → 只剩夹里那两份；排除 drafts → 剩一份；× 回到整个工作区 → 夹外那份回来；包含 scope-*.md → 只剩它
+        let scopeProbe = null
+        if (path.indexOf('kitchen-sink.md') >= 0) {
+          try {
+            const swait = (ms) => new Promise((r) => setTimeout(r, ms))
+            const sb = window.__cursive.sidebar
+            // 结果按「相对夹具根」的路径列（壳遍历出来的可能带 /private 前缀，两种都认）
+            const files = () => [...document.querySelectorAll('.fs-group .fs-file')]
+              .map((f) => (f.title || '').split('cursive-e2e/').pop()).sort()
+            const row = [...document.querySelectorAll('.sb-row')].find((r) => (r.dataset.path || '').endsWith('/scope'))
+            let menu = []
+            if (row) {
+              row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 60 }))
+              await swait(80)
+              const items = [...document.querySelectorAll('.ctx-menu .ctx-item')]
+              menu = items.map((b) => b.textContent)
+              const here = items.find((b) => b.textContent === '在此文件夹中搜索…')
+              if (here) here.click()
+              await swait(200)
+            }
+            const chip = document.querySelector('.fs-scope')
+            const chipText = chip && !chip.hidden ? chip.textContent.trim() : ''
+            const q = document.querySelector('.sb-search .fs-input')
+            const typeInto = async (el, text) => {
+              el.value = text
+              el.dispatchEvent(new Event('input', { bubbles: true }))
+              // 防抖 220ms + 壳侧扫一遍
+              await swait(1200)
+            }
+            await typeInto(q, '范围探针')
+            const inScope = files()
+            if (document.querySelector('.fs-filters').hidden) document.querySelector('.fs-filter-btn').click()
+            await typeInto(document.querySelector('.fs-exclude'), 'drafts')
+            const excluded = files()
+            const btnLabel = document.querySelector('.fs-filter-btn').textContent.trim()
+            document.querySelector('.fs-scope-clear').click()
+            await swait(1200)
+            const whole = files()
+            const chipGone = document.querySelector('.fs-scope').hidden
+            await typeInto(document.querySelector('.fs-include'), 'scope-*.md')
+            const included = files()
+            scopeProbe = { menu, chipText, inScope, excluded, btnLabel, whole, chipGone, included }
+            // 收干净：条件清空、条件行收起（摊开与否记在 localStorage 里，不收的话后面每一轮都带着它）、
+            // 查询清空、面板关掉
+            document.querySelector('.fs-include').value = ''
+            document.querySelector('.fs-exclude').value = ''
+            if (!document.querySelector('.fs-filters').hidden) document.querySelector('.fs-filter-btn').click()
+            q.value = ''
+            q.dispatchEvent(new Event('input', { bubbles: true }))
+            await swait(300)
+            sb.closeSearch()
+          } catch (e) {
+            scopeProbe = { err: String(e) }
+          }
+        }
         // 0.2.0 链接跳转：⌘+点击的四条去处各走一遍。
         // **必须和 findProbe 一样排在「收干净」之后** —— 点一条本地文档链接会切到别的标签，
         // 而前面那些操作的是「当前活动标签」。外部地址在自检下只记账（smokeExternal），
@@ -6488,6 +6576,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           handles,
           treeProbe,
           findProbe,
+          scopeProbe,
           linkProbe,
           refProbe,
           moveProbe,
