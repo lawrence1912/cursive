@@ -370,6 +370,50 @@ body {
   padding-top: 42vh;
 }
 
+/* ---------- 第八节 14 空白文档里的提示（editor/blank-hint.ts）----------
+   两行淡字浮在第一行里，打出第一个字就没了。**停 0.4s 再淡入**（`@starting-style`）：
+   启动时那个空白标签往往几百毫秒之内就被会话恢复换掉，不等的话每次开 app 都闪一下这两行字。
+   减弱动态效果时 transition 被压成 0.01ms（本文件末尾那条），停的那 0.4s 照留 —— 那不是动效。
+   字不接指针（点在字上 = 点在这一行上，光标照常落进来），只有「不再显示」那颗接 */
+.cm-blank-hint {
+  display: inline-block;
+  vertical-align: top;
+  color: var(--muted);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: opacity 0.24s ease-out 0.4s;
+}
+@starting-style {
+  .cm-blank-hint {
+    opacity: 0;
+  }
+}
+.cm-blank-hint-line {
+  display: block;
+}
+.cm-blank-hint-line.is-sub {
+  margin-top: 2px;
+  font-family: var(--sans);
+  font-size: var(--chrome-size);
+}
+.cm-blank-hint-off {
+  margin-left: 12px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.cm-blank-hint-off:hover {
+  color: var(--accent);
+}
+
 /* ---------- P2-8 底部悬浮格式栏 ----------
    贴编辑区（不是窗口）底部居中：#center 是定位上下文，侧边栏/大纲一开一关，
    条子跟着编辑区一起挪。它盖在正文上，滚动下边距由 setup.ts 的 bottomOverlay 让出。
@@ -661,6 +705,21 @@ body {
 }
 .fb-item:hover .fb-item-ic {
   color: var(--fg);
+}
+/* 第八节 14：插入下拉最底下那行「空行开头打 / 也能插入」。一行小字，不是条目。
+   `width: 0; min-width: 100%`：不参与撑宽（下拉照旧按条目的宽度来），再铺满、过长就折行 ——
+   否则英文那句一长，整张下拉被它撑得比条目宽一倍 */
+.fb-menu-tip {
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
+  margin: 4px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--divider);
+  font-family: var(--sans);
+  font-size: var(--chrome-label);
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 /* ---- 文档内查找 / 替换（editor/search-panel.ts）----

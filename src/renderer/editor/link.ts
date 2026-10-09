@@ -331,3 +331,13 @@ export function followLink(view: EditorView, pos: number, dir: string | null): b
   openTarget(view, target)
   return true
 }
+
+/**
+ * 链接的悬停说明：通向哪儿，再加一句怎么打开（第八节 14）。直接点一下是把光标放进去改它，
+ * 跟过去要 ⌘ + 点击 —— 这件事除了悬停说明没有别处说。正文里的链接（`live-preview/decorate.ts`）
+ * 与表格格内的（`live-preview/table.ts`）同一个写法；没有单独一截地址可说的只剩后半句
+ */
+export function linkTitle(dest?: string): string {
+  const how = t('w.linkOpen')
+  return dest ? `${dest}\n${how}` : how
+}

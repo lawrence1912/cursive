@@ -2516,7 +2516,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
      * 0.3.0 T5：窗口位置**按工作区记**。
      *
      * 从前所有窗口共用一个 `Main`，于是只有第一个窗口的位置算数 —— 而
-     * 「一个窗口 = 一个工作区」是这个应用的分栏前提（⌘⇧O 打开文件夹 = 开新窗口），
+     * 「一个窗口 = 一个工作区」是这个应用的分栏前提（⇧⌘O 打开文件夹 = 开新窗口），
      * 工作区之间切来切去时每个窗口都摆在同一个地方，那条前提只兑现了一半。
      *
      * 键按**工作区根**分，与会话恢复（契约 v24）同一个口径；名字里那串摘要走壳里
@@ -2527,7 +2527,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
      * 也就是「同一个工作区开了第二个窗口」。那一种照旧层叠错开 ——
      * 两个窗口抢同一份位置记忆，结果是互相覆盖 + 后开的精确压在先开的身上。
      *
-     * `restore` 只在建窗口时为真：工作区是**中途换的**（在一个空窗口里 ⌘⇧O）时，
+     * `restore` 只在建窗口时为真：工作区是**中途换的**（在一个空窗口里 ⇧⌘O）时，
      * 把窗口当场挪到「那个工作区上次的位置」太吓人 —— 记下来，下次开它的时候再说。
      */
     /// 位置记忆的键：工作区根一份，没有根的（未命名 / 还没挂上树）归 `Main`
@@ -3359,7 +3359,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             respond(id, treeRoot ?? NSNull())
 
         case "readClipboardText":
-            // ⇧⌥⌘V 粘贴为纯文本：剪贴板由壳侧读（判断 3：渲染层不碰原生）
+            // ⌥⇧⌘V 粘贴为纯文本：剪贴板由壳侧读（判断 3：渲染层不碰原生）
             respond(id, NSPasteboard.general.string(forType: .string) ?? "")
 
         case "pasteImage":
@@ -6267,6 +6267,77 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             exportCheckProbe = { err: String(e) }
           }
         }
+        // 第八节 14：可发现性。空白文档那两行（慢半拍淡入、打字即消失、删空又回来、「不再显示」
+        // 关的是偏好、设置面板那一行再打开）、插入下拉末行那句、标题栏与文件树按钮悬停说明里的键。
+        // 偏好是落盘的（与开发机共用一份 localStorage）：先记下原来是开是关，走完摆回去
+        let hintProbe = null
+        if (path.indexOf('links.md') >= 0) {
+          try {
+            const hwait = (ms) => new Promise((r) => setTimeout(r, ms))
+            const noteEl = document.getElementById('status-note')
+            const hint = () => document.querySelector('.cm-content .cm-blank-hint')
+            const hintsPref = () => JSON.parse(localStorage.getItem('cursive.prefs') || '{}').hints
+            const was = hintsPref()
+            const pick = async (val) => {
+              window.__shellEmit('menu', 'app:preferences')
+              await hwait(150)
+              const seg = document.querySelector('#prefs .pf-seg[data-key="hints"]')
+              const on = seg ? ([...seg.querySelectorAll('button')].find((b) => b.classList.contains('is-on')) || {}).dataset : null
+              if (seg && val !== null) seg.querySelector('button[data-val="' + val + '"]').click()
+              await hwait(100)
+              document.getElementById('prefs').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+              await hwait(100)
+              return on ? on.val : null
+            }
+            await pick('true')
+            const tabsBefore = document.querySelectorAll('.tab-item').length
+            window.__shellEmit('menu', 'file:new')
+            await hwait(60)
+            const h0 = hint()
+            const cs0 = h0 ? getComputedStyle(h0) : null
+            const op0 = cs0 ? cs0.opacity : null
+            const delay = cs0 ? cs0.transitionDelay : null
+            // 淡入靠文档时间轴往前走 —— 窗口被别的应用盖住时页面是 hidden，时间轴停着不动
+            // （2026-10-09 实测：一秒之后 CSSTransition 仍是 running、currentTime 0）。
+            // 所以不干等：开出来那一刻它得正在淡入，再把它快进到终点，看终点是不是完全显出
+            const fades = h0 ? h0.getAnimations().filter((a) => a.transitionProperty === 'opacity') : []
+            fades.forEach((a) => a.finish())
+            const op1 = h0 ? getComputedStyle(h0).opacity : null
+            const text0 = hint() ? hint().textContent : null
+            const v = window.__cursive.view
+            const aria0 = v.contentDOM.getAttribute('aria-placeholder')
+            v.dispatch({ changes: { from: 0, insert: 'x' } })
+            await hwait(50)
+            const afterType = !!hint()
+            v.dispatch({ changes: { from: 0, to: v.state.doc.length } })
+            await hwait(50)
+            const afterClear = !!hint()
+            noteEl.textContent = ''
+            const off = document.querySelector('.cm-blank-hint-off')
+            off.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+            off.click()
+            await hwait(100)
+            const afterOff = !!hint()
+            const offNote = noteEl.textContent
+            const prefsOff = hintsPref()
+            const segOn = await pick('true')
+            const backOn = !!hint()
+            const fbIns = document.querySelector('.fb-ins')
+            const tip = (document.querySelector('.fb-menu-insert .fb-menu-tip') || {}).textContent || null
+            const tbOutline = (document.getElementById('tb-outline') || {}).title || null
+            const sbSearch = (document.querySelector('.sb-tool[data-act="search"]') || {}).title || null
+            window.__shellEmit('menu', 'file:close-tab')
+            await hwait(300)
+            const tabsBack = document.querySelectorAll('.tab-item').length === tabsBefore
+            if (was === false) await pick('false')
+            hintProbe = { op0, op1, delay, fades: fades.length, text0, aria0, afterType, afterClear, afterOff, offNote, prefsOff,
+                          segOn, backOn, tip, hasInsert: !!fbIns, tbOutline, sbSearch, tabsBack,
+                          restored: hintsPref() === (was === false ? false : true) }
+            noteEl.textContent = ''
+          } catch (e) {
+            hintProbe = { err: String(e) }
+          }
+        }
         // 0.4.0 F2 跨文件替换（契约 v30）—— **全应用风险最高的一个动作**：一次改几十个
         // 没打开过的文件。这一段走完两轮：① 改掉三份夹具（LF / CRLF / BOM 各一份），
         // 中间**勾掉一处**证明「所见即所改」；② 另一份改完当场撤销。
@@ -6622,6 +6693,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           refProbe,
           moveProbe,
           exportCheckProbe,
+          hintProbe,
           foldProbe,
           listFoldProbe,
           tagProbe,
@@ -7034,7 +7106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // `MenuAction` 的 'edit:select-all'
         edit.addItem(item(L("menu.edit.selectAll"), "edit:select-all", key: "a"))
         edit.addItem(.separator())
-        // P2-4：粘贴为纯文本（⇧⌥⌘V）—— ⌘ 组合一律走菜单（判断 1）
+        // P2-4：粘贴为纯文本（⌥⇧⌘V）—— ⌘ 组合一律走菜单（判断 1）
         edit.addItem(item(L("menu.edit.pastePlain"), "edit:paste-plain", key: "v", modifiers: [.command, .option, .shift]))
         // 0.2.0：拷贝的对面 —— 把当前文档按富文本放上剪贴板（契约 v20）
         edit.addItem(item(L("menu.edit.copyHtml"), "edit:copy-html", key: "c", modifiers: [.command, .option, .shift]))
@@ -7045,7 +7117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 而 AppKit 按菜单顺序取第一个匹配、编辑菜单排在视图菜单前面，
         // 真写成 ⌥⌘F 就等于把专注模式的键抢走了（同 ⌃⌘F 全屏那条坑）
         edit.addItem(item(L("menu.edit.replace"), "edit:replace", key: "r", modifiers: [.command, .option]))
-        // P3-2：⌘⇧F 从 P3-3 起就给它留着了（专注模式那时特意避开）
+        // P3-2：⇧⌘F 从 P3-3 起就给它留着了（专注模式那时特意避开）
         edit.addItem(item(L("menu.edit.findInFiles"), "edit:find-in-files", key: "f", modifiers: [.command, .shift]))
         edit.addItem(item(L("menu.edit.findNext"), "edit:find-next", key: "g"))
         edit.addItem(item(L("menu.edit.findPrev"), "edit:find-prev", key: "g", modifiers: [.command, .shift]))
@@ -7117,7 +7189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // 0.3.0 T4：勾上 = 皮肤停着。不给快捷键 —— 它是个「出事那次才用」的开关
             "customOff": item(L("view.customOff"), "view:disable-custom-theme", key: ""),
             // P3-3 写作模式。⌥⌘F / ⌥⌘T：⌘ 组合一律走菜单（判断 1），
-            // 且避开 ⌘⇧F（留给 P3-2 跨文件搜索）
+            // 且避开 ⇧⌘F（留给 P3-2 跨文件搜索）
             "focus": item(L("view.focus"), "view:toggle-focus", key: "f", modifiers: [.command, .option]),
             "typewriter": item(L("view.typewriter"), "view:toggle-typewriter", key: "t", modifiers: [.command, .option])
         ]

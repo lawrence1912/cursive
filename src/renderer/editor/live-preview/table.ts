@@ -12,7 +12,7 @@ import type { SyntaxNode } from '@lezer/common'
 import { t, type Key } from '../../i18n'
 import { docDir } from '../doc-dir'
 import { EMOJI } from '../emoji'
-import { openTarget, resolveLink } from '../link'
+import { linkTitle, openTarget, resolveLink } from '../link'
 import { isHiddenInline } from '../inline-text'
 import { clipboardMarkdown } from '../paste'
 import { clipboardGrid } from '../table-paste'
@@ -33,7 +33,7 @@ import { fillMath } from './widgets'
  *   3. updateDOM 返回 true 就复用 DOM —— 每次 dispatch 后 DOM 不重建，焦点和光标才不会丢。
  *
  * 代价：ignoreEvent 全忽略之后，格子里的按键**不进 CM keymap**（Tab 不缩进、回车不插行），
- * 所有键都得自己接；⌘Z/⌘⇧Z 也必须显式转发给 history。
+ * 所有键都得自己接；⌘Z/⇧⌘Z 也必须显式转发给 history。
  */
 
 // ---------- 解析 ----------
@@ -181,7 +181,7 @@ function isHistory(tr: Transaction): boolean {
  * 规则：带 setTableEdit 就照它走；否则**任何改文档/改选区的事务都清空它** ——
  * widget 自己发的每一笔都必须重新带上 effect，换来的是「切标签回来、外部重载、
  * 点到别处」这些路径上的编辑态自动失效，不留悬空。
- * 唯一的例外是 ⌘Z/⌘⇧Z：那是从格子里转发出去的，不算离开表格。
+ * 唯一的例外是 ⌘Z/⇧⌘Z：那是从格子里转发出去的，不算离开表格。
  */
 export const tableEditField = StateField.define<number | null>({
   create: () => null,
@@ -998,7 +998,8 @@ function renderTokens(cell: HTMLElement, tokens: CellToken[]): void {
       // ⌘/Ctrl + 点击由 wire() 接管，和正文里的链接同一条路（openExternal）
       if (tag === 'a' && tok.href) {
         el.dataset['href'] = tok.href
-        el.title = tok.href
+        // 通向哪儿 + 怎么打开（第八节 14，与正文里的链接同一句）
+        el.title = linkTitle(tok.href)
       }
       node.appendChild(el)
       node = el

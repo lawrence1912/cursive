@@ -442,7 +442,7 @@ export class FileSearch {
     this.cancel()
   }
 
-  /** 焦点给输入框（面板已经开着时再按一次 ⌘⇧F 也应该回到输入框） */
+  /** 焦点给输入框（面板已经开着时再按一次 ⇧⌘F 也应该回到输入框） */
   focus(): void {
     this.input.focus()
     this.input.select()

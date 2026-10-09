@@ -2,6 +2,7 @@ import { HEADING_ACTIONS, INSERT_ACTIONS } from '../editor/fmt'
 import { applyI18n, t, type Key } from '../i18n'
 import type { MenuAction } from '../../shared/types'
 import { icon, type IconName } from './icons'
+import { keyOf } from './shortcuts'
 
 /**
  * P2-8 底部悬浮格式栏。
@@ -66,14 +67,13 @@ const BLOCK: Btn[] = [
   { action: 'fmt:code-block', name: 'code-block', labelKey: 'fb.codeBlock' }
 ]
 
-/** 块类型下拉里的条目；正文排第一 */
-const BLOCK_KINDS: { action: MenuAction; labelKey: Key; args?: Record<string, number>; key: string }[] = [
-  { action: 'fmt:p', labelKey: 'fb.p', key: '⌘0' },
+/** 块类型下拉里的条目；正文排第一。右边那颗键帽取自菜单那份（`ui/shortcuts.ts`） */
+const BLOCK_KINDS: { action: MenuAction; labelKey: Key; args?: Record<string, number> }[] = [
+  { action: 'fmt:p', labelKey: 'fb.p' },
   ...HEADING_ACTIONS.map((action, i) => ({
     action: action as MenuAction,
     labelKey: 'fb.h' as Key,
-    args: { n: i + 1 },
-    key: `⌘${i + 1}`
+    args: { n: i + 1 }
   }))
 ]
 
@@ -81,11 +81,8 @@ const BLOCK_KINDS: { action: MenuAction; labelKey: Key; args?: Record<string, nu
  * 插入下拉的图标与文案。**顺序的真相在 `fmt.ts` 的 `INSERT_ACTIONS`**，这里只补 UI 的那一半；
  * 写成 Record 是为了让「fmt.ts 加了一条插入命令、这里忘了配」当场 typecheck 不过
  */
-const INSERT_META: Record<
-  (typeof INSERT_ACTIONS)[number],
-  { name: IconName; labelKey: Key; key?: string }
-> = {
-  'fmt:table': { name: 'table', labelKey: 'fb.table', key: '⌃⌘T' },
+const INSERT_META: Record<(typeof INSERT_ACTIONS)[number], { name: IconName; labelKey: Key }> = {
+  'fmt:table': { name: 'table', labelKey: 'fb.table' },
   'fmt:image': { name: 'image', labelKey: 'fb.image' },
   'fmt:hr': { name: 'hr', labelKey: 'fb.hr' },
   'fmt:math-block': { name: 'sigma-box', labelKey: 'fb.mathBlock' },
@@ -96,6 +93,13 @@ const INSERT_META: Record<
 }
 
 const INSERT = INSERT_ACTIONS.map((action) => ({ action, ...INSERT_META[action] }))
+
+/*
+ * 插入下拉最底下那行小字（第八节 14）：这几样在空行开头打 `/` 也插得出来（`editor/slash.ts`）。
+ * 斜杠菜单是插块最快的那条路，却只有碰巧在行首打过斜杠的人才知道 —— 而翻开这份下拉的人
+ * 正是想插一块东西的人，在这儿说一句正合适。`aria-hidden`：role=menu 里只该有菜单项，
+ * 这行字是给眼睛看的捷径，不是一个能选的条目。
+ */
 
 /**
  * 「这条格式命令配哪颗图标」的一览。**由上面那几张表现算**，不另列一份 ——
@@ -136,15 +140,15 @@ export class FormatBar {
         (k) =>
           `<button type="button" role="menuitem" class="fb-kind" data-action="${k.action}">` +
           `<span class="fb-kind-tick">${icon('check')}</span>` +
-          `<span class="fb-kind-name" data-i18n="${k.labelKey}"${k.args ? ` data-i18n-args='${JSON.stringify(k.args)}'` : ''}>${kindLabel(k)}</span><kbd>${k.key}</kbd></button>`
+          `<span class="fb-kind-name" data-i18n="${k.labelKey}"${k.args ? ` data-i18n-args='${JSON.stringify(k.args)}'` : ''}>${kindLabel(k)}</span><kbd>${keyOf(k.action) ?? ''}</kbd></button>`
       ).join('')}</div>
       <div class="fb-menu fb-menu-insert" role="menu" hidden>${INSERT.map(
         (m) =>
           `<button type="button" role="menuitem" class="fb-kind fb-item" data-action="${m.action}">` +
           `<span class="fb-item-ic">${icon(m.name)}</span>` +
           `<span class="fb-kind-name" data-i18n="${m.labelKey}">${t(m.labelKey)}</span>` +
-          `<kbd>${m.key ?? ''}</kbd></button>`
-      ).join('')}</div>
+          `<kbd>${keyOf(m.action) ?? ''}</kbd></button>`
+      ).join('')}<p class="fb-menu-tip" aria-hidden="true" data-i18n="fb.slashTip">${t('fb.slashTip')}</p></div>
       <div class="fb-bar">
         <button type="button" class="fb-pick" aria-haspopup="menu" aria-expanded="false"
                 aria-label="${t('fb.pick')}" data-i18n-aria="fb.pick"

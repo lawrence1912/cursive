@@ -12,6 +12,7 @@ import {
   keymap,
   rectangularSelection
 } from '@codemirror/view'
+import { blankHint } from './blank-hint'
 import { moveBlock } from './block-move'
 import { cursiveCompletion } from './complete'
 import { landingFlash, stableNavigation } from './navigation'
@@ -73,6 +74,14 @@ export function spellcheckExt(on: boolean): Extension {
  * 切标签时 main.ts 的 `syncSpell()` 再把冻结的那份对齐。
  */
 export const spellNow = { on: false }
+
+/**
+ * 第八节 14 空白文档提示的挂载点（`editor/blank-hint.ts`）。与拼写检查同构：
+ * 偏好里的「操作提示」随时能改，钉死在建 state 时就成了「只对新标签生效」。
+ * `hintsNow` 是新 state 的种子，main.ts 的 `syncHints()` 再把已有的那份对齐
+ */
+export const hintConf = new Compartment()
+export const hintsNow = { on: true }
 
 /**
  * 当前写作模式。**全局的，不随标签走** —— 每个标签一份 EditorState，新建的
@@ -172,6 +181,7 @@ export function createState(
       readOnlyConf.of(readOnlyExt(options.readOnly === true)),
       writingConf.of(writingModes(writingNow)),
       spellConf.of(spellcheckExt(spellNow.on)),
+      hintConf.of(blankHint(hintsNow.on)),
       keymap.of([
         ...closeBracketsKeymap,
         ...searchKeymap,

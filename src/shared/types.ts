@@ -375,6 +375,15 @@ export interface PrefValues {
    * 默认关是因为它对中文写作没有价值，而长文档上 WebKit 的扫描要实打实花 CPU
    */
   spellcheck: boolean
+  /**
+   * 操作提示（第八节 14）。**默认开**。
+   *
+   * 管的是**自己冒出来**的那几句：空白文档里那两行（`editor/blank-hint.ts`）。悬停说明
+   * （按钮与链接的 title）不归它管 —— 那要人把指针停上去才出来，谈不上打扰。
+   * 关掉的入口有两个：提示自己那颗「不再显示」、设置面板里这一行；打开只有后者。
+   * 壳不读它（契约 v17：偏好整份原样转发），所以加这一项不动壳、不升契约版本。
+   */
+  hints: boolean
 }
 
 /** 用户自定义主题：`~/Library/Application Support/cursive/themes/*.css`（P3-4） */
@@ -570,7 +579,7 @@ export interface CursiveApi {
    * 而文档里的图片本来就可以指向树根之外（`safe-file://` 读得到的，问一句在不在不会多泄露什么）
    */
   statPaths(paths: string[]): Promise<Array<'file' | 'dir' | null>>
-  /** 读系统剪贴板的纯文本（⇧⌥⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
+  /** 读系统剪贴板的纯文本（⌥⇧⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
   readClipboardText(): Promise<string>
   /** ---- 0.2.0 复制为富文本（契约 v20）----
    * 正文仍由渲染层渲染（与 P4-1 导出、P4-2 打印共用同一棵语法树），壳只负责把它

@@ -14,7 +14,7 @@ const KEY = 'cursive.prefs'
  */
 const DEFAULTS: PrefValues = {
   theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null,
-  customOff: false, imageDir: 'doc', lang: systemLang(), spellcheck: false
+  customOff: false, imageDir: 'doc', lang: systemLang(), spellcheck: false, hints: true
 }
 export const COLUMN_RANGE = { min: 30, max: 60 }
 
@@ -39,7 +39,9 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
     // 与 i18n 的 `detectLang()` 同一条规则（那边靠 raw 非空走到同一个结果）
     lang: parsed.lang ?? 'zh',
     // 0.2.0 新增，老偏好里没有 —— 默认关（见 `PrefValues.spellcheck` 的理由）
-    spellcheck: parsed.spellcheck === true
+    spellcheck: parsed.spellcheck === true,
+    // 第八节 14 新增，老偏好里没有 —— 默认开：只有明说过「不要」的人才关着
+    hints: parsed.hints !== false
   }
 }
 
@@ -47,7 +49,7 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
 const THEMES_DIR = '~/Library/Application Support/cursive/themes'
 
 /** 走分段控件的那几项偏好 */
-type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck' | 'imageDir'
+type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck' | 'imageDir' | 'hints'
 
 /** 分段控件的选项。带 key 的走字典（跟着语言切）；只有 label 的写死 —— 语言选项各自以自身语言显示 */
 interface SegOpt {
@@ -78,6 +80,11 @@ const IMAGE_DIR_OPTS: SegOpt[] = [
 const SPELL_OPTS: SegOpt[] = [
   { val: 'false', key: 'pf.spell.off' },
   { val: 'true', key: 'pf.spell.on' }
+]
+/** 第八节 14 操作提示。空白文档里那颗「不再显示」关掉之后，回来的路只有这一行 */
+const HINT_OPTS: SegOpt[] = [
+  { val: 'false', key: 'pf.hints.off' },
+  { val: 'true', key: 'pf.hints.on' }
 ]
 
 /**
@@ -153,6 +160,14 @@ export class Prefs {
     this.applyCustom()
     this.sync()
     return this.v.customOff
+  }
+
+  /**
+   * 第八节 14：开关操作提示。空白文档里那颗「不再显示」走这儿（回执里的「撤销」也是），
+   * 与面板里那一行同一条路：落盘 + 广播 + `onApply` 让编辑器跟着收起 / 摆出来
+   */
+  setHints(on: boolean): void {
+    this.set('hints', on)
   }
 
   /** 眼下有没有一张皮肤在叠着（菜单回执要分清「停用了一张」与「本来就没有」） */
@@ -344,6 +359,7 @@ export class Prefs {
         ${this.rangeRow('column', 'pf.column', COLUMN_RANGE.min, COLUMN_RANGE.max, 1, 'rem')}
         ${this.segRow('spellcheck', 'pf.spell', SPELL_OPTS)}
         ${this.segRow('imageDir', 'pf.imageDir', IMAGE_DIR_OPTS)}
+        ${this.segRow('hints', 'pf.hints', HINT_OPTS)}
         <div class="pf-row pf-custom"></div>
         <div class="pf-foot">
           <span class="pf-hint" data-i18n="pf.hint">${t('pf.hint')}</span>
@@ -371,6 +387,7 @@ export class Prefs {
       if (group === 'lang') this.setLang(val as Lang)
       else if (group === 'theme') this.setTheme(val as AppearanceMode)
       else if (group === 'spellcheck') this.set('spellcheck', val === 'true')
+      else if (group === 'hints') this.set('hints', val === 'true')
       else if (group === 'imageDir') this.set('imageDir', val as ImageDir)
       else this.set('font', val as BodyFont)
     })

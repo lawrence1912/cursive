@@ -13,7 +13,7 @@ import { readOnlyHost } from './read-only'
  *
  * - 粘贴 HTML（网页 / 飞书 / Notion）→ turndown 转 Markdown
  * - 选中文字后粘贴一个 URL → 包成 `[文字](url)`
- * - ⇧⌥⌘V → 始终纯文本
+ * - ⌥⇧⌘V → 始终纯文本
  *
  * 转换结果的强调符统一成 `*` / `**`（与 fmt.ts 的格式化命令一致）；
  * turndown 默认丢掉的那一批（表格 / 任务项 / 删除线 / `==高亮==` / 上下标）

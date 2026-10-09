@@ -69,7 +69,7 @@ const zh = {
   'sb.openFolder': '打开其他文件夹',
   'sb.tree': '文件树',
   'sb.openFolderBtn': '打开文件夹',
-  'sb.orOpen': '或按 ⌘⇧O',
+  'sb.orOpen': '或按 ⇧⌘O',
   'sb.resize': '拖动调整宽度',
   'sb.rename': '重命名…',
   'sb.deleteDir': '删除文件夹',
@@ -152,6 +152,7 @@ const zh = {
   'latex.changed': '文档或选区已变化，请重新执行格式化',
   'fb.insert': '插入',
   'fb.insertTitle': '插入表格 / 图片 / 分隔线 / 公式块…',
+  'fb.slashTip': '空行开头打 / 也能插入',
   'fb.table': '表格',
   'fb.image': '图片',
   'fb.hr': '分隔线',
@@ -185,6 +186,9 @@ const zh = {
   'pf.spell': '拼写检查',
   'pf.spell.off': '关',
   'pf.spell.on': '开',
+  'pf.hints': '操作提示',
+  'pf.hints.off': '关',
+  'pf.hints.on': '开',
   'pf.custom': '自定义样式',
   'pf.customHint': '把 .css 放进 {dir} 后重开',
   'pf.none': '无',
@@ -328,6 +332,7 @@ const zh = {
   'w.imgBroken': '图片加载失败',
   'w.imgResize': '拖动改尺寸',
   'w.tagSearch': '⌘ + 点击：在工作区里搜这个标签',
+  'w.linkOpen': '⌘ + 点击打开',
   'w.foldSection': '折叠本节',
   'w.unfoldSection': '展开本节',
   'w.foldItem': '折叠这一条',
@@ -335,6 +340,12 @@ const zh = {
   'w.foldedLines': '⋯ {n} 行',
   'w.calloutExpand': '展开告示块',
   'w.calloutCollapse': '折叠告示块',
+
+  // ---------- 空白文档里的提示（第八节 14）----------
+  'hint.blankSlash': '输入 / 插入标题、列表、表格…',
+  'hint.blankPalette': '⇧⌘P 查找所有命令',
+  'hint.blankOff': '不再显示',
+  'hint.blankOffTitle': '关掉这类提示（设置里可以重新打开）',
 
   // ---------- 链接跳转（editor/link.ts）----------
   // 都是「点了之后没能如愿」时状态栏里的那一句。能跳成的路径一句话都不说
@@ -386,6 +397,7 @@ const zh = {
   'note.customOn': '自定义皮肤已启用',
   'note.customUnreadable': '读不到自定义皮肤，暂时用内置主题',
   'note.customEmpty': '皮肤「{name}」里没有一条生效的规则 —— CSS 可能写坏了',
+  'note.hintsOff': '操作提示已关闭（设置里可以重新打开）',
   'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
   'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
   // 第八节 8：检查引用（editor/ref-check.ts）

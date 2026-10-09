@@ -767,8 +767,9 @@ if sys.argv[1] == 'links.md':
     # 0.2.0 链接跳转：⌘+点击的四条去处 + 两种打不开
     lp = r.get('linkProbe') or {}
     ok = ok and not lp.get('err')
-    # 预览里地址是藏着的 —— 悬停的 title 是「这条链接通向哪儿」的唯一线索
-    ok = ok and lp.get('title') == '#小节'
+    # 预览里地址是藏着的 —— 悬停的 title 是「这条链接通向哪儿」的唯一线索；
+    # 第二行说怎么打开（第八节 14：直接点是把光标放进去改它，跟过去要 ⌘ + 点击）
+    ok = ok and lp.get('title') == '#小节\n⌘ + 点击打开'
     # ① 本文锚点：光标真的落在那一节的标题上（锚点串与 [TOC]、大纲、导出 id 同一份算法）
     ok = ok and lp.get('anchorLine') == '## 小节'
     # ② 本地文档 + 锚点：多出一个标签、活动文档换成目标文件、落点是目标那一节
@@ -840,6 +841,27 @@ if sys.argv[1] == 'links.md':
     ok = ok and not ec.get('htmlCancelled') and '已导出' in (ec.get('htmlDone') or '')
     ok = ok and (ec.get('pdf') or {}).get('items') == ['照样导出', '不存在的图.png']
     ok = ok and ec.get('pdfAsked') is True and e.get('pdfCalls') == 1
+    # 第八节 14：可发现性。空白文档那两行说的是斜杠菜单与命令面板（键与菜单同一个），读屏念第一句
+    hp = r.get('hintProbe') or {}
+    ok = ok and not hp.get('err')
+    t0 = hp.get('text0') or ''
+    ok = ok and '/' in t0 and '⇧⌘P' in t0 and '不再显示' in t0
+    ok = ok and (hp.get('aria0') or '').startswith('输入 /')
+    # 慢半拍淡入：刚开出来是透明的、正停在 0.4s 的等待里（启动时那个空白标签很快被会话恢复换掉，
+    # 不该闪一下）；快进到终点是完全显出。不干等那一秒：窗口被盖住时时间轴不走，等也白等
+    ok = ok and hp.get('op0') == '0' and hp.get('delay') == '0.4s' and hp.get('fades') == 1
+    ok = ok and hp.get('op1') == '1'
+    # 打出第一个字就没了，删空又回来
+    ok = ok and hp.get('afterType') is False and hp.get('afterClear') is True
+    # 「不再显示」关的是偏好（落了盘），回执带一颗撤销；设置面板那一行看得见它关着，点开就回来
+    ok = ok and hp.get('afterOff') is False and hp.get('prefsOff') is False
+    ok = ok and '操作提示已关闭' in (hp.get('offNote') or '') and '撤销' in (hp.get('offNote') or '')
+    ok = ok and hp.get('segOn') == 'false' and hp.get('backOn') is True
+    # 插入下拉末行那句；标题栏与文件树按钮的悬停说明里，键的写法与菜单一致（⇧⌘ 而不是 ⌘⇧）
+    ok = ok and hp.get('hasInsert') is True and '/' in (hp.get('tip') or '')
+    ok = ok and (hp.get('tbOutline') or '').endswith('(⇧⌘T)') and (hp.get('sbSearch') or '').endswith('(⇧⌘F)')
+    # 收干净：那个空白标签关掉了（没改过、不问），偏好摆回原样
+    ok = ok and hp.get('tabsBack') is True and hp.get('restored') is True
     # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
     # 对 file:// 按「在不在」回话，就是为了让这条路测得到
     ok = ok and lp.get('fileNote') == '打不开：/tmp/cursive-e2e/缺失.png'

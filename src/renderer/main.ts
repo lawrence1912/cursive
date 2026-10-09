@@ -34,6 +34,8 @@ import {
   bottomOverlay,
   createState,
   dirEffect,
+  hintConf,
+  hintsNow,
   livePreviewConf,
   spellConf,
   spellcheckExt,
@@ -42,6 +44,7 @@ import {
   writingNow
 } from './editor/setup'
 import { cursiveMarkdown } from './editor/markdown-lang'
+import { blankHint, blankHintHost } from './editor/blank-hint'
 import { warmLazyModules } from './editor/warmup'
 import { anchorPos, destLiteral, isDocPath, linkHost } from './editor/link'
 import { docDir } from './editor/doc-dir'
@@ -88,6 +91,7 @@ import { commandItems, selectAllScope } from './ui/commands'
 import { openMenu, type MenuItem } from './ui/menu'
 import { Palette, type PaletteItem, type PaletteQuery } from './ui/palette'
 import { Prefs } from './ui/prefs'
+import { withKey } from './ui/shortcuts'
 import { cursorLabel, measure, selectedText, StatsPanel, type Stat } from './ui/stats'
 
 // 计时探针的第一格：模块开始跑 = 取回 + 解析 + 编译首屏 JS 花掉的时间。
@@ -227,8 +231,16 @@ const prefs = new Prefs(() => {
   forgetRowHeight()
   view.requestMeasure()
   syncSpell()
+  syncHints()
 })
 prefs.apply()
+
+// 第八节 14：空白文档那颗「不再显示」。关的是整个「操作提示」（设置面板里那一行），
+// 回执里给一颗撤销 —— 手滑点到的人不必去翻设置
+blankHintHost.dismiss = () => {
+  prefs.setHints(false)
+  note(t('note.hintsOff'), { action: { label: t('note.undo'), run: () => prefs.setHints(true) } })
+}
 
 /**
  * 正文缩放（0.4.1）。⌘+ / ⌘− / ⌥⌘0 与捏合都落到这里 —— 壳那边只把动作转过来，
@@ -422,10 +434,10 @@ view.scrollDOM.addEventListener('scroll', () => {
 // 开关还在，不用去翻菜单，也不会像旧的「唤回浮标」那样压住第一个标签。
 // ⚠️ 位置与 shell-swift 的 `DragStripView.hitTest` 挖洞区强耦合 —— 原生拖拽条整条盖在
 // webview 上，不挖洞这两个按钮根本收不到点击（改 CSS 的 padding/尺寸记得同步壳）。
-const tbSidebar = titlebarButton('tb-sidebar', 'panel-left', t('tb.sidebar'), '⌘\\')
-const tbTheme = titlebarButton('tb-theme', 'moon', t('tb.theme'), '⌃⌘D')
+const tbSidebar = titlebarButton('tb-sidebar', 'panel-left', t('tb.sidebar'), 'view:toggle-sidebar')
+const tbTheme = titlebarButton('tb-theme', 'moon', t('tb.theme'), 'view:toggle-dark')
 const tbColumn = titlebarButton('tb-column', 'column', t('tb.column'))
-const tbOutline = titlebarButton('tb-outline', 'panel-right', t('tb.outline'), '⌘⇧T')
+const tbOutline = titlebarButton('tb-outline', 'panel-right', t('tb.outline'), 'view:toggle-outline')
 const tbSpacer = document.createElement('span')
 tbSpacer.className = 'tb-spacer'
 // 右上角这一块是一个整体（深色 / 栏宽 / 大纲）：三颗按钮共用一个容器，
@@ -469,12 +481,13 @@ window.addEventListener('resize', () => holes.schedule())
 
 syncTitlebar()
 
-function titlebarButton(id: string, name: IconName, label: string, key = ''): HTMLButtonElement {
+/** `same` = 与哪条菜单命令是同一件事：悬停说明里的快捷键照它取（`ui/shortcuts.ts`，第八节 14） */
+function titlebarButton(id: string, name: IconName, label: string, same?: MenuAction): HTMLButtonElement {
   const b = document.createElement('button')
   b.id = id
   b.className = 'tb-btn'
   b.innerHTML = icon(name)
-  b.title = key ? `${label} (${key})` : label
+  b.title = same ? withKey(label, same) : label
   b.setAttribute('aria-label', label)
   return b
 }
@@ -514,20 +527,20 @@ function syncTitlebar(): void {
 function syncThemeButton(): void {
   const dark = prefs.resolved === 'dark'
   tbTheme.innerHTML = icon(dark ? 'sun' : 'moon')
-  tbTheme.title = `${dark ? t('tb.toLight') : t('tb.toDark')} (⌃⌘D)`
+  tbTheme.title = withKey(dark ? t('tb.toLight') : t('tb.toDark'), 'view:toggle-dark')
   tbTheme.setAttribute('aria-label', dark ? t('tb.toLight') : t('tb.toDark'))
   tbTheme.classList.toggle('is-on', dark)
 }
 
 /** 语言切换后标题栏按钮的 title/aria 重拼（带快捷键后缀，走不了 data-i18n） */
 function syncTitlebarLabels(): void {
-  const setBtn = (b: HTMLButtonElement, label: string, key = ''): void => {
-    b.title = key ? `${label} (${key})` : label
+  const setBtn = (b: HTMLButtonElement, label: string, same?: MenuAction): void => {
+    b.title = same ? withKey(label, same) : label
     b.setAttribute('aria-label', label)
   }
-  setBtn(tbSidebar, t('tb.sidebar'), '⌘\\')
+  setBtn(tbSidebar, t('tb.sidebar'), 'view:toggle-sidebar')
   setBtn(tbColumn, t('tb.column'))
-  setBtn(tbOutline, t('tb.outline'), '⌘⇧T')
+  setBtn(tbOutline, t('tb.outline'), 'view:toggle-outline')
   syncThemeButton()
 }
 
@@ -830,6 +843,7 @@ function activate(id: number): void {
   syncMode()
   syncWriting()
   syncSpell()
+  syncHints()
   outline.setDoc(tab.path ?? `${t('app.untitled')}-${tab.id}`)
   syncStatus(true)
   scheduleCount()
@@ -1107,6 +1121,16 @@ function activeHeadingPos(): number | null {
 function syncSpell(): void {
   spellNow.on = prefs.values.spellcheck
   view.dispatch({ effects: spellConf.reconfigure(spellcheckExt(spellNow.on)) })
+}
+
+/**
+ * 第八节 14：偏好里的「操作提示」推到活动 view 上（空白文档那两行，`editor/blank-hint.ts`）。
+ * 与 `syncSpell` 同构，只多一句「已经是这样就不发」—— 拖字号滑杆时 onApply 是连发的
+ */
+function syncHints(): void {
+  hintsNow.on = prefs.values.hints
+  const want = blankHint(hintsNow.on)
+  if (hintConf.get(view.state) !== want) view.dispatch({ effects: hintConf.reconfigure(want) })
 }
 
 function syncMode(): void {
@@ -2792,7 +2816,7 @@ async function handleMenu(action: MenuAction): Promise<void> {
       await copyAsHtml()
       break
     case 'edit:paste-plain': {
-      // P2-4：⇧⌥⌘V 粘贴为纯文本
+      // P2-4：⌥⇧⌘V 粘贴为纯文本
       const text = await window.api.readClipboardText()
       if (text) insertText(view, text)
       break

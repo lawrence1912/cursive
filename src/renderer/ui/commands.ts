@@ -1,6 +1,7 @@
 import { t, type Key } from '../i18n'
 import type { MenuAction } from '../../shared/types'
 import type { PaletteItem } from './palette'
+import { keyOf } from './shortcuts'
 
 /**
  * 0.2.0 命令面板的条目表。
@@ -14,7 +15,8 @@ import type { PaletteItem } from './palette'
  * - 主题四态走设置面板那份 `pf.theme.*`，右边一列标上「主题」当分类；
  * - 只有文件 / 编辑 / 视图这批在渲染层没有名字的，才新加 `cmd.*`。
  *
- * 快捷键那一列是**字面量**，不进字典 —— ⌘N 在中英文里都是 ⌘N。
+ * 快捷键那一列取自 `ui/shortcuts.ts`（菜单那份的念法，单测拿 main.swift 对账），
+ * 不进字典 —— ⌘N 在中英文里都是 ⌘N；条目里也不各写一份（第八节 14）。
  */
 
 /**
@@ -44,8 +46,7 @@ export function selectAllScope(active: Element | null, contentDOM: Element | nul
 interface Entry {
   action: MenuAction
   labelKey: Key
-  /** 快捷键；分类类目（主题）借这一列显示 */
-  hint?: string
+  /** 分类类目（主题）借快捷键那一列显示；快捷键本身一律取 `keyOf(action)` */
   hintKey?: Key
   /** `fb.h` 这种带占位符的 */
   args?: Record<string, number>
@@ -66,53 +67,53 @@ export function splitLabel(text: string): { label: string; hint?: string } {
 
 /** 文件 / 编辑 / 视图三类。顺序照着原生菜单来 —— 空查询时面板列的就是菜单本身 */
 const GENERAL: Entry[] = [
-  { action: 'file:new', labelKey: 'cmd.new', hint: '⌘N' },
-  { action: 'file:open', labelKey: 'cmd.open', hint: '⌘O' },
-  { action: 'file:open-folder', labelKey: 'cmd.openFolder', hint: '⇧⌘O' },
-  { action: 'file:quick-open', labelKey: 'cmd.quickOpen', hint: '⌘T' },
-  { action: 'file:save', labelKey: 'cmd.save', hint: '⌘S' },
-  { action: 'file:save-as', labelKey: 'cmd.saveAs', hint: '⇧⌘S' },
-  { action: 'file:close-tab', labelKey: 'cmd.closeTab', hint: '⌘W' },
-  { action: 'file:reopen-closed-tab', labelKey: 'cmd.reopenTab', hint: '⌥⇧⌘T' },
-  { action: 'file:next-tab', labelKey: 'cmd.nextTab', hint: '⌃⇥' },
-  { action: 'file:prev-tab', labelKey: 'cmd.prevTab', hint: '⌃⇧⇥' },
+  { action: 'file:new', labelKey: 'cmd.new' },
+  { action: 'file:open', labelKey: 'cmd.open' },
+  { action: 'file:open-folder', labelKey: 'cmd.openFolder' },
+  { action: 'file:quick-open', labelKey: 'cmd.quickOpen' },
+  { action: 'file:save', labelKey: 'cmd.save' },
+  { action: 'file:save-as', labelKey: 'cmd.saveAs' },
+  { action: 'file:close-tab', labelKey: 'cmd.closeTab' },
+  { action: 'file:reopen-closed-tab', labelKey: 'cmd.reopenTab' },
+  { action: 'file:next-tab', labelKey: 'cmd.nextTab' },
+  { action: 'file:prev-tab', labelKey: 'cmd.prevTab' },
   { action: 'file:history', labelKey: 'cmd.history' },
   { action: 'file:check-refs', labelKey: 'cmd.checkRefs' },
-  { action: 'file:export-html', labelKey: 'cmd.exportHtml', hint: '⇧⌘E' },
-  { action: 'file:export-pdf', labelKey: 'cmd.exportPdf', hint: '⌥⌘P' },
+  { action: 'file:export-html', labelKey: 'cmd.exportHtml' },
+  { action: 'file:export-pdf', labelKey: 'cmd.exportPdf' },
   { action: 'file:export-png', labelKey: 'cmd.exportPng' },
 
-  { action: 'edit:undo', labelKey: 'cmd.undo', hint: '⌘Z' },
-  { action: 'edit:redo', labelKey: 'cmd.redo', hint: '⇧⌘Z' },
-  { action: 'edit:select-all', labelKey: 'cmd.selectAll', hint: '⌘A' },
-  { action: 'edit:find', labelKey: 'cmd.find', hint: '⌘F' },
-  { action: 'edit:replace', labelKey: 'cmd.replace', hint: '⌥⌘R' },
-  { action: 'edit:find-next', labelKey: 'cmd.findNext', hint: '⌘G' },
-  { action: 'edit:find-prev', labelKey: 'cmd.findPrev', hint: '⇧⌘G' },
-  { action: 'edit:find-in-files', labelKey: 'cmd.findInFiles', hint: '⇧⌘F' },
-  { action: 'edit:select-next', labelKey: 'cmd.selectNext', hint: '⌘D' },
-  { action: 'edit:copy-html', labelKey: 'cmd.copyHtml', hint: '⌥⇧⌘C' },
-  { action: 'edit:paste-plain', labelKey: 'cmd.pastePlain', hint: '⌥⇧⌘V' },
+  { action: 'edit:undo', labelKey: 'cmd.undo' },
+  { action: 'edit:redo', labelKey: 'cmd.redo' },
+  { action: 'edit:select-all', labelKey: 'cmd.selectAll' },
+  { action: 'edit:find', labelKey: 'cmd.find' },
+  { action: 'edit:replace', labelKey: 'cmd.replace' },
+  { action: 'edit:find-next', labelKey: 'cmd.findNext' },
+  { action: 'edit:find-prev', labelKey: 'cmd.findPrev' },
+  { action: 'edit:find-in-files', labelKey: 'cmd.findInFiles' },
+  { action: 'edit:select-next', labelKey: 'cmd.selectNext' },
+  { action: 'edit:copy-html', labelKey: 'cmd.copyHtml' },
+  { action: 'edit:paste-plain', labelKey: 'cmd.pastePlain' },
 
-  { action: 'view:toggle-sidebar', labelKey: 'cmd.sidebar', hint: '⌘\\' },
-  { action: 'view:toggle-outline', labelKey: 'cmd.outline', hint: '⇧⌘T' },
+  { action: 'view:toggle-sidebar', labelKey: 'cmd.sidebar' },
+  { action: 'view:toggle-outline', labelKey: 'cmd.outline' },
   { action: 'view:toggle-format-bar', labelKey: 'cmd.formatBar' },
-  { action: 'view:toggle-source', labelKey: 'cmd.source', hint: '⌘/' },
-  { action: 'view:toggle-read-only', labelKey: 'cmd.readOnly', hint: '⌥⌘L' },
-  { action: 'view:toggle-focus', labelKey: 'cmd.focus', hint: '⌥⌘F' },
-  { action: 'view:toggle-typewriter', labelKey: 'cmd.typewriter', hint: '⌥⌘T' },
-  { action: 'view:toggle-fold', labelKey: 'cmd.toggleFold', hint: '⌥⌘[' },
-  { action: 'view:zoom-in', labelKey: 'cmd.zoomIn', hint: '⌘+' },
-  { action: 'view:zoom-out', labelKey: 'cmd.zoomOut', hint: '⌘−' },
-  { action: 'view:zoom-reset', labelKey: 'cmd.zoomReset', hint: '⌥⌘0' },
-  { action: 'view:toggle-dark', labelKey: 'cmd.toggleDark', hint: '⌃⌘D' },
+  { action: 'view:toggle-source', labelKey: 'cmd.source' },
+  { action: 'view:toggle-read-only', labelKey: 'cmd.readOnly' },
+  { action: 'view:toggle-focus', labelKey: 'cmd.focus' },
+  { action: 'view:toggle-typewriter', labelKey: 'cmd.typewriter' },
+  { action: 'view:toggle-fold', labelKey: 'cmd.toggleFold' },
+  { action: 'view:zoom-in', labelKey: 'cmd.zoomIn' },
+  { action: 'view:zoom-out', labelKey: 'cmd.zoomOut' },
+  { action: 'view:zoom-reset', labelKey: 'cmd.zoomReset' },
+  { action: 'view:toggle-dark', labelKey: 'cmd.toggleDark' },
   { action: 'view:disable-custom-theme', labelKey: 'cmd.customOff' },
-  { action: 'app:preferences', labelKey: 'cmd.prefs', hint: '⌘,' },
+  { action: 'app:preferences', labelKey: 'cmd.prefs' },
   { action: 'app:check-update', labelKey: 'cmd.checkUpdate' },
 
   // 「前往」菜单（第八节 6）
-  { action: 'go:back', labelKey: 'cmd.navBack', hint: '⌥⌘←' },
-  { action: 'go:forward', labelKey: 'cmd.navForward', hint: '⌥⌘→' }
+  { action: 'go:back', labelKey: 'cmd.navBack' },
+  { action: 'go:forward', labelKey: 'cmd.navForward' }
 ]
 
 /** 主题四态：名字借设置面板那份，右边一列标「主题」当分类 */
@@ -141,13 +142,13 @@ const FORMAT: Entry[] = [
   { action: 'fmt:latex-format', labelKey: 'cmd.latexFormat' },
   { action: 'fmt:link', labelKey: 'fb.link' },
 
-  { action: 'fmt:h1', labelKey: 'fb.h', args: { n: 1 }, hint: '⌘1' },
-  { action: 'fmt:h2', labelKey: 'fb.h', args: { n: 2 }, hint: '⌘2' },
-  { action: 'fmt:h3', labelKey: 'fb.h', args: { n: 3 }, hint: '⌘3' },
-  { action: 'fmt:h4', labelKey: 'fb.h', args: { n: 4 }, hint: '⌘4' },
-  { action: 'fmt:h5', labelKey: 'fb.h', args: { n: 5 }, hint: '⌘5' },
-  { action: 'fmt:h6', labelKey: 'fb.h', args: { n: 6 }, hint: '⌘6' },
-  { action: 'fmt:p', labelKey: 'fb.p', hint: '⌘0' },
+  { action: 'fmt:h1', labelKey: 'fb.h', args: { n: 1 } },
+  { action: 'fmt:h2', labelKey: 'fb.h', args: { n: 2 } },
+  { action: 'fmt:h3', labelKey: 'fb.h', args: { n: 3 } },
+  { action: 'fmt:h4', labelKey: 'fb.h', args: { n: 4 } },
+  { action: 'fmt:h5', labelKey: 'fb.h', args: { n: 5 } },
+  { action: 'fmt:h6', labelKey: 'fb.h', args: { n: 6 } },
+  { action: 'fmt:p', labelKey: 'fb.p' },
 
   { action: 'fmt:code-block', labelKey: 'fb.codeBlock' },
   { action: 'fmt:quote', labelKey: 'fb.quote' },
@@ -155,7 +156,7 @@ const FORMAT: Entry[] = [
   { action: 'fmt:olist', labelKey: 'fb.olist' },
   { action: 'fmt:task', labelKey: 'fb.task' },
 
-  { action: 'fmt:table', labelKey: 'fb.table', hint: '⌃⌘T' },
+  { action: 'fmt:table', labelKey: 'fb.table' },
   { action: 'fmt:image', labelKey: 'fb.image' },
   { action: 'fmt:hr', labelKey: 'fb.hr' },
   { action: 'fmt:math-block', labelKey: 'fb.mathBlock' },
@@ -174,7 +175,8 @@ export function commandItems(run: (action: MenuAction) => void): PaletteItem[] {
   return entries.map((e) => {
     const raw = t(e.labelKey, e.args)
     const split = splitLabel(raw)
-    const hint = e.hint ?? (e.hintKey ? t(e.hintKey) : split.hint)
+    // 名字里带着的那截（`粗体  ⌘B`）只是拆掉；那一列认菜单（单测核过两者一致）
+    const hint = keyOf(e.action) ?? (e.hintKey ? t(e.hintKey) : split.hint)
     return {
       label: split.label,
       hint,

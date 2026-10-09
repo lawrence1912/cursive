@@ -3,7 +3,8 @@ import { applyI18n, onLangChange, t, type Key } from '../i18n'
 import { icon, type IconName } from './icons'
 import { closeMenu, openMenu, type MenuItem } from './menu'
 import { FileSearch } from './file-search'
-import type { DirEntry, ReplaceTarget, SearchHit, SearchOptions } from '../../shared/types'
+import { withKey } from './shortcuts'
+import type { DirEntry, MenuAction, ReplaceTarget, SearchHit, SearchOptions } from '../../shared/types'
 
 export interface Node {
   entry: DirEntry
@@ -181,15 +182,17 @@ export interface SidebarHooks {
  * `extra` = **次要那三颗**：指针进了侧栏、或者焦点落进工具栏才现身（`.is-extra`，
  * 样式在 base.css）。这块地方是抢来的 —— 工具栏恒定 124px，而实测侧栏在默认的 252px
  * 时文件夹名只剩 99px、到下限 180px 只剩 27px，而「我在哪个库」是这块面板唯一的定位信息。
- * 挑这三颗是因为它们都不是唯一入口：新建文件夹 / 完全折叠在右键菜单里，打开其他文件夹有 ⌘⇧O。
+ * 挑这三颗是因为它们都不是唯一入口：新建文件夹 / 完全折叠在右键菜单里，打开其他文件夹有 ⇧⌘O。
+ *
+ * `same` = 与哪条菜单命令是同一件事：悬停说明里的快捷键照它从 `ui/shortcuts.ts` 取（第八节 14）。
  */
-const TOOL_BTNS: { act: string; name: IconName; labelKey: Key; key?: string; extra?: boolean }[] = [
+const TOOL_BTNS: { act: string; name: IconName; labelKey: Key; same?: MenuAction; extra?: boolean }[] = [
   { act: 'new-file', name: 'file-plus', labelKey: 'sb.newFile' },
   { act: 'new-folder', name: 'folder-plus', labelKey: 'sb.newFolder', extra: true },
   // 「完全折叠」排在两个「新建」之后、搜索之前 —— 与 VS Code 资源管理器同序
   { act: 'collapse', name: 'collapse', labelKey: 'sb.collapseAll', extra: true },
-  { act: 'search', name: 'search', labelKey: 'sb.search', key: '⌘⇧F' },
-  { act: 'open-folder', name: 'folder-open', labelKey: 'sb.openFolder', key: '⌘⇧O', extra: true }
+  { act: 'search', name: 'search', labelKey: 'sb.search', same: 'edit:find-in-files' },
+  { act: 'open-folder', name: 'folder-open', labelKey: 'sb.openFolder', same: 'file:open-folder', extra: true }
 ]
 
 export class Sidebar {
@@ -272,7 +275,7 @@ export class Sidebar {
         const spec = TOOL_BTNS.find((b) => b.act === btn.dataset['act'])
         if (!spec) continue
         const label = t(spec.labelKey)
-        btn.title = spec.key ? `${label} (${spec.key})` : label
+        btn.title = spec.same ? withKey(label, spec.same) : label
         btn.setAttribute('aria-label', label)
       }
     })
@@ -291,7 +294,7 @@ export class Sidebar {
     this.el.classList.toggle('is-hidden')
   }
 
-  /** 「打开其他文件夹」入口（工具栏按钮 / 右键菜单 / ⌘⇧O 都走这里） */
+  /** 「打开其他文件夹」入口（工具栏按钮 / 右键菜单 / ⇧⌘O 都走这里） */
   async pick(): Promise<void> {
     if (this.hooks.pickFolder) {
       await this.hooks.pickFolder()
@@ -1093,7 +1096,7 @@ export class Sidebar {
 
 function toolButton(spec: (typeof TOOL_BTNS)[number]): string {
   const label = t(spec.labelKey)
-  const hint = spec.key ? `${label} (${spec.key})` : label
+  const hint = spec.same ? withKey(label, spec.same) : label
   const cls = spec.extra ? 'sb-tool is-extra' : 'sb-tool'
   return `<button class="${cls}" data-act="${spec.act}" title="${hint}" aria-label="${label}">${icon(spec.name)}</button>`
 }

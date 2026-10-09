@@ -2,6 +2,7 @@ import { type EditorState, type Range, type Text } from '@codemirror/state'
 import { Decoration, type DecorationSet, type EditorView } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 import { t } from '../../i18n'
+import { linkTitle } from '../link'
 import { calloutFolded, matchCallout, type CalloutMatch } from '../callout'
 import { itemSpan, sectionFolded, spanOf as foldSpanOf, type FoldSpan } from '../fold'
 import { collectHeadings } from '../headings'
@@ -54,6 +55,17 @@ const markCache = new Map<string, Decoration>()
  */
 function linkDeco(title: string): Decoration {
   return Decoration.mark({ class: 'cm-lp-link', attributes: { title } })
+}
+/**
+ * 没有单独一截地址可说的链接（引用式 `[文字][id]`、裸链接、`<地址>`）：只说怎么打开。
+ * 那句话随语言变，键里带上它本身（同 tagDeco）
+ */
+function openableDeco(cls: string): Decoration {
+  const title = linkTitle()
+  const key = `${cls}|${title}`
+  let d = markCache.get(key)
+  if (!d) markCache.set(key, (d = Decoration.mark({ class: cls, attributes: { title } })))
+  return d
 }
 /**
  * 标签那颗药丸（0.4.1）。title 是固定的一句话，所以可以走缓存 ——
@@ -247,7 +259,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       // 引用定义 `[id]: 地址` 里的那个不上色：定义行是元数据不是正文
       // （⌘+点击照样跟得过去 —— 点击认的是语法树，不是这个类名）
       if (owner !== 'Autolink' && owner !== 'LinkReference') {
-        out.push(markDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
+        out.push(openableDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
       }
       return
     }
@@ -416,7 +428,7 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
       // 而这份装饰每次选区变动都要重建（判断 2），那笔开销不能摊在这儿
       const dest = node.node.getChild('URL')
       out.push(
-        (dest ? linkDeco(doc.sliceString(dest.from, dest.to)) : markDeco('cm-lp-link')).range(
+        (dest ? linkDeco(linkTitle(doc.sliceString(dest.from, dest.to))) : openableDeco('cm-lp-link')).range(
           node.from,
           node.to
         )
@@ -425,8 +437,9 @@ function visit(node: SyntaxNodeRef, ctx: Ctx): boolean | void {
     }
 
     case 'Autolink':
-      // `<https://…>`：尖括号已由 LinkMark 藏掉，整段按链接上色。地址就是正文，不必再给 title
-      out.push(markDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
+      // `<https://…>`：尖括号已由 LinkMark 藏掉，整段按链接上色。地址就是正文，
+      // 悬停说明只说怎么打开
+      out.push(openableDeco('cm-lp-link cm-lp-autolink').range(node.from, node.to))
       return
   }
 }
