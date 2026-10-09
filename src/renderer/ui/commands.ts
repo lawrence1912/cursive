@@ -79,6 +79,7 @@ const GENERAL: Entry[] = [
   { action: 'file:history', labelKey: 'cmd.history' },
   { action: 'file:check-refs', labelKey: 'cmd.checkRefs' },
   { action: 'file:export-html', labelKey: 'cmd.exportHtml', hint: '⇧⌘E' },
+  { action: 'file:export-pdf', labelKey: 'cmd.exportPdf', hint: '⌥⌘P' },
   { action: 'file:export-png', labelKey: 'cmd.exportPng' },
 
   { action: 'edit:undo', labelKey: 'cmd.undo', hint: '⌘Z' },

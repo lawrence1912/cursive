@@ -34,6 +34,12 @@ export type MenuAction =
    */
   | 'file:export-png'
   /**
+   * 导出为 PDF（第八节 12，契约 v40，⌥⌘P）。从前是一条 `#selector` 菜单项，壳直接接手 ——
+   * 渲染层插不上话，没法在弹保存面板之前先说「有两张图找不到」。现在与导出 HTML / 长图
+   * 一样从渲染层起步：先体检，再把渲好的 HTML 交给壳（`exportPdf`）
+   */
+  | 'file:export-pdf'
+  /**
    * 撤销 / 重做（0.4.0 修）。**必须走这条通道，不能再挂 AppKit 的 `undo:`/`redo:`。**
    *
    * `undo:` 沿响应链落进 WKWebView，撤的是 **WebKit 自己那套 DOM 编辑撤销栈**，
@@ -406,10 +412,20 @@ export interface ScratchDoc {
  */
 export interface PngExport {
   path: string
-  /** 成图的像素尺寸（宽 × 高），状态栏那句回执报它 */
+  /** 成图的像素尺寸（宽 × 高），状态栏那句回执报它（分成多张时是第一张的） */
   pixels: [number, number]
   /** 太长被截了：只出了前面那些 */
   clipped: boolean
+  /** 分成多张时每一张的路径（第八节 12，契约 v40）；`path` 就是第一张 */
+  parts?: string[]
+}
+
+/** 长图离屏排一遍量出来的样子（第八节 12，契约 v40 的 `measurePng`） */
+export interface PngMeasure {
+  /** 整篇高度，CSS px（成图是它的 2 倍） */
+  height: number
+  /** 「分成多张」会切成几张（按顶层块的边界切，每张不超过上限） */
+  parts: number
 }
 
 /**
@@ -680,7 +696,18 @@ export interface CursiveApi {
    * 壳侧仍会夹一次上下界 —— 过窄读不了，过宽发出去没人看。
    *
    * 取消保存面板返回 null；成图太长会被截断，那时 `clipped` 为真（不是失败，但要说一句）。 */
-  exportPng(html: string, defaultName: string, width: number): Promise<PngExport | null>
+  exportPng(html: string, defaultName: string, width: number, split?: boolean): Promise<PngExport | null>
+  /**
+   * 契约 v40（第八节 12）：长图离屏排一遍，量出整篇多高、分成多张会切成几张 ——
+   * **在弹保存面板之前**知道会不会超过上限，而不是截完了才说。与真按快门同一份 HTML、
+   * 同一个宽度夹取、同一句留白修正，量出来的就是真拍时的样子
+   */
+  measurePng(html: string, width: number): Promise<PngMeasure>
+  /**
+   * 契约 v40（第八节 12）：导出为 PDF。HTML 是渲染层体检时已经渲好的那一份（不重渲一遍），
+   * 壳照旧要一份目录装书签、弹选项与保存面板、打印成 PDF。取消与失败都由壳自己收尾
+   */
+  exportPdf(html: string): Promise<void>
 
   /** ---- P3-7 多窗口（契约 v13）----
    * 开一个新窗口。窗口之间除了 localStorage 与**偏好广播**（契约 v17）全无共享状态 ——

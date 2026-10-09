@@ -199,6 +199,7 @@ const zh = {
   'cmd.prevTab': '上一个标签',
   'cmd.history': '版本历史…',
   'cmd.checkRefs': '检查引用…',
+  'cmd.exportPdf': '导出为 PDF…',
   'cmd.exportHtml': '导出为 HTML…',
   'cmd.exportPng': '导出为长图…',
   'cmd.undo': '撤销',
@@ -351,6 +352,7 @@ const zh = {
   'note.exported': '已导出「{name}」',
   'note.exportedPng': '长图已导出「{name}」（{w}×{h}）',
   'note.pngClipped': '文档太长：「{name}」只出了前 {h} 像素',
+  'note.exportedPngParts': '长图已分成 {n} 张导出（从「{name}」起）',
   'note.rolledBack': '已回到这个版本（⌘Z 可撤回）',
   'ro.on': '只读：渲染效果固定，选择、复制、查找与跳转照常',
   'ro.off': '已退出只读，可以编辑了',
@@ -392,6 +394,15 @@ const zh = {
   'refs.movedMany': '挪动之后，{docs} 份文档里有 {n} 处引用找不到了',
   'refs.savedAs': '另存到新位置之后，有 {n} 处引用找不到了 —— 相对路径是跟着文档走的',
   'refs.view': '查看',
+  // 第八节 12：导出前体检
+  'export.issues': '导出前发现 {n} 处问题 —— 回车照样导出，或选一处去看看',
+  'export.anyway': '照样导出',
+  'export.why.diagram': '图表画不出来（导出物里留的是源码）',
+  'export.tooTall': '这张长图有 {h} 像素高，超过了 32768 的上限 —— 选一个办法',
+  'export.split': '分成 {n} 张导出',
+  'export.narrow': '缩小范围：先选中要导出的那一段',
+  'export.clip': '照样导出（截在 32768 像素）',
+  'export.narrowHint': '选中要导出的那一段，再导出为长图 —— 有选区时只导出选区',
 
   // ---------- 检查更新（ui/update.ts，0.3.0 T2）----------
   // 四句话都落在状态栏。**「正在检查」那句非说不可** —— 这一下要过一次网络，

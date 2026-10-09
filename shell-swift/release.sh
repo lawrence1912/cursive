@@ -10,12 +10,14 @@ cd "$(dirname "$0")/.."
 echo "==> [1/4] 类型检查 + 单元测试 + 构建 renderer"
 npm run typecheck --silent && npx vitest run 2>&1 | grep -E "Tests |FAIL" && npm run build --silent
 
-echo "==> [2/4] 编译原生壳 + 原生专项（键盘焦点 / 第八节 5–7 核心流程）"
+echo "==> [2/4] 编译原生壳 + 原生专项（键盘焦点 / 第八节 5–7 核心流程 / 第八节 12 PDF 走查）"
 ./shell-swift/build.sh 2>&1 | grep -E "^built|error"
 python3 shell-swift/check-focus.py
 # 第八节 5–7：只读阅读模式、后退 / 前进、重新打开关闭的标签。真窗口里走菜单那条路，
 # 每条「挡住了」都钉着一个「可编辑时真的会改」的证人（test/native-flow.js）
 python3 shell-swift/check-flow.py
+# 第八节 12：宽表格、长代码行、标题与正文分页，在真的打印路径上印一份看（只导 PDF、不跑探针）
+python3 shell-swift/check-pdf.py
 
 echo "==> [3/4] E2E 十一用例 + 崩溃恢复竞态（含拖拽条 hitTest 自检）"
 ARTIFACTS=$(mktemp -d /tmp/cursive-e2e-results.XXXXXX)
@@ -800,6 +802,16 @@ if sys.argv[1] == 'links.md':
     ok = ok and mp.get('listed') == ['<assets/中文 图.png>', 'link-target.md']
     # 只说、不动：盘上那份一个字节都没改（不复制资源、不改链接）
     ok = ok and mp.get('untouched') is True
+    # 第八节 12：导出前体检。那张坏图让 HTML 与 PDF 两条导出都先停下来问一句：
+    # Esc 作罢就真的什么都没导出；回车照样导出，HTML 写下去了、PDF 交给了壳（只此一次）
+    ec = r.get('exportCheckProbe') or {}
+    ok = ok and not ec.get('err')
+    eh = ec.get('html') or {}
+    ok = ok and str(eh.get('placeholder', '')).startswith('导出前发现 1 处问题')
+    ok = ok and eh.get('items') == ['照样导出', '不存在的图.png']
+    ok = ok and not ec.get('htmlCancelled') and '已导出' in (ec.get('htmlDone') or '')
+    ok = ok and (ec.get('pdf') or {}).get('items') == ['照样导出', '不存在的图.png']
+    ok = ok and ec.get('pdfAsked') is True and e.get('pdfCalls') == 1
     # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
     # 对 file:// 按「在不在」回话，就是为了让这条路测得到
     ok = ok and lp.get('fileNote') == '打不开：/tmp/cursive-e2e/缺失.png'
@@ -913,7 +925,11 @@ for i in range(500):
     print('第 %d 段。' % (i + 1) + '中文正文内容，用来把文档撑到好几页。' * 2 + '\n')
 LONG
 rm -f /tmp/cursive-shell-pdf.json /tmp/cursive-shell-e2e.json
-CURSIVE_SMOKE=1 CURSIVE_SMOKE_PDF="$FIX/out/long.pdf" ./shell-swift/cursive-shell "$FIX/long.md" 2>/dev/null
+# 第八节 12：这份长文档顺带走一遍「长图超高」—— 导出为长图时不该先弹保存面板再截断，
+# 而是先说超了、摆出「分成 N 张」，选它之后真的切成几张（见下面 PNGSPLIT）
+rm -f "$FIX"/out/long*.png
+CURSIVE_SMOKE=1 CURSIVE_SMOKE_PDF="$FIX/out/long.pdf" CURSIVE_SMOKE_PNG="$FIX/out/long.png" \
+    ./shell-swift/cursive-shell "$FIX/long.md" 2>/dev/null
 python3 - <<'PAGED'
 import json, os, sys
 path = '/tmp/cursive-shell-pdf.json'
@@ -962,6 +978,32 @@ SELALL
 
 # 第八节 18 顺带修的：**查找刻度从前最多画 400 条**。命中一密（这份夹具一千处、五百行），
 # 第 400 条落在滚动条六成高的地方，下面那四成的命中一条都不画。同样只有长文档测得出来
+python3 - <<'PNGSPLIT'
+import glob, json, re, struct, sys
+r = json.load(open('/tmp/cursive-shell-e2e.json'))['result']
+pg = r.get('pngProbe') or {}
+ask = pg.get('ask') or {}
+ok = not pg.get('err')
+# 保存面板之前就说清楚超了多少，第一条出路是「分成 N 张」
+m = re.match(r'这张长图有 (\d+) 像素高', ask.get('placeholder') or '')
+items = ask.get('items') or []
+n = int(re.match(r'分成 (\d+) 张导出', items[0]).group(1)) if items and re.match(r'分成 (\d+) 张导出', items[0]) else 0
+ok = ok and m is not None and int(m.group(1)) > 32768 and n >= 2
+ok = ok and items[1:] == ['缩小范围：先选中要导出的那一段', '照样导出（截在 32768 像素）']
+ok = ok and ('长图已分成 %d 张导出' % n) in (pg.get('note') or '')
+# 盘上真的是 N 张：宽度都是栏宽的 2 倍、每张不超过上限、合起来正好是量出来的整篇
+parts = sorted(glob.glob('/tmp/cursive-e2e/out/long-*.png'), key=lambda p: int(re.search(r'-(\d+)\.png$', p).group(1)))
+heights = []
+for path in parts:
+    w, h = struct.unpack('>II', open(path, 'rb').read()[16:24])
+    ok = ok and w == pg.get('wantWidth', 0) * 2 and 0 < h <= 32768
+    heights.append(h)
+ok = ok and len(parts) == n and m is not None and abs(sum(heights) - int(m.group(1))) <= 2 * n
+print(('PASS ' if ok else 'FAIL ') + '长图超高先说、分成多张 '
+      + str({'placeholder': ask.get('placeholder'), 'parts': len(parts), 'heights': heights}))
+sys.exit(0 if ok else 1)
+PNGSPLIT
+
 python3 - <<'MARKS'
 import json, sys
 m = json.load(open('/tmp/cursive-shell-e2e.json'))['result'].get('marksProbe') or {}

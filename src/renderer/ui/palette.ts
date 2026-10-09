@@ -104,6 +104,11 @@ export class Palette {
   private unbindEscape: (() => void) | null = null
   /** 查询预处理（0.2.x 跳到行）。null = 输入什么就匹配什么 */
   private prepare: ((raw: string) => PaletteQuery) | null = null
+  /**
+   * 没选任何一条就关掉了（Esc、点遮罩、被另一次 open 顶掉）时叫它（第八节 12）。
+   * 导出前体检要知道「人作罢了」—— 不然那次导出就一直悬着
+   */
+  private dismissed: (() => void) | null = null
 
   constructor() {
     this.el = document.createElement('div')
@@ -150,8 +155,13 @@ export class Palette {
     placeholder: string,
     emptyKey: Key,
     /** 查询预处理（0.2.x）。不给 = 输入什么就拿什么去匹配，与从前完全一样 */
-    prepare?: (raw: string) => PaletteQuery
+    prepare?: (raw: string) => PaletteQuery,
+    /** 没选就关掉时叫它（第八节 12 导出前体检）。选了某一条则不叫 */
+    onDismiss?: () => void
   ): void {
+    // 上一次还开着就被顶掉：那一次也算「没选」
+    this.takeDismiss()?.()
+    this.dismissed = onDismiss ?? null
     this.items = items
     this.emptyKey = emptyKey
     this.prepare = prepare ?? null
@@ -202,6 +212,14 @@ export class Palette {
     this.prepare = null
     this.listEl.textContent = ''
     this.lastFocus?.focus()
+    // 焦点还回去之后再说「作罢了」：收到这句话的人多半要接着做点什么（说一句、退回原处）
+    this.takeDismiss()?.()
+  }
+
+  private takeDismiss(): (() => void) | null {
+    const fn = this.dismissed
+    this.dismissed = null
+    return fn
   }
 
   private onKey(e: KeyboardEvent): void {
@@ -233,6 +251,8 @@ export class Palette {
     // 顺序反了的话光标最后落在面板刚消失的位置上
     // 原串要在 `close()` 之前取：关面板会清空输入框
     const raw = this.input.value
+    // 选了一条：这不是「作罢」，关之前把那个回调摘掉
+    this.dismissed = null
     this.close()
     void pick.item.run(raw)
   }

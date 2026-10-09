@@ -9,7 +9,7 @@ import { loadKatex } from '../src/renderer/editor/live-preview/widgets'
 import { plainInline } from '../src/renderer/editor/inline-text'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 import { parsedExtent, parsedTree, primeTree, rememberTree } from '../src/renderer/editor/syntax'
-import { collectCodeLangs, loadCodeLangs, renderBody } from '../src/renderer/export/render'
+import { breakable, collectCodeLangs, loadCodeLangs, renderBody } from '../src/renderer/export/render'
 import {
   EXPORT_CSS,
   TYPOGRAPHY_DEFAULT,
@@ -301,13 +301,54 @@ describe('导出样式表（P4-2 的地基）', () => {
     expect(EXPORT_CSS).not.toMatch(/@page[^}]*size\s*:/)
   })
 
-  it('打印时的断页规则在：标题不落页脚、表格与告示块整块搬页、代码块不锁', () => {
+  it('打印时的断页规则在：标题不落页脚、表格按行拆、图与公式整块搬页、代码块不锁', () => {
     const print = EXPORT_CSS.slice(EXPORT_CSS.indexOf('@media print'))
     expect(print).toContain('break-after: avoid')
-    expect(print).toMatch(/table[\s\S]*break-inside: avoid/)
+    // 第八节 12 走查：光写 break-after 留不住（后面那段拆不开时 WebKit 照样把标题留在页底）——
+    // 标题自己不许拆，底下挂一块抵掉了高度的占位
+    expect(print).toMatch(/h6::after \{\s*content: ""; display: block; height: 4em; margin-bottom: -4em;/)
+    expect(print).toContain('.cursive-doc .keep { break-inside: avoid; }')
+    // 表格 / 图 / 公式整块搬页（表格前的标题跟着 div.keep 一起走）
+    expect(print).toMatch(/\.cursive-doc table, \.cursive-doc \.callout,[\s\S]*?\.cursive-doc img \{ break-inside: avoid; \}/)
+    expect(print).toContain('thead { display: table-header-group; }')
     expect(print).toContain('figure.code { break-inside: auto; }')
     // 纸上没有横向滚动条：代码宁可折行也不能被裁掉
     expect(print).toContain('white-space: pre-wrap')
+  })
+})
+
+describe('PDF 走查补的两处（第八节 12）', () => {
+  it('长串插可折点：贪心地切，每截不超过 24 个字符、优先断在标点后面', () => {
+    const url = 'https://example.com/a/very/long/url/without/any/spaces/index.html'
+    expect(breakable(url).split('<wbr>').join('')).toBe(url)
+    expect(breakable(url).split('<wbr>')).toEqual(['https://example.com/a/', 'very/long/url/without/', 'any/spaces/index.html'])
+    // 没有标点可断的硬断；每截都不超过 24 个字符
+    const blob = 'A1b2C3d4'.repeat(6)
+    expect(breakable(blob).split('<wbr>').map((x) => x.length)).toEqual([24, 24])
+    // 短的、带空格的原样（只转义）；转义不被折点拆开；emoji 不被从中间切开
+    expect(breakable('a < b & c')).toBe('a &lt; b &amp; c')
+    expect(breakable('<' + 'x'.repeat(30) + '>')).not.toMatch(/&[a-z]*<wbr>/)
+    const emoji = '😀'.repeat(30)
+    expect(breakable(emoji).split('<wbr>').every((x) => !/[\uD800-\uDBFF]$/.test(x))).toBe(true)
+  })
+
+  it('表格格子里的长网址拿到折点，短格子一个字节不变', () => {
+    const url = 'https://example.com/a/very/long/url/without/any/spaces/index.html'
+    const out = html(`| 名 | 地址 |\n| --- | --- |\n| short | ${url} |\n`)
+    expect(out).toContain('<td>short</td>')
+    expect(out).toContain('<td>https://example.com/a/<wbr>very/long/url/without/<wbr>any/spaces/index.html</td>')
+  })
+
+  it('标题与紧跟着的表格 / 独图段落 / 块级公式 / mermaid 包进 div.keep；别的不包、告示块里的不包', () => {
+    expect(html('## 图\n\n![a](a.png)\n')).toMatch(/^<div class="keep">\n<h2[^>]*>图<\/h2>\n<p><img[^>]*><\/p>\n<\/div>/)
+    expect(html('## 公式\n\n$$\nx = 1\n$$\n')).toMatch(/<div class="keep">\n<h2[^>]*>公式<\/h2>\n<div class="math-block">/)
+    expect(html('## 图表\n\n```mermaid\nflowchart LR\n  A --> B\n```\n')).toMatch(/<div class="keep">\n<h2[^>]*>图表<\/h2>\n<figure class="mermaid"/)
+    expect(html('## 表\n\n| a |\n| --- |\n| 1 |\n')).toMatch(/<div class="keep">\n<h2[^>]*>表<\/h2>\n<div class="table-wrap">/)
+    // 正文段落、图文混排的段落：拆得开，不包
+    expect(html('## 正文\n\n一段字。\n')).not.toContain('class="keep"')
+    expect(html('## 混排\n\n看图 ![a](a.png) 说话\n')).not.toContain('class="keep"')
+    // 只包顶层
+    expect(html('> [!note]\n> ## 里面\n>\n> ![a](a.png)\n')).not.toContain('class="keep"')
   })
 })
 

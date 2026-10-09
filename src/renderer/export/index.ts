@@ -26,6 +26,8 @@ export interface HtmlExport {
   html: string
   /** 建议的文件名（不含目录），壳侧保存面板拿它当默认值 */
   title: string
+  /** 画不出来的 mermaid 图表在源码里的起点（导出物里留下的是源码）—— 导出前体检要报它（第八节 12） */
+  failed: number[]
 }
 
 export async function exportHtmlDocument(
@@ -47,14 +49,16 @@ export async function exportHtmlDocument(
   primeTree(state)
   const body = renderBody(state, opts)
   let html = body.html
+  const failed: number[] = []
   for (const block of body.mermaid) {
     const svg = await renderMermaidSvg(block.src)
     // 渲染失败就把占位（= 源码）留在原地，和编辑器里 mermaid 出错时一致。
     // 替换值走函数形式：SVG 里但凡出现 `$&` `$'` 这类序列，字符串形式会把它们当成
     // 替换模式展开，图就当场碎掉
     if (svg) html = html.replace(block.placeholder, () => svg)
+    else failed.push(block.from)
   }
-  return { html: wrapDocument(html, body.title, type), title: body.title }
+  return { html: wrapDocument(html, body.title, type), title: body.title, failed }
 }
 
 /** 一张图。失败返回 null —— 一张画不出来不该带走整份导出 */

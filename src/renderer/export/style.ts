@@ -320,9 +320,17 @@ body {
   /* **栏宽只管屏幕**：纸的宽度已经由 NSPrintInfo 的纸张 + 页边距说了算，
      再让 42rem（或者设置里那个更窄的值）压一道，右边就是一大片空白 */
   .cursive-doc { max-width: none; padding: 0; }
-  /* 标题不许落在页脚上 —— 下面一行内容都没有的标题是最刺眼的分页事故 */
+  /* 标题不许落在页脚上 —— 下面一行内容都没有的标题是最刺眼的分页事故。
+     **光写 \`break-after: avoid\` 不够**（第八节 12 走查实测）：后面那段拆不开时（三行的段落
+     撞上 orphans / widows 3，只能整段挪页），WebKit 照样把标题留在页底。所以标题自己
+     不许拆、底下再挂一块 4em 高的看不见的占位：页底剩下的地方装不下「标题 + 至少几行」，
+     标题就整个挪到下一页。占位的高度用负外边距抵掉，版面上一个像素都不多 */
   .cursive-doc h1, .cursive-doc h2, .cursive-doc h3,
-  .cursive-doc h4, .cursive-doc h5, .cursive-doc h6 { break-after: avoid; }
+  .cursive-doc h4, .cursive-doc h5, .cursive-doc h6 { break-after: avoid; break-inside: avoid; }
+  .cursive-doc h1::after, .cursive-doc h2::after, .cursive-doc h3::after,
+  .cursive-doc h4::after, .cursive-doc h5::after, .cursive-doc h6::after {
+    content: ""; display: block; height: 4em; margin-bottom: -4em;
+  }
   .cursive-doc p, .cursive-doc li { orphans: 3; widows: 3; }
   /* 表格 / 告示块 / 图 / 公式整块搬页；**代码块不锁** —— 一段比一页还长的代码
      锁住只会在前一页留一大片空白，然后照样被切开 */
@@ -330,6 +338,12 @@ body {
   .cursive-doc figure.mermaid, .cursive-doc .math-block,
   .cursive-doc img { break-inside: avoid; }
   .cursive-doc figure.code { break-inside: auto; }
+  /* 标题与紧跟着它的那张表 / 图 / 公式 / mermaid 一起走（渲染层包的 div.keep，见 render.ts 的
+     keepsWithNext）—— 那几样整块搬页时，标题光靠上面那条留不住 */
+  .cursive-doc .keep { break-inside: avoid; }
+  /* 比一页还长的表照样得拆：一行别拆开。**WebKit 不守这一条**（第八节 12 走查实测：
+     行照样从中间断开，断开处也不重画表头），留着是给导出的 HTML 拿到别的浏览器里打印用的 */
+  .cursive-doc tr { break-inside: avoid; }
   /* 跨页表格每页重画表头 */
   .cursive-doc thead { display: table-header-group; }
   /* 纸上没有横向滚动条：代码与表格宁可折行，也不能被裁掉一截 */

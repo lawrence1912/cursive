@@ -332,7 +332,9 @@ let BRIDGE_JS = """
     cancelSearch: (token) => call('cancelSearch', [token]),
     userThemes: () => call('userThemes'),
     exportHtml: (html, name) => call('exportHtml', [html, name]),
-    exportPng: (html, name, width) => call('exportPng', [html, name, width]),
+    exportPng: (html, name, width, split) => call('exportPng', [html, name, width, split === true]),
+    measurePng: (html, width) => call('measurePng', [html, width]),
+    exportPdf: (html) => call('exportPdf', [html]),
     newWindow: (path) => call('newWindow', [path ?? null]),
     workspaceRoot: () => call('workspaceRoot'),
     readClipboardText: () => call('readClipboardText'),
@@ -1496,29 +1498,52 @@ let PNG_WIDTH_MAX: CGFloat = 1600
  * 加载的是**同一份导出 HTML** —— 三条导出的长相必须永远一致。
  */
 final class PNGShooter: NSObject, WKNavigationDelegate {
+    /// 第八节 12（契约 v40）：只量不拍（`measurePng`）/ 一张（截在上限）/ 分成多张
+    enum Mode { case measure, single, split }
+
     struct Shot {
         let pixelsWide: Int
         let pixelsHigh: Int
         let bytes: Int
         /// 文档比上限还长，只出了前面那些
         let clipped: Bool
+        /// 写下去的每一张（单张就一条）
+        let paths: [String]
+    }
+
+    /// 量出来的样子：整篇高度（CSS px）与分成多张时的切点（第二张起每一张的起点）
+    struct Measure {
+        let height: CGFloat
+        let cuts: [CGFloat]
     }
 
     private let html: String
-    private let out: URL
+    private let out: URL?
     private let width: CGFloat
+    private let mode: Mode
     private var wv: WKWebView?
     private var window: NSWindow?
     private var completion: ((Result<Shot, Error>) -> Void)?
+    private var measured: ((Result<Measure, Error>) -> Void)?
 
-    init(html: String, out: URL, width: CGFloat) {
+    init(html: String, out: URL?, width: CGFloat, mode: Mode = .single) {
         self.html = html
         self.out = out
         self.width = min(max(width, PNG_WIDTH_MIN), PNG_WIDTH_MAX)
+        self.mode = mode
     }
 
     func run(completion: @escaping (Result<Shot, Error>) -> Void) {
         self.completion = completion
+        load()
+    }
+
+    func measure(completion: @escaping (Result<Measure, Error>) -> Void) {
+        measured = completion
+        load()
+    }
+
+    private func load() {
         // 起步高度随便给一个：真正的高度要等文档排完才知道（didFinish 里量 scrollHeight）
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: width, height: 800))
         wv.navigationDelegate = self
@@ -1533,7 +1558,9 @@ final class PNGShooter: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // 字体与图片没稳定就按快门会拍到半张空白（同 PDF 那条路，不能用 rAF）
+        // 字体与图片没稳定就按快门会拍到半张空白（同 PDF 那条路，不能用 rAF）。
+        // 切点（第八节 12）落在**顶层块的边界**上：一张切在一行字、一张图中间的长图
+        // 比截断好不了多少。一个块自己就比上限高时才硬切
         let body = """
         // 导出 CSS 的 `padding-bottom: 30vh` 是「读的时候最后一行能滚上来」的余量，
         // 而这里的视口有整篇那么高 —— 那条余量会变成一条几百像素的白边。
@@ -1544,54 +1571,149 @@ final class PNGShooter: NSObject, WKNavigationDelegate {
         await document.fonts.ready
         await Promise.all([...document.images].map(i => i.decode().catch(() => {})))
         await new Promise(r => setTimeout(r, 120))
-        return document.body.scrollHeight
+        const max = \(Int(PNG_MAX_HEIGHT_PX / PNG_SCALE))
+        const total = document.body.scrollHeight
+        const tops = [...document.querySelectorAll('.cursive-doc > *')]
+          .map(el => Math.floor(el.getBoundingClientRect().top + window.scrollY))
+        const cuts = []
+        let start = 0
+        while (total - start > max) {
+          let best = -1
+          for (const t of tops) if (t > start && t <= start + max) best = t
+          if (best <= start) best = start + max
+          cuts.push(best)
+          start = best
+        }
+        return { height: total, cuts }
         """
         webView.callAsyncJavaScript(body, arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard let self else { return }
             var height: CGFloat = 0
-            if case .success(let v) = result, let n = v as? Double { height = CGFloat(n) }
-            self?.shoot(contentHeight: height)
+            var cuts: [CGFloat] = []
+            if case .success(let v) = result, let obj = v as? [String: Any] {
+                height = CGFloat((obj["height"] as? Double) ?? 0)
+                cuts = ((obj["cuts"] as? [Any]) ?? []).compactMap { ($0 as? Double).map { CGFloat($0) } }
+            }
+            switch self.mode {
+            case .measure:
+                self.measured?(.success(Measure(height: height, cuts: cuts)))
+                self.measured = nil
+                self.tearDown()
+            case .single:
+                self.shoot(contentHeight: height)
+            case .split:
+                self.shootParts(height: height, cuts: cuts)
+            }
         }
     }
 
     private func shoot(contentHeight: CGFloat) {
-        guard let wv, let window else { return fail(L("err.pdf.noView")) }
+        guard let out else { return fail(L("err.png.shot")) }
         let maxPoints = PNG_MAX_HEIGHT_PX / PNG_SCALE
         let full = max(contentHeight, 1)
         let clipped = full > maxPoints
-        let height = min(full, maxPoints)
-        // **把视图撑到整篇那么高**：WebKit 按视图 bounds 排版与绘制，不撑开的话
-        // 截到的只有第一屏，底下全是白的（而那张图看起来是「完整的」）
-        window.setContentSize(NSSize(width: width, height: height))
-        wv.frame = NSRect(x: 0, y: 0, width: width, height: height)
-        let cfg = WKSnapshotConfiguration()
-        cfg.rect = CGRect(x: 0, y: 0, width: width, height: height)
-        // 2 倍图。`snapshotWidth` 的单位是**点**，出来的位图还要再乘一次屏幕的
-        // backing scale —— 所以先除回去，否则 Retina 上拿到的是 4 倍（一张几十 MB 的 PNG）
-        let scale = max(window.backingScaleFactor, 1)
-        cfg.snapshotWidth = NSNumber(value: Double(width * PNG_SCALE / scale))
-        // 改完 frame 要给排版与绘制一帧时间，否则快门比重排快
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            wv.takeSnapshot(with: cfg) { image, err in
-                guard let self else { return }
-                guard let image, let tiff = image.tiffRepresentation,
-                      let rep = NSBitmapImageRep(data: tiff),
-                      let png = rep.representation(using: .png, properties: [:]) else {
-                    return self.fail(err?.localizedDescription ?? L("err.png.shot"))
-                }
-                do {
-                    try png.write(to: self.out)
-                    self.finish(.success(Shot(pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
-                                              bytes: png.count, clipped: clipped)))
-                } catch {
-                    self.fail(error.localizedDescription)
+        snap(from: 0, height: min(full, maxPoints), to: out) { [weak self] result in
+            switch result {
+            case .success(let px):
+                self?.finish(.success(Shot(pixelsWide: px.wide, pixelsHigh: px.high, bytes: px.bytes,
+                                           clipped: clipped, paths: [out.path])))
+            case .failure(let e):
+                self?.finish(.failure(e))
+            }
+        }
+    }
+
+    /// 第八节 12：分成多张，一张接一张地拍（视图只有一个，没法并行）
+    private func shootParts(height: CGFloat, cuts: [CGFloat]) {
+        guard let out else { return fail(L("err.png.shot")) }
+        let starts = [0] + cuts
+        let ends = cuts + [max(height, 1)]
+        let urls = Self.partURLs(out, count: starts.count)
+        var first: (wide: Int, high: Int)?
+        var bytes = 0
+        func next(_ i: Int) {
+            guard i < starts.count else {
+                return finish(.success(Shot(pixelsWide: first?.wide ?? 0, pixelsHigh: first?.high ?? 0,
+                                            bytes: bytes, clipped: false, paths: urls.map(\.path))))
+            }
+            snap(from: starts[i], height: ends[i] - starts[i], to: urls[i]) { [weak self] result in
+                switch result {
+                case .success(let px):
+                    if first == nil { first = (px.wide, px.high) }
+                    bytes += px.bytes
+                    next(i + 1)
+                case .failure(let e):
+                    self?.finish(.failure(e))
                 }
             }
+        }
+        next(0)
+    }
+
+    /// 拍 [top, top + height] 那一段写进 `url`。
+    ///
+    /// **把视图缩到这一段的高度、页面滚到它的起点，再按快门**：WebKit 按视图 bounds 排版与绘制，
+    /// 视图不撑开的话只截得到第一屏（而那张图看起来是「完整的」）；视图比剩下的内容还高时，
+    /// 页面又滚不到位 —— 最后一张就会拍成倒数第二张的后半截
+    private func snap(from top: CGFloat, height: CGFloat, to url: URL,
+                      then: @escaping (Result<(wide: Int, high: Int, bytes: Int), Error>) -> Void) {
+        guard let wv, let window else {
+            return then(.failure(NSError(domain: "cursive.export", code: 3,
+                                         userInfo: [NSLocalizedDescriptionKey: L("err.pdf.noView")])))
+        }
+        window.setContentSize(NSSize(width: width, height: height))
+        wv.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        wv.evaluateJavaScript("window.scrollTo(0, \(Int(top)))") { [weak self] _, _ in
+            // 改完 frame、滚完要给排版与绘制一帧时间，否则快门比重排快
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                guard let self else { return }
+                let cfg = WKSnapshotConfiguration()
+                cfg.rect = CGRect(x: 0, y: 0, width: self.width, height: height)
+                // 2 倍图。`snapshotWidth` 的单位是**点**，出来的位图还要再乘一次屏幕的
+                // backing scale —— 所以先除回去，否则 Retina 上拿到的是 4 倍（一张几十 MB 的 PNG）
+                let scale = max(window.backingScaleFactor, 1)
+                cfg.snapshotWidth = NSNumber(value: Double(self.width * PNG_SCALE / scale))
+                wv.takeSnapshot(with: cfg) { image, err in
+                    guard let image, let tiff = image.tiffRepresentation,
+                          let rep = NSBitmapImageRep(data: tiff),
+                          let png = rep.representation(using: .png, properties: [:]) else {
+                        return then(.failure(NSError(domain: "cursive.export", code: 3, userInfo: [
+                            NSLocalizedDescriptionKey: err?.localizedDescription ?? L("err.png.shot")])))
+                    }
+                    do {
+                        try png.write(to: url)
+                        then(.success((rep.pixelsWide, rep.pixelsHigh, png.count)))
+                    } catch {
+                        then(.failure(error))
+                    }
+                }
+            }
+        }
+    }
+
+    /// 分成多张时的文件名：`<名字>-1.png`、`<名字>-2.png`……落在人挑的那个路径旁边。
+    /// **有一张重名就整组换一个带序号的名字**（`<名字> 2-1.png`……），不悄悄盖掉已有的文件 ——
+    /// 保存面板问过的只是 `<名字>.png` 那一个
+    static func partURLs(_ out: URL, count: Int) -> [URL] {
+        let dir = out.deletingLastPathComponent()
+        let stem = out.deletingPathExtension().lastPathComponent
+        let fm = FileManager.default
+        var n = 1
+        while true {
+            let base = n == 1 ? stem : "\(stem) \(n)"
+            let urls = (1...max(count, 1)).map { dir.appendingPathComponent("\(base)-\($0).png") }
+            if !urls.contains(where: { fm.fileExists(atPath: $0.path) }) { return urls }
+            n += 1
         }
     }
 
     private func finish(_ result: Result<Shot, Error>) {
         completion?(result)
         completion = nil
+        tearDown()
+    }
+
+    private func tearDown() {
         window?.orderOut(nil)
         window?.contentView = nil
         window = nil
@@ -1599,8 +1721,14 @@ final class PNGShooter: NSObject, WKNavigationDelegate {
     }
 
     private func fail(_ msg: String) {
-        finish(.failure(NSError(domain: "cursive.export", code: 3,
-                                userInfo: [NSLocalizedDescriptionKey: msg])))
+        let e = NSError(domain: "cursive.export", code: 3, userInfo: [NSLocalizedDescriptionKey: msg])
+        if let measured {
+            measured(.failure(e))
+            self.measured = nil
+            tearDown()
+            return
+        }
+        finish(.failure(e))
     }
 }
 
@@ -2012,6 +2140,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
     /// 0.3.0 T3：长图那台快门。不拿住引用的话，`case "exportPng"` 一出作用域它就没了 ——
     /// 而整条路是异步的（加载 → 等字体图片 → 按快门），当场就成了「点了没反应」
     var pngShooter: PNGShooter?
+    /// 第八节 12：自检下 `exportPdf` 不弹面板，只数一下被叫了几次（E2E 核对体检放行之后真的交给了壳）
+    var smokePdfCalls = 0
     /// P3-2 跨文件搜索：串行队列 + 每次新搜索先取消上一次（边打字边搜时旧结果不许追上来）
     private let searchQueue: OperationQueue = {
         let q = OperationQueue()
@@ -2242,17 +2372,15 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
 
     // ---- PDF 导出（P4-2：打印 P4-1 的导出 HTML，真分页）----
 
-    @objc func exportPDF(_ sender: Any?) {
-        // 要的是**渲染层此刻的导出 HTML**（含未保存的修改），不是文档源码 ——
-        // 壳不再自己渲染一遍 markdown，导出 HTML 与导出 PDF 从此同一条路
-        fetchExportHtml { [weak self] html in
-            guard let self, let html else { return }
-            // 0.2.0：同一次导出顺带要一份目录，PDF 装上书签。
-            // 单独一趟往返（而不是把它塞进导出 HTML 再从标签里抠出来）—— 那份 HTML
-            // 是给别人看的产物，不该为壳的方便往里掺元数据
-            self.fetchOutline { outline in
-                self.runPDFFlow(html: html, outline: outline)
-            }
+    /// 导出为 PDF。HTML 是**渲染层此刻的导出 HTML**（含未保存的修改），不是文档源码 ——
+    /// 壳不再自己渲染一遍 markdown，导出 HTML 与导出 PDF 同一条路。第八节 12 起 HTML 由
+    /// 渲染层体检完之后直接交过来（契约 v40 的 `exportPdf`），不再由壳回头去要
+    func exportPDF(html: String) {
+        // 0.2.0：同一次导出顺带要一份目录，PDF 装上书签。
+        // 单独一趟往返（而不是把它塞进导出 HTML 再从标签里抠出来）—— 那份 HTML
+        // 是给别人看的产物，不该为壳的方便往里掺元数据
+        fetchOutline { [weak self] outline in
+            self?.runPDFFlow(html: html, outline: outline)
         }
     }
 
@@ -3119,11 +3247,44 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 respond(id, NSNull())
             }
 
+        // ---- 第八节 12（契约 v40）----
+        case "exportPdf":
+            guard let html = args.first as? String, !html.isEmpty else { respond(id, NSNull()); break }
+            // 自检下不弹面板（模态面板会把无人值守的 E2E 卡死）：只记一笔，E2E 拿它核对
+            // 「体检放行之后真的交给了壳」。PDF 本身另有 CURSIVE_SMOKE_PDF 那条路在测
+            if smokeAuto {
+                smokePdfCalls += 1
+            } else {
+                exportPDF(html: html)
+            }
+            respond(id, NSNull())
+
+        case "measurePng":
+            // 与真按快门同一份 HTML（图片同样内联）、同一个宽度夹取 —— 量出来的就是真拍时的样子
+            guard let html = args.first as? String else { respond(id, ["height": 0, "parts": 1]); break }
+            let measureWidth = (args.count > 1 ? args[1] as? Double : nil) ?? 720
+            let meter = PNGShooter(html: inlineImages(html, embed: true), out: nil,
+                                   width: CGFloat(measureWidth), mode: .measure)
+            pngShooter = meter
+            meter.measure { [weak self] result in
+                guard let self else { return }
+                self.pngShooter = nil
+                switch result {
+                case .success(let m):
+                    self.respond(id, ["height": Double(m.height), "parts": m.cuts.count + 1])
+                case .failure:
+                    // 量不出来就当一张：真拍的时候还有原来那条「截断了说一句」兜着
+                    self.respond(id, ["height": 0, "parts": 1])
+                }
+            }
+
         case "exportPng":
             // 0.3.0 T3：与导出 HTML 同一份 HTML 进来，区别只在**怎么落地**
             guard let html = args.first as? String else { respond(id, NSNull()); break }
             let pngName = (args.count > 1 ? args[1] as? String : nil) ?? L("export.defaultPng")
             let pngWidth = (args.count > 2 ? args[2] as? Double : nil) ?? 720
+            // 第八节 12：分成多张（按顶层块的边界切，每张不超过上限）
+            let pngSplit = (args.count > 3 ? args[3] as? Bool : nil) == true
             var pngTarget: String?
             if smokeAuto {
                 let env = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PNG"]
@@ -3137,16 +3298,19 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             guard let pngOut = pngTarget else { respond(id, NSNull()); break }
             // 图片一律嵌成 data: URI：一张 PNG 指不着本地文件（HTML 那条路才有得选）
             let shooter = PNGShooter(html: inlineImages(html, embed: true),
-                                     out: URL(fileURLWithPath: pngOut), width: CGFloat(pngWidth))
+                                     out: URL(fileURLWithPath: pngOut), width: CGFloat(pngWidth),
+                                     mode: pngSplit ? .split : .single)
             pngShooter = shooter
             shooter.run { [weak self] result in
                 guard let self else { return }
                 self.pngShooter = nil
                 switch result {
                 case .success(let shot):
-                    self.respond(id, ["path": pngOut,
-                                      "pixels": [shot.pixelsWide, shot.pixelsHigh],
-                                      "clipped": shot.clipped])
+                    var reply: [String: Any] = ["path": shot.paths.first ?? pngOut,
+                                                "pixels": [shot.pixelsWide, shot.pixelsHigh],
+                                                "clipped": shot.clipped]
+                    if pngSplit { reply["parts"] = shot.paths }
+                    self.respond(id, reply)
                 case .failure(let e):
                     self.alertError(L("err.export"), e.localizedDescription)
                     self.respond(id, NSNull())
@@ -3672,6 +3836,13 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         // 截图再退出：文档一个字不动，树根一个文件不碰。
         if ProcessInfo.processInfo.environment["CURSIVE_SMOKE_SHOT_CLEAN"] != nil {
             captureShot { NSApp.terminate(nil) }
+            return
+        }
+        // CURSIVE_SMOKE_PDF_ONLY=1（第八节 12 的 PDF 走查）：**只导一份 PDF，不跑探针** ——
+        // 同 SHOT_CLEAN 的道理，探针会改文档（追加标记、改格子、升标题），而走查要看的是
+        // 那份文档原原本本印出来的样子。导到 CURSIVE_SMOKE_PDF 指的路径，导完退出
+        if ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PDF_ONLY"] != nil {
+            smokePDF { NSApp.terminate(nil) }
             return
         }
         let probe = """
@@ -5917,6 +6088,57 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             moveProbe = { err: String(e) }
           }
         }
+        // 第八节 12：导出前体检（契约 v40）。links.md 里那张坏图（不存在的图.png）正好是靶子 ——
+        // 先 Esc 作罢（不许导出），再回车照样导出（HTML 真写下去、PDF 真交给了壳）。
+        // 走的是**菜单**那条路：自检的直接入口（`__cursive.exportHtml`）有意不体检
+        let exportCheckProbe = null
+        if (path.indexOf('links.md') >= 0) {
+          try {
+            const ewait = (ms) => new Promise((r) => setTimeout(r, ms))
+            const noteEl = document.getElementById('status-note')
+            const ask = async (action) => {
+              noteEl.textContent = ''
+              window.__shellEmit('menu', action)
+              for (let i = 0; i < 80; i++) {
+                await ewait(50)
+                const el = document.getElementById('palette')
+                if (el && !el.hidden && el.querySelector('.pl-row')) {
+                  return {
+                    placeholder: el.querySelector('.pl-input').placeholder,
+                    items: [...el.querySelectorAll('.pl-row .pl-label')].map((x) => x.textContent),
+                    input: el.querySelector('.pl-input')
+                  }
+                }
+              }
+              return null
+            }
+            const escape = () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+            const enter = (a) => a.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+            const h1 = await ask('file:export-html')
+            if (h1) escape()
+            await ewait(500)
+            const htmlCancelled = noteEl.textContent
+            const h2 = await ask('file:export-html')
+            if (h2) enter(h2)
+            for (let i = 0; i < 80 && (noteEl.textContent || '').indexOf('已导出') < 0; i++) await ewait(50)
+            const htmlDone = noteEl.textContent
+            const p1 = await ask('file:export-pdf')
+            if (p1) escape()
+            await ewait(300)
+            const p2 = await ask('file:export-pdf')
+            if (p2) enter(p2)
+            await ewait(500)
+            exportCheckProbe = {
+              html: h1 ? { placeholder: h1.placeholder, items: h1.items } : null,
+              htmlCancelled, htmlDone,
+              pdf: p1 ? { placeholder: p1.placeholder, items: p1.items } : null,
+              pdfAsked: !!p2
+            }
+            noteEl.textContent = ''
+          } catch (e) {
+            exportCheckProbe = { err: String(e) }
+          }
+        }
         // 0.4.0 F2 跨文件替换（契约 v30）—— **全应用风险最高的一个动作**：一次改几十个
         // 没打开过的文件。这一段走完两轮：① 改掉三份夹具（LF / CRLF / BOM 各一份），
         // 中间**勾掉一处**证明「所见即所改」；② 另一份改完当场撤销。
@@ -6071,10 +6293,28 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 报上去让 release.sh 对账：成图宽度必须正好是它的 2 倍
             const colRem = parseFloat(getComputedStyle(document.documentElement)
               .getPropertyValue('--column')) || 42
+            const pwait = (ms) => new Promise((r) => setTimeout(r, ms))
             window.__shellEmit('menu', 'file:export-png')
-            // 离屏加载 → 等字体与图片 → 快门 → 写盘，给够时间
-            await new Promise((r) => setTimeout(r, 3000))
-            pngProbe = { note: noteEl.textContent, wantWidth: Math.round(colRem * 16) }
+            // 第八节 12：先离屏排一遍量高度。超过上限就不弹保存面板，先摆出几条出路 ——
+            // 第一条是「分成 N 张」，回车选它（long.md 那条用例走的就是这一支）
+            let ask = null
+            for (let i = 0; i < 200; i++) {
+              await pwait(100)
+              const pl = document.getElementById('palette')
+              if (pl && !pl.hidden && pl.querySelector('.pl-row')) {
+                const input = pl.querySelector('.pl-input')
+                ask = {
+                  placeholder: input.placeholder,
+                  items: [...pl.querySelectorAll('.pl-row .pl-label')].map((x) => x.textContent)
+                }
+                input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+                break
+              }
+              if ((noteEl.textContent || '').indexOf('导出') >= 0) break
+            }
+            // 离屏加载 → 等字体与图片 → 快门（分张时一张接一张）→ 写盘，给够时间
+            for (let i = 0; i < 300 && (noteEl.textContent || '').indexOf('导出') < 0; i++) await pwait(100)
+            pngProbe = { note: noteEl.textContent, wantWidth: Math.round(colRem * 16), ask }
           } catch (e) {
             pngProbe = { err: String(e) }
           }
@@ -6251,6 +6491,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           linkProbe,
           refProbe,
           moveProbe,
+          exportCheckProbe,
           foldProbe,
           listFoldProbe,
           tagProbe,
@@ -6304,6 +6545,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             ]
             // P3-7：探针刚请壳开了第二个窗口，这里数一下窗口表（网页那侧看不到原生窗口）
             out["windows"] = appDelegate?.windows.count ?? 0
+            out["pdfCalls"] = self.smokePdfCalls
             // 每个窗口的树根：带文件夹开出来的那个应该立刻就位（守卫要用）
             out["windowRoots"] = appDelegate?.windows.map { $0.treeRoot ?? "" } ?? []
             // 崩溃恢复的「一次性」不变量（见 `recoverableScratch`）：
@@ -6327,45 +6569,53 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
                 out["bytesEqual"] = false
             }
             self.writeJSON(out, to: "/tmp/cursive-shell-e2e.json")
-            self.captureShot {
-            // CURSIVE_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板）
-            // 空串当没设：release.sh 里这个变量对大多数用例是空的（只有 mermaid 那条导 PDF）
-            if let pdfOut = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PDF"], !pdfOut.isEmpty {
-                let finish: ([String: Any]) -> Void = { result in
-                    self.writeJSON(result, to: "/tmp/cursive-shell-pdf.json")
-                    NSApp.terminate(nil)
-                }
-                self.fetchExportHtml { html in
-                    guard let html else { return finish(["out": pdfOut, "error": "没拿到导出 HTML"]) }
-                    // 自检默认 A4 + 标准页边距 + 页码；另两档纸张/页边距用环境变量走查
-                    var opts = PDFOptions()
-                    let env = ProcessInfo.processInfo.environment
-                    if let p = env["CURSIVE_SMOKE_PDF_PAPER"], let v = PaperSize(rawValue: p) { opts.paper = v }
-                    if let m = env["CURSIVE_SMOKE_PDF_MARGIN"], let v = PageMargin(rawValue: m) { opts.margin = v }
-                    // 0.2.0：书签走和真导出同一条路（fetchOutline → printPDF），
-                    // 自检才守得住它 —— 只在真导出里接一遍，等于没接
-                    self.fetchOutline { outline in
-                        self.printPDF(html: html, out: URL(fileURLWithPath: pdfOut), opts: opts,
-                                      outline: outline) { result in
-                            var pdfResult: [String: Any] = ["out": pdfOut, "headings": outline.count]
-                            switch result {
-                            case .success(let stats):
-                                pdfResult["bytes"] = (try? Data(contentsOf: URL(fileURLWithPath: pdfOut)))?.count ?? 0
-                                pdfResult["pages"] = stats.pages
-                                pdfResult["width"] = Int(stats.width.rounded())
-                                pdfResult["height"] = Int(stats.height.rounded())
-                                pdfResult["bookmarks"] = stats.bookmarks
-                                pdfResult["bookmarksReadBack"] = stats.readBack
-                            case .failure(let e):
-                                pdfResult["error"] = e.localizedDescription
-                            }
-                            finish(pdfResult)
+            self.captureShot { self.smokePDF { NSApp.terminate(nil) } }
+        }
+    }
+
+    /// CURSIVE_SMOKE_PDF=<路径>：顺带验证 PDF 导出（绕过保存面板），结果写 /tmp/cursive-shell-pdf.json。
+    /// 空串当没设：release.sh 里这个变量对大多数用例是空的（只有 mermaid 那条与长文档导 PDF）
+    private func smokePDF(then done: @escaping () -> Void) {
+        guard let pdfOut = ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PDF"], !pdfOut.isEmpty else {
+            return done()
+        }
+        let finish: ([String: Any]) -> Void = { result in
+            self.writeJSON(result, to: "/tmp/cursive-shell-pdf.json")
+            done()
+        }
+        self.fetchExportHtml { html in
+            guard let html else { return finish(["out": pdfOut, "error": "没拿到导出 HTML"]) }
+            // 自检默认 A4 + 标准页边距 + 页码；另两档纸张/页边距用环境变量走查
+            var opts = PDFOptions()
+            let env = ProcessInfo.processInfo.environment
+            if let p = env["CURSIVE_SMOKE_PDF_PAPER"], let v = PaperSize(rawValue: p) { opts.paper = v }
+            if let m = env["CURSIVE_SMOKE_PDF_MARGIN"], let v = PageMargin(rawValue: m) { opts.margin = v }
+            // 0.2.0：书签走和真导出同一条路（fetchOutline → printPDF），
+            // 自检才守得住它 —— 只在真导出里接一遍，等于没接
+            self.fetchOutline { outline in
+                self.printPDF(html: html, out: URL(fileURLWithPath: pdfOut), opts: opts,
+                              outline: outline) { result in
+                    var pdfResult: [String: Any] = ["out": pdfOut, "headings": outline.count]
+                    switch result {
+                    case .success(let stats):
+                        pdfResult["bytes"] = (try? Data(contentsOf: URL(fileURLWithPath: pdfOut)))?.count ?? 0
+                        pdfResult["pages"] = stats.pages
+                        // CURSIVE_SMOKE_PDF_TEXT=1（第八节 12 的 PDF 走查，`check-pdf.py`）：每一页的文字。
+                        // PDFKit 抽中文会失真（见 CONTEXT「验证 PDF 不要用 PDFKit 提取文本」），所以走查夹具全用英文；
+                        // 页码是注记不是正文，`page.string` 里没有它
+                        if ProcessInfo.processInfo.environment["CURSIVE_SMOKE_PDF_TEXT"] != nil,
+                           let doc = PDFDocument(url: URL(fileURLWithPath: pdfOut)) {
+                            pdfResult["pageText"] = (0..<doc.pageCount).map { doc.page(at: $0)?.string ?? "" }
                         }
+                        pdfResult["width"] = Int(stats.width.rounded())
+                        pdfResult["height"] = Int(stats.height.rounded())
+                        pdfResult["bookmarks"] = stats.bookmarks
+                        pdfResult["bookmarksReadBack"] = stats.readBack
+                    case .failure(let e):
+                        pdfResult["error"] = e.localizedDescription
                     }
+                    finish(pdfResult)
                 }
-            } else {
-                NSApp.terminate(nil)
-            }
             }
         }
     }
@@ -6609,10 +6859,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // （README 还写着 ⇧⌘P）。第八节 21 定下来：⇧⌘P 还给命令面板（同类编辑器的通行键位，
         // 也比导出用得勤），导出 PDF 挪到 ⌥⌘P —— 紧挨着 ⌘P 打印，这份菜单里空着。
         // 整份菜单不许两条命令共用一个键，release.sh 拿自检报上去的 `menuKeys` 对账
-        let pdfItem = NSMenuItem(title: L("menu.file.exportPdf"), action: #selector(exportPDF(_:)),
-                                 keyEquivalent: "p")
-        pdfItem.keyEquivalentModifierMask = [.command, .option]
-        file.addItem(pdfItem)
+        //
+        // 第八节 12（契约 v40）：**不再是 `#selector`**。壳直接接手的话渲染层插不上话 ——
+        // 没法在弹保存面板之前先说「有两张图找不到」。现在与导出 HTML / 长图一样是一个
+        // 菜单动作：渲染层先体检，再把渲好的 HTML 交给壳（`exportPdf`）
+        file.addItem(item(L("menu.file.exportPdf"), "file:export-pdf", key: "p", modifiers: [.command, .option]))
         // 0.3.0 T3：三条导出连在一起。不给快捷键 —— ⌘P/⇧⌘E 已经占了两条顺手的键位，
         // 而剩下的空位没有一个是「导出长图」按下去顺理成章的（命令面板里一样找得到）
         file.addItem(item(L("menu.file.exportPng"), "file:export-png", key: ""))
@@ -6881,7 +7132,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// 「导出为 PDF…」「实际大小」这类要落到**某一个窗口**上的命令：
     /// 菜单是应用级的，动作转给当前 key 窗口
-    @objc func exportPDF(_ sender: Any?) { key?.exportPDF(sender) }
     @objc func printDocument(_ sender: Any?) { key?.printDocument(sender) }
 
     /// 视图菜单的勾选状态。真相同样在渲染层，壳只是跟着显示

@@ -54,7 +54,7 @@ import { applyFormat, formatStateAt } from './editor/fmt'
 import { latexFormatSpec } from './editor/latex-format'
 import { focusKeepScroll } from './editor/focus'
 import { insertText } from './editor/paste'
-import { exportHtmlDocument, type Typography } from './export'
+import { exportHtmlDocument, type HtmlExport, type Typography } from './export'
 import { openReplace, searchStat } from './editor/search-panel'
 import { relativeDir, relativePath } from './ui/file-search'
 import { Sidebar } from './ui/sidebar'
@@ -2048,8 +2048,13 @@ window.addEventListener('blur', () => {
  * 导出的是**当前标签**，含还没保存的修改（和 PDF 导出同一个口径）。
  */
 async function exportHtmlSource(): Promise<string> {
+  return (await exportHtmlDoc()).html
+}
+
+/** 整份导出 HTML，连同画不出来的那几张图表（导出前体检要报它们，第八节 12） */
+function exportHtmlDoc(): Promise<HtmlExport> {
   const t = activeTab()
-  const doc = await exportHtmlDocument(
+  return exportHtmlDocument(
     view.state,
     {
       dir: t?.path ? dirname(t.path) : null,
@@ -2061,7 +2066,6 @@ async function exportHtmlSource(): Promise<string> {
     // **只有导出 HTML / PDF 两条路跟**，复制为富文本不跟（见 `copyAsHtml`）
     prefs.values
   )
-  return doc.html
 }
 
 /** 导出的默认文件名（不含扩展名） */
@@ -2084,7 +2088,16 @@ async function exportHtml(): Promise<{ path: string } | null> {
  * `type` 传不传是两条路各自的取舍：**导出物跟随排版设置，剪贴板不跟**
  * （见 `copyAsHtml` 的注释）。
  */
-async function exportSelectionOrAll(type?: Typography): Promise<{ html: string; md: string }> {
+async function exportSelectionOrAll(type?: Typography): Promise<{
+  html: string
+  md: string
+  /** 拿去渲染的那份 state：整份就是视图里那份，选区是现造的（从 0 起） */
+  state: EditorState
+  /** 那份 state 的 0 在正文里的位置（体检的结果要挪回正文里才跳得过去） */
+  offset: number
+  /** 画不出来的图表（位置在 `state` 里） */
+  failed: number[]
+}> {
   const sel = view.state.selection.main
   const tab = activeTab()
   const dir = tab?.path ? dirname(tab.path) : null
@@ -2093,7 +2106,69 @@ async function exportSelectionOrAll(type?: Typography): Promise<{ html: string; 
     ? view.state
     : EditorState.create({ doc: md, extensions: [cursiveMarkdown()] })
   const doc = await exportHtmlDocument(state, { dir, title: exportStem() }, type)
-  return { html: doc.html, md }
+  return { html: doc.html, md, state, offset: sel.empty ? 0 : sel.from, failed: doc.failed }
+}
+
+/**
+ * 导出前体检（第八节 12，契约 v40）：缺失的本地图片 + 画不出来的 mermaid 图表。
+ * 回一排「选中就跳到源码」的条目（导出就此作罢）；`offset` 把选区那份现造 state 里的位置挪回正文
+ */
+async function exportProblems(state: EditorState, offset: number, failed: number[]): Promise<PaletteItem[]> {
+  const tab = activeTab()
+  // 选区那份 state 是现造的、不带 `docDir`：目录一律取视图里这份文档的
+  const report = await checkRefs(state, view.state.facet(docDir), tab?.path ?? null, refHost)
+  const rows: { label: string; why: string; from: number; to: number }[] = report.problems
+    .filter((p) => p.kind === 'image')
+    .map((p) => ({ label: p.dest, why: t(refReason(p)), from: p.from + offset, to: p.to + offset }))
+  for (const at of failed) {
+    const line = view.state.doc.lineAt(at + offset)
+    rows.push({ label: line.text.trim() || 'mermaid', why: t('export.why.diagram'), from: line.from, to: line.to })
+  }
+  rows.sort((a, b) => a.from - b.from)
+  const doc = view.state.doc
+  return rows.map((r) => ({
+    label: r.label,
+    hint: t('refs.where', { line: doc.lineAt(r.from).number, why: r.why }),
+    key: `${r.label} ${r.why}`,
+    run: () => {
+      if (view.state.doc !== doc) return
+      view.focus()
+      jumpTo(view, r.from, r.to)
+    }
+  }))
+}
+
+/**
+ * 弹保存面板之前问一句（第八节 12）：`lead` 是几条出路（照样导出 / 分成几张……），
+ * 下面跟着 `problems`。回人选的那条出路的 `id`；选了某一处问题（去看看）、Esc、点遮罩都是 null
+ */
+function askBeforeExport(
+  lead: { id: string; label: string }[],
+  problems: PaletteItem[],
+  placeholder: string
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const items: PaletteItem[] = [
+      ...lead.map((l) => ({ label: l.label, run: () => resolve(l.id) })),
+      ...problems.map((p) => ({
+        ...p,
+        run: (q: string) => {
+          resolve(null)
+          return p.run(q)
+        }
+      }))
+    ]
+    palette.open(items, placeholder, 'refs.noMatch', undefined, () => resolve(null))
+  })
+}
+
+/** 体检一遍：没问题直接放行；有问题就问一句，人选了「照样导出」才放行 */
+async function passCheck(state: EditorState, offset: number, failed: number[]): Promise<boolean> {
+  const problems = await exportProblems(state, offset, failed)
+  if (!problems.length) return true
+  const pick = await askBeforeExport([{ id: 'go', label: t('export.anyway') }], problems,
+    t('export.issues', { n: problems.length }))
+  return pick === 'go'
 }
 
 /**
@@ -2103,6 +2178,10 @@ async function exportSelectionOrAll(type?: Typography): Promise<{ html: string; 
  * 宽度 = 正文栏宽：导出 CSS 的 `--column` 是 rem，而导出物的根字号就是浏览器默认的
  * 16px —— 这条耦合有 E2E 守着（成图宽度必须正好是它的 2 倍）。
  */
+/** 长图的上限与倍率（与壳侧 `PNG_MAX_HEIGHT_PX` / `PNG_SCALE` 同一组数） */
+const PNG_MAX_PX = 32768
+const PNG_SCALE = 2
+
 /**
  * 导出在**渲染层这一侧**断了（第八节 4）。壳那一侧的失败自己会弹 NSAlert（写不进去、
  * 没权限、打印任务没出文件），这里管的是它够不到的那一半：正文还没交出去就抛了。
@@ -2119,10 +2198,40 @@ function exportFailed(e: unknown, retry: () => void): void {
 }
 
 async function exportPng(): Promise<void> {
-  const { html } = await exportSelectionOrAll(prefs.values)
+  const { html, state, offset, failed } = await exportSelectionOrAll(prefs.values)
   const width = Math.round(prefs.values.column * 16)
-  const out = await window.api.exportPng(html, `${exportStem()}.png`, width)
+  // 第八节 12：**弹保存面板之前**就知道会不会超过上限（壳离屏排一遍量出来），
+  // 而不是截完了才说「这张图是残的」
+  const [problems, size] = await Promise.all([
+    exportProblems(state, offset, failed),
+    window.api.measurePng(html, width)
+  ])
+  const tall = size.height * PNG_SCALE > PNG_MAX_PX
+  let split = false
+  if (tall || problems.length) {
+    const lead = tall
+      ? [
+          { id: 'split', label: t('export.split', { n: size.parts }) },
+          { id: 'narrow', label: t('export.narrow') },
+          { id: 'go', label: t('export.clip') }
+        ]
+      : [{ id: 'go', label: t('export.anyway') }]
+    const placeholder = tall
+      ? t('export.tooTall', { h: Math.round(size.height * PNG_SCALE) })
+      : t('export.issues', { n: problems.length })
+    const pick = await askBeforeExport(lead, problems, placeholder)
+    if (pick === 'narrow') note(t('export.narrowHint'))
+    if (pick !== 'go' && pick !== 'split') return
+    split = pick === 'split'
+  }
+  const out = await window.api.exportPng(html, `${exportStem()}.png`, width, split)
   if (!out) return   // 保存面板点了取消
+  if (out.parts) {
+    note(t('note.exportedPngParts', { n: out.parts.length, name: basename(out.path) }), {
+      action: { label: t('note.reveal'), run: () => window.api.revealInFinder(out.path) }
+    })
+    return
+  }
   const name = basename(out.path)
   const [w, h] = out.pixels
   // 截断了要说清楚**这张图是残的**：一张「看起来完整」的残图比一条报错难发现得多
@@ -2559,7 +2668,11 @@ async function handleMenu(action: MenuAction): Promise<void> {
       // 「点了导出，什么都没发生」。第八节 4：说清楚，并且给一颗重试
       let out: { path: string } | null
       try {
-        out = await exportHtml()
+        // 第八节 12：先体检（缺失的图、画不出来的图表），人放行了再弹保存面板。
+        // 体检用的就是这一份 HTML，不为它再渲一遍
+        const doc = await exportHtmlDoc()
+        if (!(await passCheck(view.state, 0, doc.failed))) break
+        out = await window.api.exportHtml(doc.html, `${exportStem()}.html`)
       } catch (e) {
         exportFailed(e, () => void handleMenu(action))
         break
@@ -2577,6 +2690,17 @@ async function handleMenu(action: MenuAction): Promise<void> {
     case 'file:export-png':
       try {
         await exportPng()
+      } catch (e) {
+        exportFailed(e, () => void handleMenu(action))
+      }
+      break
+    case 'file:export-pdf':
+      // 第八节 12（契约 v40）：从前是壳直接接手的 `#selector`，渲染层插不上话。
+      // 现在先体检，再把渲好的 HTML 交给壳（选项、保存面板、打印、书签都还在壳侧）
+      try {
+        const doc = await exportHtmlDoc()
+        if (!(await passCheck(view.state, 0, doc.failed))) break
+        await window.api.exportPdf(doc.html)
       } catch (e) {
         exportFailed(e, () => void handleMenu(action))
       }

@@ -50,6 +50,8 @@ export interface MermaidBlock {
   src: string
   /** `html` 里当前占着位的那段（渲染失败就是最终形态），按字符串原样替换 */
   placeholder: string
+  /** 围栏在源码里的起点：画不出来时，导出前体检（第八节 12）要能跳过去 */
+  from: number
 }
 
 export interface RenderResult {
@@ -358,12 +360,42 @@ function blocks(ctx: Ctx, parent: SyntaxNode, from = parent.from, to = parent.to
       out += renderFootnoteDefs(ctx, run)
       continue
     }
+    const next = child.nextSibling
+    if (parent.name === 'Document' && next && next.from < to && keepsWithNext(ctx, child, next)) {
+      out += `<div class="keep">\n${block(ctx, child)}${block(ctx, next)}</div>\n`
+      child = next
+      continue
+    }
     out += block(ctx, child)
   }
   return out
 }
 
 const HEADING_RE = /^(ATXHeading|SetextHeading)([1-6])$/
+
+/**
+ * 标题与紧跟着它的那张表 / 那张图 / 那块公式 / 那张 mermaid 图，**在纸上要一起走**（第八节 12 PDF 走查）。
+ *
+ * 这几样印的时候整块搬页（`break-inside: avoid`）：页底放不下就整个挪到下一页，标题却留在原地，
+ * 孤零零落在页底、底下一片空白。标题自己那条「后面别断」（`break-after: avoid` + 占位）
+ * WebKit 只在后面那块拆得开时才守得住，所以这一种另包一层同样不许拆的 `div.keep`，标题跟着它走。
+ * 只包顶层（告示块、列表里的标题不动）；屏幕上这层 div 没有任何样式，长相不变
+ */
+function keepsWithNext(ctx: Ctx, node: SyntaxNode, next: SyntaxNode): boolean {
+  if (!HEADING_RE.test(node.name)) return false
+  if (next.name === 'DisplayMath' || next.name === 'Table') return true
+  if (next.name === 'FencedCode') return fenceParts(ctx.doc, next)?.lang === 'mermaid'
+  if (next.name !== 'Paragraph') return false
+  // 只有一张（或几张）图的段落：图之间只许是空白
+  let at = next.from
+  let images = 0
+  for (let c = next.firstChild; c; c = c.nextSibling) {
+    if (c.name !== 'Image' || ctx.doc.sliceString(at, c.from).trim()) return false
+    images++
+    at = c.to
+  }
+  return images > 0 && !ctx.doc.sliceString(at, next.to).trim()
+}
 
 function block(ctx: Ctx, node: SyntaxNode): string {
   const name = node.name
@@ -538,7 +570,7 @@ function renderFence(ctx: Ctx, node: SyntaxNode): string {
     const id = `cursive-mmd-${ctx.mermaid.length}`
     // 占位就是「渲染失败」的最终形态：保留源码，和编辑器里 mermaid 出错时一致
     const placeholder = `<pre class="mermaid-src" data-mmd="${id}">${escapeHtml(fence.body)}</pre>`
-    ctx.mermaid.push({ id, src: fence.body, placeholder })
+    ctx.mermaid.push({ id, src: fence.body, placeholder, from: node.from })
     return `<figure class="mermaid" id="${id}">${placeholder}</figure>\n`
   }
 
@@ -578,12 +610,59 @@ function renderTable(ctx: Ctx, node: SyntaxNode): string {
 /** 格内行内语法：片段由 `cellTokens` 采自文档的语法树（同编辑器），这里只负责套标签 */
 function cellHtml(data: TableData, row: number, col: number, value: string): string {
   const tokens = data.rich?.[row]?.[col]
-  if (!tokens) return escapeHtml(value)
+  if (!tokens) return breakable(value)
   return tokens.map(tokenHtml).join('')
 }
 
+/** 没有空白、长到能把一列撑死的串 */
+const LONG_RUN = /\S{25,}/gu
+/** 长串切成几截时，一截最多这么多个字符：这一列「最窄能多窄」就是它 */
+const MAX_PIECE = 24
+/** 优先折在这些标点后面（网址、路径、标识符天然的分段处） */
+const BREAK_AFTER = /[\/._\-?&=#:,;]/
+
+/**
+ * 格子里的长串（网址、长标识符、一长串 base64）插上可折点 `<wbr>`（第八节 12 PDF 走查）。
+ *
+ * 表格是按「每列最窄能多窄」排的：一条不带空格的长网址让那一列最窄也得有一整条网址那么宽，
+ * 整张表于是比纸还宽 —— 屏幕上是横向滚动，纸上是**右边几列整列消失**，而且 WebKit 为了迁就它
+ * 把**整份文档等比缩小**着印（实测一张八列宽表让一份 30 页的 PDF 挤成 16 页小字）。
+ *
+ * 两种过了头的做法都试过：让格子里的字「哪儿都能折」（`overflow-wrap: anywhere`），短列也被
+ * 允许逐字折，「Column」挤成一字一行；每个标点后面都给折点，网址那一列又被挤到只剩
+ * 「example.」那么宽、一条网址折成十几行。所以是**贪心地切**：每一截尽量长、不超过
+ * `MAX_PIECE` 个字符，优先断在标点后面，找不到标点才硬断（按码点数，不拆 emoji）
+ */
+export function breakable(text: string): string {
+  let out = ''
+  let last = 0
+  for (const m of text.matchAll(LONG_RUN)) {
+    out += escapeHtml(text.slice(last, m.index)) + pieces(m[0]).map(escapeHtml).join('<wbr>')
+    last = m.index + m[0].length
+  }
+  return out + escapeHtml(text.slice(last))
+}
+
+function pieces(run: string): string[] {
+  const chars = [...run]
+  const out: string[] = []
+  let start = 0
+  /** 上一个标点后面那个位置：这一截满了就优先在这儿断 */
+  let soft = -1
+  for (let i = 0; i < chars.length; i++) {
+    if (i - start >= MAX_PIECE) {
+      const cut = soft > start ? soft : i
+      out.push(chars.slice(start, cut).join(''))
+      start = cut
+    }
+    if (BREAK_AFTER.test(chars[i]!)) soft = i + 1
+  }
+  out.push(chars.slice(start).join(''))
+  return out
+}
+
 function tokenHtml(tok: CellToken): string {
-  let inner = tok.tex ? renderMathML(tok.tex, false) : escapeHtml(tok.text)
+  let inner = tok.tex ? renderMathML(tok.tex, false) : breakable(tok.text)
   for (const tag of [...tok.tags].reverse()) {
     const open = tag === 'a' && tok.href ? `<a href="${attr(safeUrl(tok.href) ?? '')}">` : `<${tag}>`
     inner = `${open}${inner}</${tag}>`
