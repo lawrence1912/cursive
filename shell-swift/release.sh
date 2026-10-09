@@ -100,6 +100,8 @@ cat > "$FIX/links.md" <<'LINKS'
 坏的：[缺失文件](缺失.md) 与 [缺失锚点](#没有这一节) 与 [缺失图片](缺失.png)
 
 写不对的：[看不出是文件](我的 笔记 没有后缀) —— 地址带空格又没有后缀，认不出来
+
+检查引用的靶子：![好图](<assets/中文 图.png>) 与 ![坏图](不存在的图.png) 与 [锚点不在的文档](link-target.md#没有的小节)
 LINKS
 # 0.4.0 F2 跨文件替换的四份夹具。三种指纹各一份 —— 替换走的是与保存同一条
 # decode/encode 路，CRLF 的改完还得是 CRLF、带 BOM 的还得带 BOM；
@@ -760,6 +762,19 @@ if sys.argv[1] == 'links.md':
     mn = lp.get('missingNote') or ''
     ok = ok and mn.startswith('找不到「缺失.md」') and '刷新文件树' in mn
     ok = ok and lp.get('anchorNote') == '本文里没有这个锚点：#没有这一节'
+    # 第八节 8：检查引用。坏的五条一条不少、按在文档里的先后排好；好的一条都不许出现
+    # （本文锚点、带锚点的本地文档、三种写法的带空格文件名、指着真图的链接、好图）
+    rp = r.get('refProbe') or {}
+    ok = ok and not rp.get('err')
+    labels = [i['label'] for i in rp.get('items') or []]
+    ok = ok and labels == ['缺失.md', '#没有这一节', '缺失.png', '不存在的图.png', 'link-target.md#没有的小节']
+    hints = [i['hint'].split(' · ')[-1] for i in rp.get('items') or []]
+    ok = ok and hints == ['文档不在', '没有这个标题', '文件不在', '图片不在', '没有这个标题']
+    ok = ok and str(rp.get('placeholder', '')).startswith('5 处引用找不到')
+    # 回车：浮层收起、焦点回到正文、选中的正是第一条那段地址；查完跳完文档一个字没动
+    ok = ok and rp.get('closed') is True and rp.get('focused') is True
+    ok = ok and rp.get('selected') == '缺失.md' and '[缺失文件](缺失.md)' in (rp.get('selectedLine') or '')
+    ok = ok and rp.get('untouched') is True
     # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
     # 对 file:// 按「在不在」回话，就是为了让这条路测得到
     ok = ok and lp.get('fileNote') == '打不开：/tmp/cursive-e2e/缺失.png'

@@ -89,6 +89,12 @@ export type MenuAction =
   | 'view:command-palette'
   /** 版本历史：看这份文件历次保存留下的快照，并可整份回滚（契约 v22） */
   | 'file:history'
+  /**
+   * 检查引用（第八节 8，契约 v39）：当前这份文档里的本地文件、标题锚点与图片引用，
+   * 找不到的列成一张清单、回车跳到源码。显式命令、只查这一份、按需跑，不建后台索引，
+   * 不改文档。不给快捷键（同版本历史，命令面板里一样找得到）
+   */
+  | 'file:check-refs'
   | 'view:toggle-source'
   /**
    * 只读阅读模式（第八节 5，契约 v38，⌥⌘L）。**按标签**：态在那个标签自己的 EditorState 里
@@ -534,6 +540,13 @@ export interface CursiveApi {
   renameItem(path: string): Promise<{ path: string } | null>
   moveItem(src: string, destDir: string): Promise<{ path: string } | null>
   revealInFinder(path: string): void
+  /**
+   * 契约 v39（第八节 8 引用检查）：这几条路径**在不在、是文件还是目录**，同序回
+   * `'file' | 'dir' | null`。只回这一个事实、不读内容（判断 3：图片字节不过桥）；
+   * 只认绝对路径（别的一律 null），一次最多 5000 条。不过 `safeTarget` —— 只读的存在性问询，
+   * 而文档里的图片本来就可以指向树根之外（`safe-file://` 读得到的，问一句在不在不会多泄露什么）
+   */
+  statPaths(paths: string[]): Promise<Array<'file' | 'dir' | null>>
   /** 读系统剪贴板的纯文本（⇧⌥⌘V 粘贴为纯文本用；剪贴板由壳侧读，渲染层不碰原生） */
   readClipboardText(): Promise<string>
   /** ---- 0.2.0 复制为富文本（契约 v20）----

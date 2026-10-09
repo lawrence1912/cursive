@@ -16,7 +16,7 @@ import type {
 } from '../shared/types'
 import { DEFAULT_FINGERPRINT, encode, type FileFingerprint } from '../shared/textfile'
 import { group, readLabel } from '../shared/wordcount'
-import { applyI18n, detectLang, getLang, localeOf, onLangChange, setLang, t } from './i18n'
+import { applyI18n, detectLang, getLang, localeOf, onLangChange, setLang, t, type Key } from './i18n'
 import {
   collectHeadings,
   headingBefore,
@@ -43,6 +43,8 @@ import {
 import { cursiveMarkdown } from './editor/markdown-lang'
 import { warmLazyModules } from './editor/warmup'
 import { anchorPos, destLiteral, linkHost } from './editor/link'
+import { docDir } from './editor/doc-dir'
+import { checkRefs, type RefProblem } from './editor/ref-check'
 import { jumpHost, jumpTo, revisit } from './editor/navigation'
 import { readOnlyConf, readOnlyExt, readOnlyHost } from './editor/read-only'
 import { setTableEdit } from './editor/live-preview/table'
@@ -2178,6 +2180,73 @@ async function openHistory(): Promise<void> {
 }
 
 /**
+ * 第八节 8：检查引用。只查活动标签这一份（检查器本身见 `editor/ref-check.ts`），
+ * 找不到的借命令面板那个浮层列出来 —— 输入筛选、上下选、Esc 关、焦点归还都是现成的 ——
+ * 回车跳到源码并选中那段地址。
+ *
+ * 查是异步的（问壳、读被链接的文档）。查完发现换了标签、或者文档已经变了，清单上的位置
+ * 就对不上了：作废，说一句请人再查一次，而不是跳到错的地方去。
+ */
+async function checkReferences(): Promise<void> {
+  const tab = activeTab()
+  const state = view.state
+  const report = await checkRefs(state, state.facet(docDir), tab?.path ?? null, {
+    stat: (paths) => window.api.statPaths(paths),
+    text: liveText
+  })
+  if (activeTab() !== tab || view.state.doc !== state.doc) {
+    note(t('refs.stale'), { warn: true })
+    return
+  }
+  const tail = report.unsaved ? t('refs.unsaved', { n: report.unsaved }) : ''
+  if (!report.problems.length) {
+    note((report.checked ? t('refs.allGood', { n: report.checked }) : t('refs.none')) + tail)
+    return
+  }
+  const items: PaletteItem[] = report.problems.map((p) => {
+    const why = t(refReason(p))
+    return {
+      label: p.dest,
+      hint: t('refs.where', { line: p.line, why }),
+      // 「为什么」也参与筛选：打「图片」就只剩图片那几条
+      key: `${p.dest} ${why}`,
+      run: () => {
+        if (view.state.doc !== state.doc) {
+          note(t('refs.stale'), { warn: true })
+          return
+        }
+        // 面板关掉时焦点还给开它之前的那个元素 —— 从文件树里开的话那是文件树，
+        // 而选中那段地址要编辑器拿着焦点才看得见
+        view.focus()
+        jumpTo(view, p.from, p.to)
+      }
+    }
+  })
+  palette.open(items, t('refs.placeholder', { n: report.problems.length }) + tail, 'refs.noMatch')
+}
+
+function refReason(p: RefProblem): Key {
+  if (p.reason === 'noAnchor') return 'refs.why.anchor'
+  if (p.reason === 'folder') return 'refs.why.folder'
+  if (p.reason === 'unreadable') return 'refs.why.unreadable'
+  return p.kind === 'image' ? 'refs.why.image' : p.kind === 'doc' ? 'refs.why.doc' : 'refs.why.file'
+}
+
+/**
+ * 一份本地文档此刻的正文：开着标签的用标签里那份（可能还没存，人看见的是它），
+ * 否则读盘；读不出来（不在、不是 UTF-8、没权限）回 null
+ */
+async function liveText(path: string): Promise<string | null> {
+  const open = tabs.find((x) => x.path === path)
+  if (open) return (open.id === viewTabId ? view.state : open.state).doc.toString()
+  try {
+    return (await window.api.read(path)).content
+  } catch {
+    return null
+  }
+}
+
+/**
  * 快速打开（⌘T）。
  *
  * 索引**每次现要**而不是缓存：一次 `listFiles` 就是壳侧一趟目录遍历（几十毫秒），
@@ -2496,6 +2565,9 @@ async function handleMenu(action: MenuAction): Promise<void> {
       break
     case 'file:history':
       await openHistory()
+      break
+    case 'file:check-refs':
+      await checkReferences()
       break
     case 'view:command-palette':
       // 面板执行的就是**这个函数自己** —— 命令面板与原生菜单从此不可能说两套话

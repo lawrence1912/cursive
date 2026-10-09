@@ -14,10 +14,12 @@ export const jumpHost: { around: ((view: EditorView, run: () => void) => void) |
 }
 
 /** 保留文档位置而非像素位置，让晚到的图片/图表也服从这次导航。 */
-export function jumpTo(view: EditorView, pos: number): void {
+export function jumpTo(view: EditorView, pos: number, head = pos): void {
   const run = (): void =>
     view.dispatch({
-      selection: { anchor: pos },
+      // `head`：落点之后顺手选中一段（第八节 8 引用检查：选中那段坏掉的地址）。
+      // **必须在同一个事务里**：分两次派的话，第二次的选区会把下面那条稳定导航取消掉
+      selection: { anchor: pos, head },
       effects: [
         navigate.of(pos),
         flashAt.of(pos),

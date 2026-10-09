@@ -96,6 +96,8 @@ let SHELL_TEXT: [String: [String]] = [
     "menu.edit.copyHtml":   ["复制为富文本", "Copy as Rich Text"],
     "menu.file.quickOpen":  ["快速打开…", "Quick Open…"],
     "menu.file.history":    ["版本历史…", "Version History…"],
+    // 第八节 8（契约 v39）
+    "menu.file.checkRefs":  ["检查引用…", "Check References…"],
     "menu.view.palette":    ["命令面板…", "Command Palette…"],
     // ---- 格式 ----
     "menu.format":          ["格式", "Format"],
@@ -323,6 +325,7 @@ let BRIDGE_JS = """
     renameItem: (path) => call('renameItem', [path]),
     moveItem: (src, destDir) => call('moveItem', [src, destDir]),
     revealInFinder: (path) => call('revealInFinder', [path]),
+    statPaths: (paths) => call('statPaths', [paths]),
     searchFiles: (token, root, query, opts) => call('searchFiles', [token, root, query, opts]),
     replaceInFiles: (targets, replacement) => call('replaceInFiles', [targets, replacement]),
     undoReplaceInFiles: (token) => call('undoReplaceInFiles', [token]),
@@ -2729,6 +2732,23 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         //
         // 走后台队列而**不占 `searchQueue`**：那条队列是串行的，索引一挂上去就会把
         // 用户正在打字的跨文件搜索顶掉（`searchFiles` 每次都 cancelAllOperations）
+        // ---- 第八节 8 引用检查（契约 v39）----
+        // 只回「在不在、是文件还是目录」，不读内容（判断 3）。不过 safeTarget：只读的存在性
+        // 问询，文档里的图片本来就可以指向树根之外。几百条也就几毫秒，但放后台 —— 一份
+        // 引用满篇的文档不该让主线程卡一下
+        case "statPaths":
+            let paths = Array((args.first as? [Any] ?? []).prefix(5000))
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let fm = FileManager.default
+                let kinds: [Any] = paths.map { raw in
+                    guard let path = raw as? String, path.hasPrefix("/") else { return NSNull() }
+                    var isDir: ObjCBool = false
+                    guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return NSNull() }
+                    return isDir.boolValue ? "dir" : "file"
+                }
+                DispatchQueue.main.async { self?.respond(id, kinds) }
+            }
+
         case "listFiles":
             let root = args.first as? String ?? ""
             guard !root.isEmpty, isDirectory(root) else { respond(id, [String]()); break }
@@ -5792,6 +5812,48 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             linkProbe = { err: String(e) }
           }
         }
+        // 第八节 8：检查引用（契约 v39）。挂在 links.md 上：那份夹具里本来就有三条坏链接
+        // （缺失.md / #没有这一节 / 缺失.png）和一串好的（本文锚点、带锚点的本地文档、
+        // 三种写法的带空格文件名、指着一张真图的链接），末尾另补了好图、坏图、
+        // 锚点不在的文档各一条。紧跟在 linkProbe 后面：那边刚把活动标签切回 links.md
+        let refProbe = null
+        if (path.indexOf('links.md') >= 0) {
+          try {
+            const rwait = (ms) => new Promise(r => setTimeout(r, ms))
+            const rv = window.__cursive.view
+            const before = rv.state.doc
+            window.__shellEmit('menu', 'file:check-refs')
+            // 查是异步的：问壳一趟、读被链接的文档
+            let rows = []
+            for (let i = 0; i < 60 && !rows.length; i++) {
+              await rwait(50)
+              rows = [...document.querySelectorAll('#palette .pl-row')]
+            }
+            const pl = document.getElementById('palette')
+            const input = pl ? pl.querySelector('.pl-input') : null
+            const items = rows.map(r => ({
+              label: (r.querySelector('.pl-label') || {}).textContent || '',
+              hint: (r.querySelector('.pl-hint') || {}).textContent || ''
+            }))
+            const placeholder = input ? input.placeholder : ''
+            // 回车 = 跳到第一条的源码，并选中那段地址
+            if (input) input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+            await rwait(200)
+            const sel = rv.state.selection.main
+            refProbe = {
+              items, placeholder,
+              closed: pl ? pl.hidden : null,
+              selected: rv.state.doc.sliceString(sel.from, sel.to),
+              selectedLine: rv.state.doc.lineAt(sel.from).text,
+              focused: document.activeElement === rv.contentDOM,
+              // 检查不改文档：查完、跳完，正文还是同一个对象
+              untouched: rv.state.doc === before
+            }
+            rv.dispatch({ selection: { anchor: 0 } })
+          } catch (e) {
+            refProbe = { err: String(e) }
+          }
+        }
         // 0.4.0 F2 跨文件替换（契约 v30）—— **全应用风险最高的一个动作**：一次改几十个
         // 没打开过的文件。这一段走完两轮：① 改掉三份夹具（LF / CRLF / BOM 各一份），
         // 中间**勾掉一处**证明「所见即所改」；② 另一份改完当场撤销。
@@ -6124,6 +6186,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           treeProbe,
           findProbe,
           linkProbe,
+          refProbe,
           foldProbe,
           listFoldProbe,
           tagProbe,
@@ -6468,6 +6531,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 不给快捷键：⌥⌘H 在 macOS 上是「隐藏其他」，别的空位也都不顺手，
         // 它本来就是偶尔用一次的东西（命令面板里一样找得到）
         file.addItem(item(L("menu.file.history"), "file:history", key: ""))
+        // 第八节 8：同样是「对这份文件做点什么」、同样偶尔才用一次，紧挨着版本历史、不给快捷键
+        file.addItem(item(L("menu.file.checkRefs"), "file:check-refs", key: ""))
         file.addItem(.separator())
         file.addItem(item(L("menu.file.exportHtml"), "file:export-html", key: "e", modifiers: [.command, .shift]))
         // 0.4.0 还的第四条账之后 **⌘P 归「打印」**（macOS 的通行键位）。

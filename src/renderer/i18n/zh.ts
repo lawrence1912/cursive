@@ -198,6 +198,7 @@ const zh = {
   'cmd.nextTab': '下一个标签',
   'cmd.prevTab': '上一个标签',
   'cmd.history': '版本历史…',
+  'cmd.checkRefs': '检查引用…',
   'cmd.exportHtml': '导出为 HTML…',
   'cmd.exportPng': '导出为长图…',
   'cmd.undo': '撤销',
@@ -373,6 +374,20 @@ const zh = {
   'note.customEmpty': '皮肤「{name}」里没有一条生效的规则 —— CSS 可能写坏了',
   'link.unsaved': '文档还没保存过，相对链接 {path} 没有起点',
   'link.spaced': '地址里有空格又看不出是哪个文件：写成 <{dest}> 或把空格换成 %20',
+  // 第八节 8：检查引用（editor/ref-check.ts）
+  'refs.placeholder': '{n} 处引用找不到 —— 回车跳到源码，输入可筛选',
+  'refs.noMatch': '没有匹配的条目',
+  'refs.where': '第 {line} 行 · {why}',
+  'refs.why.doc': '文档不在',
+  'refs.why.file': '文件不在',
+  'refs.why.image': '图片不在',
+  'refs.why.folder': '指着一个文件夹',
+  'refs.why.anchor': '没有这个标题',
+  'refs.why.unreadable': '文档打不开，没法核对标题',
+  'refs.allGood': '{n} 处本地引用都找得到',
+  'refs.none': '这份文档里没有本地引用',
+  'refs.unsaved': '（另有 {n} 处相对路径，要等文档保存过才查得了）',
+  'refs.stale': '检查的时候文档变了，这份结果对不上了 —— 请再检查一次',
 
   // ---------- 检查更新（ui/update.ts，0.3.0 T2）----------
   // 四句话都落在状态栏。**「正在检查」那句非说不可** —— 这一下要过一次网络，
