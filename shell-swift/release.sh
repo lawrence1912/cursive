@@ -103,6 +103,18 @@ cat > "$FIX/links.md" <<'LINKS'
 
 检查引用的靶子：![好图](<assets/中文 图.png>) 与 ![坏图](不存在的图.png) 与 [锚点不在的文档](link-target.md#没有的小节)
 LINKS
+# 第八节 10：挪动之后的引用检查。一份带相对图片、相对链接的文档摆在根目录，探针把它挪进
+# moved/ —— 两条相对路径跟着文档走，挪完都该找不到了；本文锚点不受影响
+mkdir -p "$FIX/moved"
+cat > "$FIX/move-src.md" <<'MOVESRC'
+# 挪动用的文档
+
+![同级的图](<assets/中文 图.png>)
+
+[同级的文档](link-target.md)
+
+[本文锚点](#挪动用的文档)
+MOVESRC
 # 0.4.0 F2 跨文件替换的四份夹具。三种指纹各一份 —— 替换走的是与保存同一条
 # decode/encode 路，CRLF 的改完还得是 CRLF、带 BOM 的还得带 BOM；
 # 每份都留一行**不含命中**的正文，用来证明「没命中的行一个字节不动」
@@ -775,6 +787,19 @@ if sys.argv[1] == 'links.md':
     ok = ok and rp.get('closed') is True and rp.get('focused') is True
     ok = ok and rp.get('selected') == '缺失.md' and '[缺失文件](缺失.md)' in (rp.get('selectedLine') or '')
     ok = ok and rp.get('untouched') is True
+    # 第八节 10：文档挪进子目录之后 —— ① 开着的那个标签跟着换目录（图片按新目录取，于是坏了），
+    # ② 状态栏说清楚这一挪弄坏了几条、给「查看」，而且不自己消失；③「查看」摆出的就是那两条
+    mp = r.get('moveProbe') or {}
+    ok = ok and not mp.get('err')
+    ok = ok and '/cursive-e2e/assets/' in (mp.get('srcBefore') or '')
+    # 从前 docDir 建 state 时就钉死了：挪完之后这张图照旧从老地方画出来（看着没事，重开才坏）
+    ok = ok and '/cursive-e2e/moved/assets/' in (mp.get('srcAfter') or '') and mp.get('brokenAfter') is True
+    ok = ok and (mp.get('pathAfter') or '').endswith('/moved/move-src.md')
+    ok = ok and mp.get('note') == '「move-src」挪到新位置之后，有 2 处引用找不到了'
+    ok = ok and mp.get('buttons') == ['查看', '知道了'] and mp.get('warn') is True
+    ok = ok and mp.get('listed') == ['<assets/中文 图.png>', 'link-target.md']
+    # 只说、不动：盘上那份一个字节都没改（不复制资源、不改链接）
+    ok = ok and mp.get('untouched') is True
     # 本地文件那条要走到「系统没接手」才说得出话 —— 自检下的 openExternal 替身
     # 对 file:// 按「在不在」回话，就是为了让这条路测得到
     ok = ok and lp.get('fileNote') == '打不开：/tmp/cursive-e2e/缺失.png'

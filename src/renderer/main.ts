@@ -33,6 +33,7 @@ import { currentTheme, loadKatex, primeHeights } from './editor/live-preview/wid
 import {
   bottomOverlay,
   createState,
+  dirEffect,
   livePreviewConf,
   spellConf,
   spellcheckExt,
@@ -42,9 +43,9 @@ import {
 } from './editor/setup'
 import { cursiveMarkdown } from './editor/markdown-lang'
 import { warmLazyModules } from './editor/warmup'
-import { anchorPos, destLiteral, linkHost } from './editor/link'
+import { anchorPos, destLiteral, isDocPath, linkHost } from './editor/link'
 import { docDir } from './editor/doc-dir'
-import { checkRefs, type RefProblem } from './editor/ref-check'
+import { brokenBy, checkRefs, type RefHost, type RefProblem } from './editor/ref-check'
 import { jumpHost, jumpTo, revisit } from './editor/navigation'
 import { readOnlyConf, readOnlyExt, readOnlyHost } from './editor/read-only'
 import { setTableEdit } from './editor/live-preview/table'
@@ -276,7 +277,12 @@ const sidebar = new Sidebar({
   },
   // P3-1 收尾：重命名 / 拖走之后路径变了。开着的标签要跟着改，否则下一次保存
   // 会按旧路径写回去 —— 等于凭空复活一个已经不在那儿的文件
-  moved: (from, to) => retargetTabs(from, to),
+  moved: (from, to) => {
+    retargetTabs(from, to)
+    // 第八节 10：父目录变了才是真的挪了地方（原地改名，文档自己的相对路径不受影响）——
+    // 查一下这一挪弄坏了哪几条引用
+    if (dirname(from) !== dirname(to)) void checkMoved(from, to, 'move')
+  },
   openHit: (hit) => void navigation(() => openHit(hit)),
   replaceInFiles: (targets, replacement) => replaceInFiles(targets, replacement),
   pickFolder: () => openFolder()
@@ -1397,6 +1403,7 @@ function retargetTabs(from: string, to: string): void {
     else if (t.path?.startsWith(`${from}/`)) t.path = to + t.path.slice(from.length)
     else continue
     touched = true
+    syncTabDir(t)
     if (t.id === activeId) docPath = t.path
   }
   if (!touched) return
@@ -1696,7 +1703,11 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
     endWrite()
     return false
   }
+  const was = t.path
   t.path = res.path
+  syncTabDir(t)
+  // 第八节 10：另存到了别的目录 —— 相对路径跟着文档走，查一下这一挪弄坏了哪几条
+  if (opts.as && was && dirname(was) !== dirname(res.path)) void checkMoved(was, res.path, 'saveAs')
   t.savedDoc = doc
   t.lastSeen = { text: content, fp: { ...t.fp } }
   // 写成了：`missing` 与那颗 ⚠ 一起摘掉 —— 「重新创建」之后标签上还挂着
@@ -2190,10 +2201,7 @@ async function openHistory(): Promise<void> {
 async function checkReferences(): Promise<void> {
   const tab = activeTab()
   const state = view.state
-  const report = await checkRefs(state, state.facet(docDir), tab?.path ?? null, {
-    stat: (paths) => window.api.statPaths(paths),
-    text: liveText
-  })
+  const report = await checkRefs(state, state.facet(docDir), tab?.path ?? null, refHost)
   if (activeTab() !== tab || view.state.doc !== state.doc) {
     note(t('refs.stale'), { warn: true })
     return
@@ -2244,6 +2252,78 @@ async function liveText(path: string): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** 检查器问壳的那两件事 */
+const refHost: RefHost = {
+  stat: (paths) => window.api.statPaths(paths),
+  text: liveText
+}
+
+/**
+ * 标签的路径变了（另存为、文件树里改名 / 拖走），它那份 state 里的 `docDir` 跟着换
+ * （第八节 10，见 `editor/setup.ts` 的 `dirConf`）。视图里装着它就对视图派，否则改它冻结的那份
+ */
+function syncTabDir(t: Tab): void {
+  const dir = t.path ? dirname(t.path) ?? '/' : null
+  if (t.id === viewTabId) {
+    if (view.state.facet(docDir) !== dir) view.dispatch({ effects: dirEffect(dir) })
+  } else if (t.state.facet(docDir) !== dir) {
+    t.state = t.state.update({ effects: dirEffect(dir) }).state
+  }
+}
+
+/**
+ * 第八节 10：文档换了位置之后，这一挪弄坏了哪几条引用（`brokenBy`：同一份正文按旧位置、
+ * 新位置各查一次）。挪的可能是一份文档，也可能是整个文件夹 —— 后者只查**开着的**那几份：
+ * 夹里没开的文档要一份份读盘，那是「维护全工作区引用」的形状，有意不做。
+ * 坏了就在状态栏说一句、给一颗「查看」；**不复制资源、不改链接**，那是人看过清单之后的事。
+ * 这句话**不自己消失**：引用坏了不会自己好，人多半正看着文件树，回头时它还得在
+ */
+async function checkMoved(from: string, to: string, via: 'move' | 'saveAs'): Promise<void> {
+  const docs: { before: string; after: string; state: EditorState }[] = []
+  for (const x of tabs) {
+    if (!x.path || (x.path !== to && !x.path.startsWith(`${to}/`))) continue
+    docs.push({
+      before: from + x.path.slice(to.length),
+      after: x.path,
+      state: x.id === viewTabId ? view.state : x.state
+    })
+  }
+  if (!docs.some((d) => d.after === to) && isDocPath(to)) {
+    const text = await liveText(to)
+    if (text !== null) {
+      docs.push({ before: from, after: to, state: EditorState.create({ doc: text, extensions: [cursiveMarkdown()] }) })
+    }
+  }
+  let total = 0
+  const hit: string[] = []
+  for (const d of docs) {
+    const broke = await brokenBy(
+      d.state,
+      { dir: dirname(d.before) ?? '/', path: d.before },
+      { dir: dirname(d.after) ?? '/', path: d.after },
+      refHost
+    )
+    if (!broke.length) continue
+    total += broke.length
+    hit.push(d.after)
+  }
+  const first = hit[0]
+  if (!first) return
+  const message =
+    via === 'saveAs'
+      ? t('refs.savedAs', { n: total })
+      : hit.length > 1
+        ? t('refs.movedMany', { docs: hit.length, n: total })
+        : t('refs.moved', { name: basename(first).replace(/\.(md|markdown)$/i, ''), n: total })
+  note(message, { warn: true, sticky: true, action: { label: t('refs.view'), run: () => void showRefsOf(first) } })
+}
+
+/** 「查看」：那份文档不是当前这份就先开过来，再把清单摆出来 */
+async function showRefsOf(path: string): Promise<void> {
+  if (docPath !== path) await navigation(() => openPath(path))
+  if (docPath === path) await checkReferences()
 }
 
 /**

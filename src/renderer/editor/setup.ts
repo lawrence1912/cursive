@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdownKeymap } from '@codemirror/lang-markdown'
 import { bracketMatching, indentOnInput } from '@codemirror/language'
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, type Extension, type StateEffect } from '@codemirror/state'
 import {
   crosshairCursor,
   drawSelection,
@@ -31,6 +31,21 @@ import { writingModes, WRITING_DEFAULT, type WritingModes } from './writing-mode
 
 /** 源代码模式 = 把实时预览插件从这个 compartment 里撤掉 */
 export const livePreviewConf = new Compartment()
+
+/**
+ * 文档所在目录（`docDir`）的挂载点（第八节 10）。图片、相对链接、粘贴图片的落脚全按它算。
+ *
+ * **从前它是建 state 时钉死的**：另存到别的目录、在文件树里把文档拖走之后，开着的那个标签
+ * 仍按旧目录解析 —— 图片照旧从旧地方画出来（看着没事，重开就坏了），粘贴的图落进旧目录的
+ * `assets/`、插一条在新位置失效的相对链接；未命名文档第一次保存之后，相对路径的图要重开
+ * 才显示得出来。现在标签路径一变就重配一次（main.ts 的 `syncTabDir`）
+ */
+export const dirConf = new Compartment()
+
+/** 换目录的那一发效应 */
+export function dirEffect(dir: string | null): StateEffect<unknown> {
+  return dirConf.reconfigure(docDir.of(dir))
+}
 
 /** P3-3 专注/打字机模式的挂载点：切换 = reconfigure（与源代码模式同一套） */
 export const writingConf = new Compartment()
@@ -147,7 +162,7 @@ export function createState(
       ),
       cursiveMarkdown(),
       smartPaste(),
-      docDir.of(options.dir ?? null),
+      dirConf.of(docDir.of(options.dir ?? null)),
       revealScope.of(options.reveal ?? 'line'),
       cursiveTheme,
       // 0.2.x：查找命中画在滚动条上（见 editor/scroll-marks.ts）

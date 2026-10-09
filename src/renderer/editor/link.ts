@@ -32,6 +32,13 @@ import { parsedTree } from './syntax'
 /** 能在标签里打开的后缀。与壳侧 `DocScan.exts`（跨文件搜索 / 快速打开的白名单）同一份名单 */
 const DOC_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt'])
 
+/** 这条路径是不是一份能在标签里打开的文档（按**文件名**的后缀算，同 `resolveLink`） */
+export function isDocPath(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 && DOC_EXTS.has(name.slice(dot + 1).toLowerCase())
+}
+
 /**
  * 链接地址的安全闸。`javascript:` / `data:text/html` 这类在导出的文件里会变成可执行的东西，
  * 在编辑器里点一下同样不该有任何效果 —— 两边共用这一份判断（导出走的就是这个函数）。

@@ -369,6 +369,10 @@ const en: Record<Key, string> = {
   'refs.none': 'No local references in this document',
   'refs.unsaved': ' ({n} more relative paths can be checked once the document is saved)',
   'refs.stale': 'The document changed during the check, so these results no longer line up — please run it again',
+  'refs.moved': '{n} references in “{name}” no longer resolve after the move',
+  'refs.movedMany': '{n} references in {docs} documents no longer resolve after the move',
+  'refs.savedAs': '{n} references no longer resolve from the new location — relative paths follow the document',
+  'refs.view': 'Show',
 
   // ---------- 检查更新（ui/update.ts）----------
   'up.checking': 'Checking for updates…',

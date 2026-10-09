@@ -298,3 +298,25 @@ export async function checkRefs(
   problems.sort((a, b) => a.from - b.from)
   return { problems, checked: pending.length, unsaved }
 }
+
+/**
+ * 文档换了位置之后（第八节 10：在文件树里拖走、整个文件夹挪走、另存到别处），**这一挪弄坏了哪几条**。
+ *
+ * 同一份正文按旧位置查一次、按新位置查一次，新位置上才坏的那几条就是答案。挪之前就坏着的
+ * 不算在这次头上；跟着一起挪走的东西（整个文件夹挪走时夹里的图）在旧位置上已经找不到了，
+ * 新位置上反倒找得到 —— 这一比也就不会冤枉它们。只读不写：不复制资源、不改链接，
+ * 那是人看过清单之后自己决定的事。
+ */
+export async function brokenBy(
+  state: EditorState,
+  before: { dir: string; path: string },
+  after: { dir: string; path: string },
+  host: RefHost
+): Promise<RefProblem[]> {
+  const [was, now] = await Promise.all([
+    checkRefs(state, before.dir, before.path, host),
+    checkRefs(state, after.dir, after.path, host)
+  ])
+  const old = new Set(was.problems.map((p) => `${p.from}:${p.reason}`))
+  return now.problems.filter((p) => !old.has(`${p.from}:${p.reason}`))
+}

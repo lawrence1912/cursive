@@ -5854,6 +5854,69 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             refProbe = { err: String(e) }
           }
         }
+        // 第八节 10：文档挪了目录之后。release.sh 在根目录摆了一份 move-src.md（带一张相对路径的图、
+        // 一条相对链接、一个本文锚点）和一个空的 moved/。先在标签里开着它，再挪进 moved/ ——
+        // 走的是侧栏拖拽落地后那同一个 move()（拖拽本身 treeProbe 已经测过）
+        let moveProbe = null
+        if (path.indexOf('links.md') >= 0) {
+          try {
+            const mwait = (ms) => new Promise(r => setTimeout(r, ms))
+            const sb = window.__cursive.sidebar
+            const mv = window.__cursive.view
+            const src = docDir + '/move-src.md'
+            const noteEl = document.getElementById('status-note')
+            noteEl.textContent = ''
+            const row = [...document.querySelectorAll('.sb-row')].find((r) => r.dataset.path === src)
+            if (row) row.click()
+            for (let i = 0; i < 40 && !(mv.state.doc.toString().indexOf('挪动用的文档') >= 0); i++) await mwait(50)
+            await mwait(300)
+            // 图在：读它的 src；裂了：ImageWidget 把它换成一个写着解析后完整路径的虚线框，读那段字
+            const imgSrc = () => {
+              const img = document.querySelector('.cm-lp-image img')
+              if (img) return img.getAttribute('src') || ''
+              return (document.querySelector('.cm-lp-image.is-broken') || {}).textContent || ''
+            }
+            const srcBefore = imgSrc()
+            const textBefore = mv.state.doc.toString()
+            await sb.move(src, docDir + '/moved')
+            let note = ''
+            for (let i = 0; i < 60 && note.indexOf('挪到新位置之后') < 0; i++) {
+              await mwait(50)
+              note = noteEl.firstChild ? noteEl.firstChild.textContent : ''
+            }
+            await mwait(300)
+            const buttons = [...noteEl.querySelectorAll('button')].map((b) => b.textContent)
+            const warn = noteEl.classList.contains('is-warn')
+            const srcAfter = imgSrc()
+            const brokenAfter = !!document.querySelector('.cm-lp-image.is-broken')
+            const diag = window.__cursive.diagnostics ? window.__cursive.diagnostics() : { tabs: [] }
+            const pathAfter = (diag.tabs.find((x) => (x.path || '').endsWith('/move-src.md')) || {}).path || ''
+            // 「查看」：清单摆出来的就是那两条
+            const view = [...noteEl.querySelectorAll('button')].find((b) => b.textContent === '查看')
+            if (view) view.click()
+            let rows = []
+            for (let i = 0; i < 60 && !rows.length; i++) {
+              await mwait(50)
+              rows = [...document.querySelectorAll('#palette .pl-row')]
+            }
+            const listed = rows.map((x) => (x.querySelector('.pl-label') || {}).textContent || '')
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+            await mwait(100)
+            const disk = await window.api.read(docDir + '/moved/move-src.md')
+            moveProbe = {
+              srcBefore, srcAfter, brokenAfter, pathAfter, note, buttons, warn, listed,
+              untouched: disk.content === textBefore && mv.state.doc.toString() === textBefore
+            }
+            // 收干净：回执点掉（它不会自己走），活动标签还给 links.md
+            const off = [...noteEl.querySelectorAll('button')].find((b) => b.textContent === '知道了')
+            if (off) off.click()
+            const back = [...document.querySelectorAll('.tab-item')].find((e) => e.title === 'links')
+            if (back) back.click()
+            await mwait(300)
+          } catch (e) {
+            moveProbe = { err: String(e) }
+          }
+        }
         // 0.4.0 F2 跨文件替换（契约 v30）—— **全应用风险最高的一个动作**：一次改几十个
         // 没打开过的文件。这一段走完两轮：① 改掉三份夹具（LF / CRLF / BOM 各一份），
         // 中间**勾掉一处**证明「所见即所改」；② 另一份改完当场撤销。
@@ -6187,6 +6250,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           findProbe,
           linkProbe,
           refProbe,
+          moveProbe,
           foldProbe,
           listFoldProbe,
           tagProbe,

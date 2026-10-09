@@ -1,6 +1,7 @@
 import { EditorState } from '@codemirror/state'
+import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { checkRefs, type RefHost } from '../src/renderer/editor/ref-check'
+import { brokenBy, checkRefs, type RefHost } from '../src/renderer/editor/ref-check'
 import { cursiveMarkdown } from '../src/renderer/editor/markdown-lang'
 
 /**
@@ -168,5 +169,67 @@ describe('本地引用检查', () => {
     const report = await checkRefs(state('# 只有标题\n\n一段正文，[外链](https://a.com)。\n'), DIR, null, h)
     expect(report).toEqual({ problems: [], checked: 0, unsaved: 0 })
     expect(calls.stat).toBe(0)
+  })
+})
+
+describe('挪动之后弄坏了哪几条（第八节 10）', () => {
+  const moved = (files: string[]) => host(Object.fromEntries(files.map((f) => [f, ''])))
+
+  it('一份文档挪进子目录：跟着文档走的相对路径坏了，挪之前就坏着的不算在这次头上', async () => {
+    const doc = '# 甲\n\n![同级](assets/x.png) ![上一级](../shared/y.png) ![本来就坏](broken.png) [锚点](#甲)\n'
+    const { h } = moved(['/notes/assets/x.png', '/shared/y.png'])
+    const broke = await brokenBy(state(doc), { dir: '/notes', path: '/notes/a.md' },
+      { dir: '/notes/sub', path: '/notes/sub/a.md' }, h)
+    expect(broke.map((p) => p.dest)).toEqual(['assets/x.png', '../shared/y.png'])
+  })
+
+  it('整个文件夹挪走：夹里的图跟着走、不算坏；指向夹外的才坏', async () => {
+    const doc = '![夹里](img/p.png) ![夹外](../common.png)\n'
+    // 挪完之后盘上的样子：夹里那张跟着到了新地方，夹外那张还在老地方
+    const { h } = moved(['/archive/proj/img/p.png', '/notes/common.png'])
+    const broke = await brokenBy(state(doc), { dir: '/notes/proj', path: '/notes/proj/a.md' },
+      { dir: '/archive/proj', path: '/archive/proj/a.md' }, h)
+    expect(broke.map((p) => p.dest)).toEqual(['../common.png'])
+  })
+
+  it('另存到别的目录：原地那份还在，新位置上找不到的就是这一挪弄坏的', async () => {
+    const doc = '![图](pic.png) [文档](other.md)\n'
+    const { h } = moved(['/a/pic.png', '/a/other.md', '/a/doc.md'])
+    const broke = await brokenBy(state(doc), { dir: '/a', path: '/a/doc.md' }, { dir: '/b', path: '/b/doc.md' }, h)
+    expect(broke.map((p) => `${p.dest} ${p.kind}`)).toEqual(['pic.png image', 'other.md doc'])
+  })
+
+  it('同一个目录里换个名字：什么都没坏', async () => {
+    const { h } = moved(['/a/pic.png'])
+    const broke = await brokenBy(state('![图](pic.png)\n'), { dir: '/a', path: '/a/x.md' }, { dir: '/a', path: '/a/y.md' }, h)
+    expect(broke).toEqual([])
+  })
+})
+
+describe('文档所在目录跟着路径走（第八节 10）', () => {
+  it('docDir 装在 compartment 里，dirEffect 换得动', async () => {
+    ;(globalThis as { document?: Record<string, unknown> }).document = {
+      documentElement: { dataset: {} },
+      addEventListener() {},
+      removeEventListener() {}
+    }
+    const { createState, dirEffect } = await import('../src/renderer/editor/setup')
+    const { docDir } = await import('../src/renderer/editor/doc-dir')
+    const s0 = createState('# x', [], { dir: '/old' })
+    expect(s0.facet(docDir)).toBe('/old')
+    const s1 = s0.update({ effects: dirEffect('/new') }).state
+    expect(s1.facet(docDir)).toBe('/new')
+    expect(s1.doc).toBe(s0.doc)
+  })
+
+  it('标签的路径一变就同步目录：另存为与文件树里改名 / 拖走两条路都接上了', () => {
+    const main = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8')
+    // retargetTabs 里每改一个标签的路径，紧跟着同步它的目录
+    expect(main).toMatch(/t\.path = to \+ t\.path\.slice\(from\.length\)\n\s+else continue\n\s+touched = true\n\s+syncTabDir\(t\)/)
+    // 写盘拿到新路径（另存为 / 第一次保存）之后同样同步
+    expect(main).toMatch(/t\.path = res\.path\n\s+syncTabDir\(t\)/)
+    // 父目录变了才查「这一挪弄坏了哪几条」
+    expect(main).toMatch(/if \(dirname\(from\) !== dirname\(to\)\) void checkMoved\(from, to, 'move'\)/)
+    expect(main).toMatch(/if \(opts\.as && was && dirname\(was\) !== dirname\(res\.path\)\) void checkMoved\(was, res\.path, 'saveAs'\)/)
   })
 })

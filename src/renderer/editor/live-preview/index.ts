@@ -86,6 +86,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const pointerChanged = u.startState.field(pointerSelection, false) !== u.state.field(pointerSelection, false)
       // 只读切换（第八节 5）：回显钉住、复选框换成不可点的那一份 —— 文档与选区都没动，得自己认
       const readOnlyChanged = u.startState.readOnly !== u.state.readOnly
+      // 文档换了目录（第八节 10：另存到别处、在文件树里拖走）：图片的地址跟着变，同样得自己认
+      const dirChanged = u.startState.facet(docDir) !== u.state.facet(docDir)
       // 鼠标拖选期间保留预览布局。选区仍正常更新，但 inline widget 不能跟着每个
       // selectionSet 在源码/预览间翻面，否则异步图片或公式会把拖选落点推开。
       if (u.state.field(pointerSelection, false)) {
@@ -94,7 +96,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       }
       if (
         this.wasComposing || u.docChanged || u.selectionSet || u.viewportChanged ||
-        tableEdit || pointerChanged || readOnlyChanged
+        tableEdit || pointerChanged || readOnlyChanged || dirChanged
       ) {
         this.wasComposing = false
         this.decorations = buildDecorations(u.view)
