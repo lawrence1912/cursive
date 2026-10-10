@@ -40,8 +40,13 @@ BUDGETS = {
     'typing.plain.frame.p95': 60,      # 基线 33–40
     'typing.plain.sync.p95': 24,       # 基线 14–15
     'typing.ime.frame.p95': 80,        # 基线 52–53（大头是输入法自己的往返）
-    'typing.find.frame.p95': 110,      # 基线 64–72（每键同步约 29ms：最该先优化的一处）
-    'typing.table.frame.p95': 95,      # 基线 48–62（每键同步约 30ms：第二处）
+    # 开着查找 / 表格单元格：第八节 18、19 之后与普通段落持平（2026-10-10 复测：键到帧 p95 27 / 27，
+    # 同步 p95 14 / 10），预算跟普通段落同一档。原来那两档（110 / 95）是按每键约 30ms 的旧毛病定的 ——
+    # 那毛病回来也不越线，等于没守
+    'typing.find.frame.p95': 60,       # 基线 64–72 → 复测 27
+    'typing.find.sync.p95': 24,        # 基线 30–32 → 复测 14
+    'typing.table.frame.p95': 60,      # 基线 48–62 → 复测 27
+    'typing.table.sync.p95': 24,       # 基线 30–32 → 复测 10
     'tabs.frame.p95': 160,             # 基线 103–107
     'scroll.slowFrames.ratio': 0.05,   # 超过 1.5 个刷新周期的帧占比；基线 0–0.3%
     'coldStart.painted.p50': 1700,     # 基线 1120–1152
@@ -305,7 +310,9 @@ flat = {
     'typing.plain.sync.p95': results['typing']['plain']['sync'].get('p95'),
     'typing.ime.frame.p95': results['typing']['ime']['frame'].get('p95'),
     'typing.find.frame.p95': results['typing']['find']['frame'].get('p95'),
+    'typing.find.sync.p95': results['typing']['find']['sync'].get('p95'),
     'typing.table.frame.p95': results['typing']['table']['frame'].get('p95'),
+    'typing.table.sync.p95': results['typing']['table']['sync'].get('p95'),
     'tabs.frame.p95': results['tabs']['frame'].get('p95'),
     'scroll.slowFrames.ratio': results['scroll']['slowFrames.ratio'],
     'coldStart.painted.p50': results['coldStart']['painted'].get('p50'),
