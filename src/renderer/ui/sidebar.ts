@@ -157,7 +157,11 @@ export function edgeScroll(y: number, top: number, bottom: number): number {
 const TYPEAHEAD_GAP = 800
 
 export interface SidebarHooks {
-  openFile: (path: string) => void
+  /**
+   * 打开一个文件。`preview` = 单击（或空格）开的**预览**：落在那一格预览标签里，
+   * 下一次单击别的文件就把它顶掉；双击、回车、刚新建出来的 = 留下来的普通标签
+   */
+  openFile: (path: string, preview: boolean) => void
   /**
    * 文件被移进废纸篓：让 main.ts 有机会关掉对应标签，并给出那条带「撤销」的回执。
    * `trashed` 是它在废纸篓里的落点（契约 v25），空串 = 壳没能给出落点，撤销这一下就不提供
@@ -494,21 +498,25 @@ export class Sidebar {
     const row = (e.target as HTMLElement).closest<HTMLElement>('.sb-row')
     const path = row?.dataset['path']
     if (!path) return
-    await this.activateRow(path)
+    // 单击 = 预览，双击 = 留下（VS Code 同款）。认的是这一下 click 自己的 `detail`
+    // （系统给的连击数）而不是另挂一个 dblclick：双击的头一下照样先开出预览，
+    // 第二下把同一个标签转正 —— 不会先开一个再多开一个
+    await this.activateRow(path, e.detail < 2)
   }
 
   /**
    * 「激活一行」：文件 = 打开，目录 = 收/展。点击与 Enter 共用同一条路 ——
-   * 分成两份的话，某天给点击加了什么（比如预览），键盘那条就会悄悄少一块
+   * 分成两份的话，某天给点击加了什么（比如预览），键盘那条就会悄悄少一块。
+   * `preview` 对目录没有意义（收/展就是收/展）
    */
-  private async activateRow(path: string): Promise<void> {
+  private async activateRow(path: string, preview: boolean): Promise<void> {
     const node = this.byPath.get(path)
     if (!node) return
     this.selected = path
 
     if (!node.entry.isDir) {
       this.paintCursor()
-      this.hooks.openFile(path)
+      this.hooks.openFile(path, preview)
       return
     }
     if (this.expanded.has(path)) {
@@ -704,7 +712,8 @@ export class Sidebar {
     if (folder) this.expanded.add(made.path)
     await this.reload()
     this.selected = made.path
-    if (!folder) this.hooks.openFile(made.path)
+    // 新建出来就是要往里写的，不是「看一眼」—— 开成普通标签
+    if (!folder) this.hooks.openFile(made.path, false)
   }
 
   private async trash(path: string): Promise<void> {
@@ -795,7 +804,7 @@ export class Sidebar {
   //
   // 在这之前**整棵树只认鼠标**：大纲有过滤框、命令面板有键盘、查找有键盘，
   // 只有文件树得把手从键盘上拿开。这里补的是树控件的常规那一套（VS Code / Finder
-  // 同款）：↑↓ 走行、←→ 收展、Enter 打开、首字母跳、F2 重命名、⌘⌫ 进废纸篓。
+  // 同款）：↑↓ 走行、←→ 收展、Enter 打开（空格 = 预览）、首字母跳、F2 重命名、⌘⌫ 进废纸篓。
   //
   // 焦点模型走 **aria-activedescendant**：焦点始终在 `.sb-tree` 这**一个**元素上，
   // 「光标在哪一行」只是它的一个属性。换成「每行一个 tabindex、焦点跟着行走」的话，
@@ -888,10 +897,12 @@ export class Sidebar {
         this.moveCursor(parent ? rows.find((r) => r.dataset['path'] === parent) : null)
         return
       }
+      // 回车 = 双击（开成普通标签），空格 = 单击（预览）—— 空格在 Finder 里本来就是
+      // 「看一眼」（快速查看），回车是明确地要打开它
       case 'Enter':
       case ' ':
         e.preventDefault()
-        if (path) await this.activateRow(path)
+        if (path) await this.activateRow(path, e.key === ' ')
         return
       case 'F2':
         e.preventDefault()

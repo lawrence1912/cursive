@@ -160,6 +160,8 @@ const listener = EditorView.updateListener.of((u) => {
     docEdits += 1
     // 后退 / 前进记下的位置跟着改动挪（第八节 6）：在落点前面插一段字，回来时不该差那一段
     if (viewTabId !== null) nav.map(viewTabId, u.changes)
+    // 预览一改就转正：改过的东西不能被下一次单击顶掉
+    keepTab(viewTabId)
     syncStatus()
     scheduleCount()
     scheduleAutosave()
@@ -271,8 +273,9 @@ elZoom.addEventListener('keydown', (e) => {
 })
 
 const sidebar = new Sidebar({
-  // 文件树点开一个文件是一次明确的跳转（第八节 6），记下来后退得回来
-  openFile: (path) => void navigation(() => openPath(path)),
+  // 文件树点开一个文件是一次明确的跳转（第八节 6），记下来后退得回来。
+  // 单击开成预览、双击开成普通标签（见 `Tab.preview`）
+  openFile: (path, preview) => void navigation(() => openPath(path, undefined, preview)),
   // 文件进了废纸篓：它开着的标签也得关掉，否则标签指着一个不存在的文件
   trashed: (path, trashed) => {
     for (const tab of tabs.filter((x) => x.path === path)) void closeTab(tab.id, true)
@@ -630,6 +633,15 @@ interface Tab {
   /** 盘上那个文件读不到了（删了 / 改名了 / 外接盘拔了）。挂着时自动保存停下，见 `writeOnce` */
   missing?: true
   /**
+   * **预览标签**：单击文件树开出来的那一格（VS Code 同款，标题斜体）。整个窗口至多一个，
+   * 下一次单击别的文件时新的那份坐进这一格、把它顶掉（见 `spawnTab`）。
+   *
+   * 只会转正、不会变回来（`keepTab`）：双击 / 回车打开、从别处（快速打开、链接、Finder…）
+   * 再开它一次、双击标签、右键「保持打开」、改了内容、拖着挪了位置、设为只读、另存为。
+   * 「改了内容就转正」是要害 —— 有未保存改动的标签绝不能被一次单击顶掉
+   */
+  preview?: true
+  /**
    * 这个标签自己的保存状态（第八节 1）。**归标签不归窗口** —— 从前那句
    * 「已保存 10:23」是一个全局变量，后台标签的自动保存会把它刷成此刻，
    * 于是正在编辑的这一份挂着一句它从来没发生过的回执（见 `ui/save-state.ts`）
@@ -678,6 +690,18 @@ function anyDirty(): boolean {
   return tabs.some((t) => isTabDirty(t))
 }
 
+/**
+ * 预览转正（见 `Tab.preview`）：从此它就是个普通标签，下一次单击别的文件不会再顶掉它。
+ * 不是预览就什么都不做 —— 调用方不必先问
+ */
+function keepTab(id: number | null): void {
+  const tab = tabs.find((x) => x.id === id)
+  if (!tab?.preview) return
+  delete tab.preview
+  syncStatus()
+  scheduleSession()
+}
+
 const tabbar = new TabBar(
   (id) => {
     if (id !== activeId) activate(id)
@@ -685,7 +709,8 @@ const tabbar = new TabBar(
   },
   (id) => void closeTab(id),
   (id, e) => openTabMenu(id, e),
-  (id, before) => reorderTab(id, before)
+  (id, before) => reorderTab(id, before),
+  (id) => keepTab(id)
 )
 
 /**
@@ -728,6 +753,8 @@ function reorderTab(id: number, before: number | null): void {
   const next = reorderIds(now, id, before)
   if (next.join() === now.join()) return
   tabs = next.map((x) => tabs.find((tab) => tab.id === x)!)
+  // 特意给它挪了个位置，就是要留着它（VS Code 同款）
+  keepTab(id)
   syncStatus()
   scheduleSession()
 }
@@ -751,11 +778,26 @@ function spawnTab(
   fp: FileFingerprint,
   focus = true,
   /**
+   * 开成预览（见 `Tab.preview`）。预览只有一格：已经有一个的话，新的这份**坐进它那一格**、
+   * 把它顶掉。被顶掉的不是人关的，不进「重新打开关闭的标签」那一栈（VS Code 同款）。
+   *
+   * **只有开在前台的（`focus`）才顶**：开在背景里的是会话恢复，那会儿占着预览那一格的
+   * 只可能是人刚单击开的东西 —— 背景行为不许动它（恢复那边因此不会再要一个预览）。
+   * 顺带保证了被顶掉的哪怕是活动标签，下面那次 activate 也一定会发生
+   */
+  preview = false,
+  /**
    * 恢复出来的滚动位置。**必须在这儿给**：接管空白页那一次 `activate` 就在下面几行，
    * 而调用方拿到返回值才写得上 `tab.scroll` —— 晚一步，那次 activate 把视图滚到 0
    */
   scroll = 0
 ): Tab {
+  let slot = preview && focus ? tabs.find((t) => t.preview) : undefined
+  // 按理预览一改就转正了，到不了这儿。真脏着就让它转正留下 —— 宁可多一格，不替人丢东西
+  if (slot && isTabDirty(slot)) {
+    delete slot.preview
+    slot = undefined
+  }
   // 启动时的空白首标签直接复用，避免「打开一个文件却多出一个空标签」
   const pristine = tabs.find(
     (t) => !t.path && !isTabDirty(t) && t.state.doc.length === 0
@@ -768,6 +810,9 @@ function spawnTab(
     pristine.scroll = scroll
     // 换了一份文档 = 换了一段身世：上一份的「已保存 10:23」不能跟着新文件走
     pristine.save = newSaveStatus()
+    if (preview) pristine.preview = true
+    // 空白标签与旧预览同时在时，接管空白标签那一格（不留一个空标签挂着），旧预览照样顶掉
+    if (slot) tabs = tabs.filter((x) => x !== slot)
     // **背景接管也要走 activate**（0.4.1 修）：`focus=false` 是为了省掉会话恢复里
     // 那 N-1 次白做的 `view.setState`，但被接管的要是**当前这个空白标签**，
     // 不换视图就等于让 `activeId` 指着新文件、视图里却还是那份空白文档 ——
@@ -784,9 +829,13 @@ function spawnTab(
     savedDoc: state.doc,
     scroll,
     sourceMode,
-    save: newSaveStatus()
+    save: newSaveStatus(),
+    ...(preview ? { preview: true as const } : {})
   }
-  tabs.push(t)
+  // **新开一个 id 而不是复用旧预览那个标签对象**：后退 / 前进按 id 认标签（`sameDoc`），
+  // 同一个 id 换了一份文档，「回到刚才那份的第 30 行」就会落在这一份的第 30 行上
+  if (slot) tabs.splice(tabs.indexOf(slot), 1, t)
+  else tabs.push(t)
   if (focus) activate(t.id)
   return t
 }
@@ -943,6 +992,7 @@ async function closeTabs(targetId: number, scope: CloseScope): Promise<void> {
 function openTabMenu(id: number, e: MouseEvent): void {
   const idx = tabs.findIndex((x) => x.id === id)
   if (idx < 0) return
+  const preview = tabs[idx]!.preview === true
   const items: MenuItem[] = [
     { label: t('tab.menuClose'), run: () => void closeTab(id) },
     {
@@ -962,10 +1012,12 @@ function openTabMenu(id: number, e: MouseEvent): void {
       run: () => void closeTabs(id, 'right')
     },
     { label: t('tab.closeAll'), run: () => void closeTabs(id, 'all') },
+    // 预览标签才有这一条（VS Code 同款「保持打开」）：双击标签是同一件事，只是这儿看得见
+    ...(preview ? [{ label: t('tab.keep'), separated: true, run: () => keepTab(id) }] : []),
     // 第八节 5：只读按标签，右键的就是这个标签 —— 不必先切过去
     {
       label: t(tabReadOnly(tabs[idx]!) ? 'tab.roOff' : 'tab.roOn'),
-      separated: true,
+      separated: !preview,
       run: () => setReadOnly(id, !tabReadOnly(tabs.find((x) => x.id === id)!))
     },
     // 第八节 7：与浏览器同一个位置
@@ -1005,6 +1057,7 @@ function syncStatus(force = false): void {
       dirty: isTabDirty(x),
       stale: x.stale === true,
       readOnly: tabReadOnly(x),
+      preview: x.preview === true,
       path: x.path
     })),
     activeId
@@ -1178,6 +1231,8 @@ function tabReadOnly(t: Tab): boolean {
 function setReadOnly(id: number, on: boolean): void {
   const tab = tabs.find((x) => x.id === id)
   if (!tab || tabReadOnly(tab) === on) return
+  // 对一个预览定下「只读」，就是要留着它读：被下一次单击顶掉的话，这把锁跟着一起没了
+  keepTab(id)
   const spec = {
     effects: [readOnlyConf.reconfigure(readOnlyExt(on)), ...(on ? [setTableEdit.of(null)] : [])]
   }
@@ -1314,7 +1369,9 @@ async function travel(spot: NavSpot): Promise<void> {
       openFailed(spot.path, e, () => void travel(spot))
       return
     }
-    tab = openTab(doc.content, doc.path, doc.fingerprint)
+    // 开成预览：单击预览过一串文件再一路后退，退过的每一份都该轮流坐那一格，
+    // 而不是在标签栏里攒成一排没人要留的标签（VS Code 同款）
+    tab = openTab(doc.content, doc.path, doc.fingerprint, { preview: true })
   }
   if (!tab) return
   const switched = tab.id !== activeId
@@ -1371,8 +1428,17 @@ function openTab(
   content: string,
   path: string | null,
   fp: FileFingerprint,
-  /** 重新打开关闭的标签（第八节 7）带回来的位置与只读；别的路都不传 */
-  back: { cursor?: number; scroll?: number; readOnly?: boolean } = {}
+  opts: {
+    /** 重新打开关闭的标签（第八节 7）带回来的位置与只读；别的路都不传 */
+    cursor?: number
+    scroll?: number
+    readOnly?: boolean
+    /**
+     * 开成预览（单击文件树、后退 / 前进回到一份已经关掉的文档）。别的路都是「真要打开它」——
+     * 那份文件此刻正开在预览里的话，顺手把它转正
+     */
+    preview?: boolean
+  } = {}
 ): Tab {
   // 文档进编辑器**之前**把落盘的 widget 高度捞进内存：CM 先查 `estimatedHeight` 进高度表、
   // 再 `toDOM`，晚一步的话这份文档的第一个图/公式/图表照样跳一下（见 widgets.ts 那边的注释）
@@ -1383,20 +1449,27 @@ function openTab(
   warmTimer = warmLazyModules(content)
   const existing = path ? tabs.find((t) => t.path === path) : undefined
   if (existing) {
-    activate(existing.id)
+    if (!opts.preview) keepTab(existing.id)
+    // **已经是当前这一份就别再 activate**：那会拿它切走时冻结的旧 state 盖掉视图里
+    // 正在编辑的这份，滚动也跳回旧位置（见 `openDocLink` 那段）。调用方在 await 读盘
+    // 之前各自挡过一次，挡不住的是**两次打开同时在路上**：双击的两下各读一次盘，
+    // 第二次读回来时第一次已经把它开好了
+    if (existing.id !== activeId) activate(existing.id)
+    else focusKeepScroll(view)
     return existing
   }
   const tab = spawnTab(
     createState(content, listener, {
       dir: path ? dirname(path) : null,
       sourceMode,
-      ...(back.cursor === undefined ? {} : { cursor: back.cursor }),
-      ...(back.readOnly ? { readOnly: true } : {})
+      ...(opts.cursor === undefined ? {} : { cursor: opts.cursor }),
+      ...(opts.readOnly ? { readOnly: true } : {})
     }),
     path,
     fp,
     true,
-    back.scroll ?? 0
+    opts.preview === true && path !== null,
+    opts.scroll ?? 0
   )
   // **刚从盘上读进来的这一份，就是「我们以为盘上是什么」**（契约 v36 的 expect）。
   // 不在这儿记的话，第一次自动保存发不出比对依据 —— 而「打开、编辑、两秒后自动保存」
@@ -1500,11 +1573,17 @@ function openFailed(path: string, e: unknown, retry?: () => void): void {
 
 /**
  * 从侧边栏点开一个文件（开新标签，不碰现有标签）。
- * `line` 是 0.2.x「跳到行」那条路带进来的：`⌘T` 里打 `readme:120`
+ * `line` 是 0.2.x「跳到行」那条路带进来的：`⌘T` 里打 `readme:120`；
+ * `preview` 是文件树的单击（见 `Tab.preview`）
  */
-async function openPath(path: string, line?: number): Promise<void> {
+async function openPath(path: string, line?: number, preview = false): Promise<void> {
   if (path === docPath) {
-    // 已经是当前这份：标签一个字都不用动，但行还是要跳
+    // 已经是当前这份：标签一个字都不用动，但行还是要跳。不是预览（双击 / 回车）就转正，
+    // 焦点也还给编辑器 —— 双击的第二下按在树上，焦点这会儿被树拿走了
+    if (!preview) {
+      keepTab(activeId)
+      focusKeepScroll(view)
+    }
     if (line) gotoLine(line)
     return
   }
@@ -1514,10 +1593,10 @@ async function openPath(path: string, line?: number): Promise<void> {
   } catch (e) {
     // 文件树 / 快速打开点一下打不开的东西：从前这儿一个 catch 都没有 ——
     // 屏幕上什么都不发生，控制台里多一条没人看的 unhandled rejection
-    openFailed(path, e, () => void openPath(path, line))
+    openFailed(path, e, () => void openPath(path, line, preview))
     return
   }
-  openTab(doc.content, doc.path, doc.fingerprint)
+  openTab(doc.content, doc.path, doc.fingerprint, { preview })
   if (line) gotoLine(line)
 }
 
@@ -1746,6 +1825,8 @@ async function writeOnce(t: Tab, opts: WriteOpts): Promise<boolean> {
   // 活动标签刚在面板里拿到路径的话，`docPath` 也得跟上（状态栏与壳侧的标题读它）。
   // **要现问一次 activeId** —— 面板开着的那段时间里人可能已经切走了
   if (t.id === activeId) docPath = t.path
+  // 另存为是一个明确的决定：存成了一份新文件就是要接着用它，预览就此转正
+  if (opts.as) keepTab(t.id)
   endWrite()
   syncStatus(true)
   void keepSnapshot(res.path, content)
@@ -1910,7 +1991,9 @@ function currentSession(): { tabs: SessionTab[]; active: number } {
       scroll: t.id === activeId ? view.scrollDOM.scrollTop : t.scroll,
       cursor: state.selection.main.head,
       // 只读跟着会话走（第八节 5）：关掉再开，参考文档还该是锁着的
-      ...(state.readOnly ? { readOnly: true as const } : {})
+      ...(state.readOnly ? { readOnly: true as const } : {}),
+      // 预览也跟着走：关掉再开，那一格还是那一格，下一次单击照样顶掉它
+      ...(t.preview ? { preview: true as const } : {})
     })
   }
   return { tabs: out, active }
@@ -1983,6 +2066,9 @@ async function restoreSession(): Promise<void> {
       doc.path,
       doc.fingerprint,
       false,
+      // 恢复期间人可能已经单击开了一个预览：那一格归他，恢复出来的这份就当普通标签 ——
+      // 一个窗口只有一格预览，背景行为也不许顶掉人刚点开的东西（同 `restoreFocus` 的规矩）
+      st?.preview === true && !tabs.some((x) => x.preview),
       // 滚动位置也在这儿给：第一份文件会就地接管启动那个空白标签并**当场**进视图，
       // 返回之后再写 `tab.scroll` 就晚了一步（那次 activate 已经把视图滚到 0）
       st?.scroll ?? 0
@@ -3140,7 +3226,7 @@ function outlineSource(): { level: number; text: string }[] {
       navFlags: { ...navFlags },
       closedTabs: closedTabs.size,
       tabs: tabs.map((tab) => ({
-        id: tab.id, path: tab.path, dirty: isTabDirty(tab),
+        id: tab.id, path: tab.path, dirty: isTabDirty(tab), preview: tab.preview === true,
         save: { ...tab.save }, stale: tab.stale, conflict: !!tab.conflict,
         length: (tab.id === viewTabId ? view.state : tab.state).doc.length,
         savedLength: tab.savedDoc.length,

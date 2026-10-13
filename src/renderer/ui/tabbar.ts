@@ -12,6 +12,8 @@ export interface TabItem {
   stale?: boolean
   /** 只读阅读模式（第八节 5）：标题前一把锁。按标签的状态，就该画在标签自己身上 */
   readOnly?: boolean
+  /** 预览标签（单击文件树开出来的那一格）：标题斜体，下一次单击别的文件就被顶掉 */
+  preview?: boolean
 }
 
 /**
@@ -31,7 +33,7 @@ export function reorderIds(ids: number[], id: number, before: number | null): nu
   return [...rest.slice(0, at), id, ...rest.slice(at)]
 }
 
-/** 顶部标签栏：点击激活、× 关闭、中键关闭、右键菜单、拖拽重排。标签状态变化时重建。 */
+/** 顶部标签栏：点击激活、× 关闭、中键关闭、右键菜单、拖拽重排、双击转正。标签状态变化时重建。 */
 export class TabBar {
   readonly el: HTMLElement
   private signature = ''
@@ -58,7 +60,9 @@ export class TabBar {
     /** 右键：由 main.ts 建菜单 —— 标签的顺序语义（左边/右边/其他）是它那边的事 */
     private readonly onContext?: (id: number, e: MouseEvent) => void,
     /** 拖拽重排：`before === null` = 放到末尾。顺序的真相在 main.ts 的 `tabs` 里 */
-    private readonly onReorder?: (id: number, before: number | null) => void
+    private readonly onReorder?: (id: number, before: number | null) => void,
+    /** 双击标签 = 留下它（预览转正，VS Code 同款）。不是预览的标签由 main.ts 当没发生 */
+    private readonly onKeep?: (id: number) => void
   ) {
     this.el = document.createElement('div')
     this.el.id = 'tabbar'
@@ -83,6 +87,12 @@ export class TabBar {
         return
       }
       this.onActivate(id)
+    })
+    // 双击的头一下已经由 click 激活过了，这里只管「留下它」。连点两下关闭键不算
+    this.el.addEventListener('dblclick', (e) => {
+      if ((e.target as Element).closest('.tab-close')) return
+      const tab = (e.target as HTMLElement).closest<HTMLElement>('.tab-item')
+      if (tab) this.onKeep?.(Number(tab.dataset['id']))
     })
     this.el.addEventListener('auxclick', (e) => {
       if (e.button !== 1) return
@@ -111,7 +121,7 @@ export class TabBar {
   render(tabs: TabItem[], activeId: number): void {
     // 连续输入时标签标题和脏标记通常没变；重建后立刻测量宽度会强制布局。
     const signature = JSON.stringify([getLang(), activeId, tabs.map((tab) =>
-      [tab.id, tab.title, tab.dirty, tab.stale === true, tab.readOnly === true])])
+      [tab.id, tab.title, tab.dirty, tab.stale === true, tab.readOnly === true, tab.preview === true])])
     if (signature === this.signature) return
     this.signature = signature
     const frag = document.createDocumentFragment()
@@ -121,9 +131,12 @@ export class TabBar {
         'tab-item' +
         (tab.id === activeId ? ' is-active' : '') +
         (tab.id === this.contextId ? ' is-context' : '') +
-        (tab.id === this.dragId ? ' is-dragging' : '')
+        (tab.id === this.dragId ? ' is-dragging' : '') +
+        (tab.preview ? ' is-preview' : '')
       el.dataset['id'] = String(tab.id)
-      el.title = tab.title
+      // 预览的斜体是个约定，没见过的人看不出它的意思 —— 悬停时说一句怎么留下它
+      // （同链接悬停那句「⌘ + 点击打开」：控件上就地说，第八节 14）
+      el.title = tab.preview ? `${tab.title}\n${t('tab.previewTip')}` : tab.title
 
       if (tab.readOnly) {
         const lock = document.createElement('span')

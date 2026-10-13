@@ -27,6 +27,11 @@ export interface SessionTab {
    * 版本号因此不用动（`SESSION_VERSION` 一变，所有人上次的标签就全丢了）
    */
   readOnly?: true
+  /**
+   * 预览标签（单击文件树开的那一格）。同 `readOnly`，只在为真时写、老会话读出来就是普通标签 ——
+   * 不记的话，关掉再开那一格就成了普通标签，下一次单击另开一格，它却赖着不走
+   */
+  preview?: true
 }
 
 export interface Session {
@@ -65,7 +70,9 @@ export function parseSession(raw: string | null): Session | null {
         cursor: safeNum((t as SessionTab).cursor),
         // 只认严格的 true：手改成 "yes"、1 之类的一律当可编辑 —— 认错了的代价是一份文档
         // 莫名其妙打不了字，而当成可编辑最坏也就是少了一把锁
-        ...((t as SessionTab).readOnly === true ? { readOnly: true as const } : {})
+        ...((t as SessionTab).readOnly === true ? { readOnly: true as const } : {}),
+        // 认错了的代价反过来：当成普通标签最坏也就是多留一格，当成预览会被下一次单击顶掉
+        ...((t as SessionTab).preview === true ? { preview: true as const } : {})
       })
     }
     if (!tabs.length) return null

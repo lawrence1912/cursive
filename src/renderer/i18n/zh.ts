@@ -60,6 +60,8 @@ const zh = {
   'tab.roOn': '设为只读',
   'tab.roOff': '取消只读',
   'tab.reopen': '重新打开关闭的标签',
+  'tab.previewTip': '预览 · 双击保持打开',
+  'tab.keep': '保持打开',
 
   // ---------- 文件树（sidebar.ts）----------
   'sb.newFile': '新建文件',

@@ -410,11 +410,42 @@ ok = ok and seen.get('⇧⌘p') == ['视图 › 命令面板…'] and len(seen.g
 if clash:
     print('撞键：' + str(clash))
 
+# ---- 单击预览、双击留下（文件树；只在 dialect.md 这条用例上跑）----
+if sys.argv[1] == 'dialect.md':
+    pp = r.get('previewProbe') or {}
+    ok = ok and not pp.get('err') and pp.get('rows') is True
+    # ① 单击：多一格，斜体，悬停说明里写着怎么留下它
+    one = pp.get('one') or {}
+    ok = ok and one.get('n') == 1 and one.get('italic') is True and one.get('previews') == ['第2章.md']
+    ok = ok and '双击保持打开' in (one.get('tip') or '')
+    # ② 再单击另一个：就地顶掉 —— 数不变、坐同一格，被顶掉的不进「重新打开」那一栈
+    sw = pp.get('swap') or {}
+    ok = ok and sw.get('n') == 1 and sw.get('sameSlot') is True and sw.get('gone') is True
+    ok = ok and sw.get('previews') == ['第10章.md'] and sw.get('stack') == 0
+    # ③ 双击：同一个标签转正，不多开一格
+    db = pp.get('dbl') or {}
+    ok = ok and db.get('n') == 1 and db.get('sameId') is True and db.get('italic') is False and db.get('previews') == []
+    # ④ 有了普通标签再单击 = 另开一格预览
+    nx = pp.get('next') or {}
+    ok = ok and nx.get('n') == 2 and nx.get('previews') == ['Zebra.md']
+    # ⑤ 改一个字就转正（**要害**：有改动的标签不能被一次单击顶掉）；改回去之后不留脏
+    ok = ok and pp.get('editKept') is True and pp.get('editClean') is True
+    # ⑥⑦ 双击标签 / 右键「保持打开」都能转正；那一条只在预览的菜单里有
+    ok = ok and pp.get('tabKept') is True and pp.get('menuKept') is True
+    ok = ok and pp.get('menu') == ['关闭', '关闭左边的标签', '关闭其他标签', '关闭右边的标签', '关闭所有标签',
+                                   '保持打开', '设为只读', '重新打开关闭的标签']
+    # ⑧ 单击预览过去再后退：被顶掉的那份按路径重开，照样坐预览那一格
+    bk = pp.get('back') or {}
+    ok = ok and bk.get('reopened') is True and bk.get('previews') == ['img.md']
+    ok = ok and bk.get('gone') is True and bk.get('same') is True and bk.get('n') == 5
+    # 收得干净：一个预览不留、一个标签没关（后面那段断言「重新打开」此刻还灰着）
+    ok = ok and pp.get('left') == [] and pp.get('stack') == 0
+
 # ---- 0.2.0 标签右键菜单（只在 dialect.md 这条用例上跑）----
 if sys.argv[1] == 'dialect.md':
     tp = r.get('tabProbe') or {}
     ok = ok and not tp.get('err')
-    ok = ok and tp.get('added') == 3           # 从侧栏点开三个文件，就该多三个标签
+    ok = ok and tp.get('added') == 3           # 从侧栏双击开三个文件，就该多三个标签
     # 五条关闭之后是第八节 5 / 7 加的两条：「设为只读」「重新打开关闭的标签」（追加在末尾，
     # 下面按下标点的「关闭右边 / 左边 / 其他」不受影响）
     ok = ok and tp.get('labels') == ['关闭', '关闭左边的标签', '关闭其他标签',

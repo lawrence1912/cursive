@@ -50,6 +50,8 @@ const en: Record<Key, string> = {
   'tab.roOn': 'Make Read-only',
   'tab.roOff': 'Allow Editing',
   'tab.reopen': 'Reopen Closed Tab',
+  'tab.previewTip': 'Preview · double-click to keep it open',
+  'tab.keep': 'Keep Open',
 
   // ---------- 文件树 ----------
   'sb.newFile': 'New File',

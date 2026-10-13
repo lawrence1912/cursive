@@ -77,6 +77,29 @@ describe('会话的读写', () => {
     expect(back.tabs.map((t) => t.readOnly === true)).toEqual([false, false, false])
   })
 
+  it('预览这一位跟着存、跟着读回来：关掉再开，那一格还是预览', () => {
+    const store = memory()
+    const s = packSession([tab('/a.md'), { ...tab('/b.md', 5, 1), preview: true }], 1)
+    saveSession(store, '/root', s)
+    const back = loadSession(store, '/root')!
+    expect(back.tabs[1]!.preview).toBe(true)
+    expect('preview' in back.tabs[0]!).toBe(false)
+  })
+
+  it('预览只认严格的 true：认错了会被下一次单击顶掉，宁可当普通标签', () => {
+    const raw = JSON.stringify({
+      v: SESSION_VERSION,
+      active: 0,
+      tabs: [
+        { path: '/a.md', scroll: 0, cursor: 0, preview: 'yes' },
+        { path: '/b.md', scroll: 0, cursor: 0, preview: 1 },
+        { path: '/c.md', scroll: 0, cursor: 0 }
+      ]
+    })
+    const back = parseSession(raw)!
+    expect(back.tabs.map((t) => 'preview' in t)).toEqual([false, false, false])
+  })
+
   it('没有存储（隐私模式 / 被策略禁掉）不炸', () => {
     expect(loadSession(undefined, '/root')).toBeNull()
     expect(() => saveSession(undefined, '/root', packSession([tab('/a.md')], 0))).not.toThrow()

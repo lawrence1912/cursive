@@ -5814,6 +5814,106 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         } catch (e) {
           v020 = { err: String(e) }
         }
+        // ---- 单击预览、双击留下（文件树）----
+        // 同样只挂在 dialect.md 上，**排在标签右键菜单那段之前、收得一干二净**：那一段按下标点菜单、
+        // 断言「重新打开」此刻还灰着 —— 所以这里一个预览都不留、一个标签都不关（被顶掉的预览本来
+        // 就不进那一栈，这一条顺带也在验它）。夹具挑的是排序那三个证人（第2章 / 第10章 / Zebra）
+        // 与几份只当落点的文档：只读不写，改的那一下当场改回去
+        let previewProbe = null
+        if (path.indexOf('dialect.md') >= 0) {
+          try {
+            const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+            const items = () => [...document.querySelectorAll('#tabbar .tab-item')]
+            const active = () => document.querySelector('#tabbar .tab-item.is-active')
+            const idOf = (el) => (el ? el.dataset.id : null)
+            const diag = () => window.__cursive.diagnostics()
+            const previews = () => diag().tabs.filter((x) => x.preview).map((x) => (x.path || '').split('/').pop())
+            const isOpen = (name) => diag().tabs.some((x) => (x.path || '').endsWith('/' + name))
+            const activePath = () => (diag().tabs.find((x) => x.id === diag().activeId) || {}).path || ''
+            const italic = (el) => !!el && el.classList.contains('is-preview')
+              && getComputedStyle(el.querySelector('.tab-title')).fontStyle === 'italic'
+            const row = (name) => document.querySelector('.sb-row[data-path$="/' + name + '"]')
+            // 单击 = 一次 detail 1 的 click；双击 = 真双击送进来的那两次（detail 1、detail 2）
+            const click = async (name, twice) => {
+              const r = row(name)
+              if (!r) return
+              r.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+              if (twice) {
+                await nap(40)
+                r.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+              }
+              await nap(260)
+            }
+            const keepByTab = async () => {
+              const el = document.querySelector('#tabbar .tab-item.is-preview')
+              if (el) el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+              await nap(60)
+              return !!el
+            }
+            const before = items().length
+            const closedBefore = diag().closedTabs
+            const rows = ['第2章.md', '第10章.md', 'Zebra.md', 'scope-outer.md', 'link-target.md', 'img.md', 'tables.md']
+              .every((n) => !!row(n))
+            // ① 单击：多出一格，是预览（斜体），悬停说明里写着怎么留下它
+            await click('第2章.md')
+            const one = { n: items().length - before, italic: italic(active()),
+                          tip: (active() || {}).title || '', previews: previews() }
+            const slot = items().indexOf(active())
+            // ② 再单击另一个：**就地顶掉** —— 数不变、坐同一格，被顶掉的不进「重新打开」那一栈
+            await click('第10章.md')
+            const swap = { n: items().length - before, sameSlot: items().indexOf(active()) === slot,
+                           gone: !isOpen('第2章.md'), previews: previews(), stack: diag().closedTabs - closedBefore }
+            // ③ 双击同一个：就是这个标签转正（id 不变、斜体没了），不多开一格
+            const id = idOf(active())
+            await click('第10章.md', true)
+            const dbl = { n: items().length - before, sameId: id !== null && idOf(active()) === id,
+                          italic: italic(active()), previews: previews() }
+            // ④ 有了普通标签之后再单击：另开一格预览
+            await click('Zebra.md')
+            const next = { n: items().length - before, previews: previews() }
+            // ⑤ 改一个字就转正（随即改回去：夹具不留痕，也不留脏标签给后面那段）
+            const v = window.__cursive.view
+            v.dispatch({ changes: { from: v.state.doc.length, insert: 'x' } })
+            await nap(60)
+            const editKept = previews().length === 0
+            v.dispatch({ changes: { from: v.state.doc.length - 1, to: v.state.doc.length } })
+            await nap(60)
+            const editClean = !diag().tabs.some((x) => (x.path || '').endsWith('/Zebra.md') && x.dirty)
+            // ⑥ 双击标签转正
+            await click('scope-outer.md')
+            const tabKept = (await keepByTab()) && previews().length === 0
+            // ⑦ 右键菜单：「保持打开」只在预览上有，点了就转正
+            await click('link-target.md')
+            const pv = document.querySelector('#tabbar .tab-item.is-preview')
+            let menu = []
+            if (pv) {
+              const b = pv.getBoundingClientRect()
+              pv.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: b.left + 10, clientY: b.top + 8 }))
+              await nap(70)
+              const its = [...document.querySelectorAll('.ctx-menu .ctx-item')]
+              menu = its.map((x) => x.textContent)
+              const keep = its.find((x) => x.textContent === '保持打开')
+              if (keep) keep.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+              await nap(120)
+            }
+            const menuKept = !!pv && previews().length === 0
+            // ⑧ 单击预览过去再后退：回到的那份已经被顶掉了，按路径重开 —— 照样坐预览那一格，
+            //    而不是在标签栏里攒出一排没人要留的标签
+            await click('img.md')
+            await click('tables.md')
+            const nBefore = items().length
+            window.__shellEmit('menu', 'go:back')
+            await nap(450)
+            const back = { reopened: activePath().endsWith('/img.md'), previews: previews(),
+                           gone: !isOpen('tables.md'), same: items().length === nBefore, n: items().length - before }
+            // 收尾：最后这一格也转正，后面那段起手时一个预览都没有
+            await keepByTab()
+            previewProbe = { rows, one, swap, dbl, next, editKept, editClean, tabKept, menu, menuKept, back,
+                             left: previews(), stack: diag().closedTabs - closedBefore }
+          } catch (e) {
+            previewProbe = { err: String(e) }
+          }
+        }
         // ---- 0.2.0 标签右键菜单（关闭 左边 / 其他 / 右边 / 所有）----
         // 只在 dialect.md 这条用例上跑：它要开关一堆标签，别和别的探针抢活动标签。
         // 这条用例的「是否保存」替身答案是 cancel（release.sh 里设的），
@@ -5823,9 +5923,14 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
           try {
             const nap = (ms) => new Promise((r) => setTimeout(r, ms))
             const tabEls = () => [...document.querySelectorAll('#tabbar .tab-item')]
+            // 双击才留下（单击只是预览，连点三个文件只会留一格）：照真双击送进来的那两次 click 发
             const openSide = async (name) => {
               const row = document.querySelector('.sb-row[data-path$="/' + name + '"]')
-              if (row) row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+              if (row) {
+                row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+                await nap(40)
+                row.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }))
+              }
               await nap(200)
               checkpoint('tabs:open:' + name)
             }
@@ -6665,6 +6770,7 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             ? { loaded: img.complete && img.naturalWidth > 0, src: img.getAttribute('src') }
             : null,
           v020,
+          previewProbe,
           tabProbe,
           saveProbe,
           conflictProbe,
