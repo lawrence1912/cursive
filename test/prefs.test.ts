@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { getLang, setLang } from '../src/renderer/i18n'
 import { COLUMN_RANGE, normalizePrefs, Prefs } from '../src/renderer/ui/prefs'
 
@@ -29,6 +30,13 @@ describe('normalizePrefs', () => {
     expect(normalizePrefs({ customOff: true }).customOff).toBe(true)
     // 非布尔值一律当 false：这个开关只该由那条菜单项拨动，坏数据不许把皮肤停掉
     expect(normalizePrefs({ customOff: 'yes' as unknown as boolean }).customOff).toBe(false)
+  })
+
+  it('老偏好里没有 previewTabs（随预览标签新增）→ 开着；只认明说的 false', () => {
+    expect(normalizePrefs({}).previewTabs).toBe(true)
+    expect(normalizePrefs({ previewTabs: false }).previewTabs).toBe(false)
+    // 坏数据当开：单击预览就是眼下的行为，关掉它只该由设置面板那一行来拨
+    expect(normalizePrefs({ previewTabs: 'no' as unknown as boolean }).previewTabs).toBe(true)
   })
 
   it('返回的是新对象 —— adopt() 之后还要往 this.v 上写，不能与来源共用一份', () => {
@@ -160,5 +168,29 @@ describe('Prefs.adopt（契约 v17）', () => {
     prefs.setCustom('my-skin')
     prefs.toggleCustomOff()
     expect(prefs.values.custom, '停用只管叠不叠，不管选的是谁').toBe('my-skin')
+  })
+})
+
+/**
+ * 关掉「单击预览」时把开着的那格转正（`main.ts` 的 `syncPreview`），挂在偏好回调上 ——
+ * 而那个回调**启动时就跑一次**（`prefs.apply()`），比 `let tabs` 的声明还早。那一下碰 `tabs`
+ * 就是 TDZ，整条启动路径当场抛、页面一片空白；自检时偏好通常开着、走不到那一支，
+ * 探针跑绿也看不出来（CONTEXT「已踩坑」：模块级 `let` 与启动序列的先后）。
+ */
+describe('syncPreview 与启动序列的先后', () => {
+  const main = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8')
+
+  it('previewWas 排在偏好之前、初值 null（= 还没 apply 过）', () => {
+    const decl = main.indexOf('let previewWas: boolean | null = null')
+    expect(decl).toBeGreaterThan(0)
+    expect(decl).toBeLessThan(main.indexOf('const prefs = new Prefs('))
+  })
+
+  it('碰 tabs 之前先认出「开 → 关」：启动那一下 previewWas 还是 null，碰不到', () => {
+    const at = main.indexOf('function syncPreview()')
+    const fn = main.slice(at, main.indexOf('\n}', at))
+    const touch = fn.split('\n').filter((l) => /\btabs\b/.test(l) && !/^\s*(\/\/|\*)/.test(l))
+    expect(touch.length).toBeGreaterThan(0)
+    for (const l of touch) expect(l, '这一行没先问 was === true').toContain('was === true')
   })
 })

@@ -14,7 +14,8 @@ const KEY = 'cursive.prefs'
  */
 const DEFAULTS: PrefValues = {
   theme: 'system', font: 'serif', size: 16, leading: 1.75, column: 42, custom: null,
-  customOff: false, imageDir: 'doc', lang: systemLang(), spellcheck: false, hints: true
+  customOff: false, imageDir: 'doc', lang: systemLang(), spellcheck: false, hints: true,
+  previewTabs: true
 }
 export const COLUMN_RANGE = { min: 30, max: 60 }
 
@@ -41,7 +42,9 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
     // 0.2.0 新增，老偏好里没有 —— 默认关（见 `PrefValues.spellcheck` 的理由）
     spellcheck: parsed.spellcheck === true,
     // 第八节 14 新增，老偏好里没有 —— 默认开：只有明说过「不要」的人才关着
-    hints: parsed.hints !== false
+    hints: parsed.hints !== false,
+    // 随预览标签一起加的，老偏好里没有 —— 默认开（单击预览就是眼下的行为），同上只认明说的 false
+    previewTabs: parsed.previewTabs !== false
   }
 }
 
@@ -49,7 +52,7 @@ export function normalizePrefs(parsed: Partial<PrefValues>): PrefValues {
 const THEMES_DIR = '~/Library/Application Support/cursive/themes'
 
 /** 走分段控件的那几项偏好 */
-type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck' | 'imageDir' | 'hints'
+type SegKey = 'lang' | 'theme' | 'font' | 'spellcheck' | 'imageDir' | 'hints' | 'previewTabs'
 
 /** 分段控件的选项。带 key 的走字典（跟着语言切）；只有 label 的写死 —— 语言选项各自以自身语言显示 */
 interface SegOpt {
@@ -85,6 +88,11 @@ const SPELL_OPTS: SegOpt[] = [
 const HINT_OPTS: SegOpt[] = [
   { val: 'false', key: 'pf.hints.off' },
   { val: 'true', key: 'pf.hints.on' }
+]
+/** 单击文件树开预览标签。关掉 = 单击直接开普通标签（见 `PrefValues.previewTabs`） */
+const PREVIEW_OPTS: SegOpt[] = [
+  { val: 'false', key: 'pf.previewTabs.off' },
+  { val: 'true', key: 'pf.previewTabs.on' }
 ]
 
 /**
@@ -359,6 +367,7 @@ export class Prefs {
         ${this.rangeRow('column', 'pf.column', COLUMN_RANGE.min, COLUMN_RANGE.max, 1, 'rem')}
         ${this.segRow('spellcheck', 'pf.spell', SPELL_OPTS)}
         ${this.segRow('imageDir', 'pf.imageDir', IMAGE_DIR_OPTS)}
+        ${this.segRow('previewTabs', 'pf.previewTabs', PREVIEW_OPTS)}
         ${this.segRow('hints', 'pf.hints', HINT_OPTS)}
         <div class="pf-row pf-custom"></div>
         <div class="pf-foot">
@@ -388,6 +397,7 @@ export class Prefs {
       else if (group === 'theme') this.setTheme(val as AppearanceMode)
       else if (group === 'spellcheck') this.set('spellcheck', val === 'true')
       else if (group === 'hints') this.set('hints', val === 'true')
+      else if (group === 'previewTabs') this.set('previewTabs', val === 'true')
       else if (group === 'imageDir') this.set('imageDir', val as ImageDir)
       else this.set('font', val as BodyFont)
     })

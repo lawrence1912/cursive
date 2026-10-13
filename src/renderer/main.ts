@@ -227,6 +227,13 @@ const selfCheck = window.__cursiveSelfCheck === true
 
 const view = new EditorView({ parent: host, state: createState('', listener) })
 
+/**
+ * 上一次 apply 时「单击预览」是开是关（`syncPreview` 只认「开 → 关」那一下）。
+ * **初值 null、排在偏好之前**：下面启动时那次 `prefs.apply()` 比标签表的声明还早，
+ * 那一下要是去碰 `tabs` 就是 TDZ（同 `navFlags` 那段）—— null = 还没 apply 过，只记不转
+ */
+let previewWas: boolean | null = null
+
 // 主题 + 排版偏好。字号/行距一变，CodeMirror 缓存的字符尺寸就过期了，必须重量
 const prefs = new Prefs(() => {
   // 字号/行距/栏宽一变，表格学到的行高就不作数了（见 live-preview/table.ts）
@@ -234,6 +241,7 @@ const prefs = new Prefs(() => {
   view.requestMeasure()
   syncSpell()
   syncHints()
+  syncPreview()
 })
 prefs.apply()
 
@@ -783,7 +791,10 @@ function spawnTab(
    *
    * **只有开在前台的（`focus`）才顶**：开在背景里的是会话恢复，那会儿占着预览那一格的
    * 只可能是人刚单击开的东西 —— 背景行为不许动它（恢复那边因此不会再要一个预览）。
-   * 顺带保证了被顶掉的哪怕是活动标签，下面那次 activate 也一定会发生
+   * 顺带保证了被顶掉的哪怕是活动标签，下面那次 activate 也一定会发生。
+   *
+   * 偏好里关了「单击预览」（`PrefValues.previewTabs`）就一律当 false：开预览的三条路
+   * （文件树单击、后退 / 前进重开、会话恢复）都从这儿过，闸只设这一道
    */
   preview = false,
   /**
@@ -792,6 +803,7 @@ function spawnTab(
    */
   scroll = 0
 ): Tab {
+  if (!prefs.values.previewTabs) preview = false
   let slot = preview && focus ? tabs.find((t) => t.preview) : undefined
   // 按理预览一改就转正了，到不了这儿。真脏着就让它转正留下 —— 宁可多一格，不替人丢东西
   if (slot && isTabDirty(slot)) {
@@ -1184,6 +1196,16 @@ function syncHints(): void {
   hintsNow.on = prefs.values.hints
   const want = blankHint(hintsNow.on)
   if (hintConf.get(view.state) !== want) view.dispatch({ effects: hintConf.reconfigure(want) })
+}
+
+/**
+ * 偏好里关掉「单击预览」的那一刻：开着的那格预览就地转正（VS Code 同款）。不转的话它一直
+ * 斜体挂着，而再也不会有新的预览来顶掉它。往后不再开预览，靠的是 `spawnTab` 开头那道闸
+ */
+function syncPreview(): void {
+  const was = previewWas
+  previewWas = prefs.values.previewTabs
+  if (was === true && !previewWas) for (const x of tabs) if (x.preview) keepTab(x.id)
 }
 
 function syncMode(): void {

@@ -159,7 +159,8 @@ const TYPEAHEAD_GAP = 800
 export interface SidebarHooks {
   /**
    * 打开一个文件。`preview` = 单击（或空格）开的**预览**：落在那一格预览标签里，
-   * 下一次单击别的文件就把它顶掉；双击、回车、刚新建出来的 = 留下来的普通标签
+   * 下一次单击别的文件就把它顶掉；双击、回车、刚新建出来的 = 留下来的普通标签。
+   * 这里只报「是单击」；偏好里关了「单击预览」时开成普通标签，那道闸在 main.ts 的 `spawnTab`
    */
   openFile: (path: string, preview: boolean) => void
   /**

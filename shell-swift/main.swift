@@ -5850,6 +5850,21 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
               await nap(60)
               return !!el
             }
+            // 偏好里的「单击预览」与开发机共用一份 localStorage（同 hintProbe）：先记下原来是开是关，
+            // 关着就先拨开 —— ①到⑧验的是开着的样子；⑨ 关掉再打开，走完摆回原样
+            const prefPreview = () => JSON.parse(localStorage.getItem('cursive.prefs') || '{}').previewTabs
+            const was = prefPreview()
+            const setPreview = async (val) => {
+              window.__shellEmit('menu', 'app:preferences')
+              await nap(150)
+              const b = document.querySelector('#prefs .pf-seg[data-key="previewTabs"] button[data-val="' + val + '"]')
+              if (b) b.click()
+              await nap(100)
+              document.getElementById('prefs').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+              await nap(100)
+              return !!b
+            }
+            if (was === false) await setPreview('true')
             const before = items().length
             const closedBefore = diag().closedTabs
             const rows = ['第2章.md', '第10章.md', 'Zebra.md', 'scope-outer.md', 'link-target.md', 'img.md', 'tables.md']
@@ -5906,9 +5921,22 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             await nap(450)
             const back = { reopened: activePath().endsWith('/img.md'), previews: previews(),
                            gone: !isOpen('tables.md'), same: items().length === nBefore, n: items().length - before }
+            // ⑨ 设置里关掉「单击预览」：开着的那格（⑧ 后退重开的 img.md）当场转正；之后单击开的是
+            //    普通标签，再单击另一个是另开一格、不顶掉前一个。走完把偏好摆回去
+            const nOff = items().length
+            const seg = await setPreview('false')
+            const kept = { img: activePath().endsWith('/img.md'), previews: previews(), italic: italic(active()) }
+            await click('第2章.md')
+            const single = { n: items().length - nOff, previews: previews(), italic: italic(active()) }
+            await click('tables.md')
+            const off = { seg, kept, single, n: items().length - nOff, previews: previews(),
+                          both: isOpen('第2章.md') && isOpen('tables.md') }
+            await setPreview('true')
+            if (was === false) await setPreview('false')
+            const restored = prefPreview() === (was === false ? false : true)
             // 收尾：最后这一格也转正，后面那段起手时一个预览都没有
             await keepByTab()
-            previewProbe = { rows, one, swap, dbl, next, editKept, editClean, tabKept, menu, menuKept, back,
+            previewProbe = { rows, one, swap, dbl, next, editKept, editClean, tabKept, menu, menuKept, back, off, restored,
                              left: previews(), stack: diag().closedTabs - closedBefore }
           } catch (e) {
             previewProbe = { err: String(e) }

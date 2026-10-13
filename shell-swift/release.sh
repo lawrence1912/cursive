@@ -438,6 +438,15 @@ if sys.argv[1] == 'dialect.md':
     bk = pp.get('back') or {}
     ok = ok and bk.get('reopened') is True and bk.get('previews') == ['img.md']
     ok = ok and bk.get('gone') is True and bk.get('same') is True and bk.get('n') == 5
+    # ⑨ 设置里关掉「单击预览」：开着的那格（后退重开的 img.md）当场转正；之后单击开普通标签，
+    #    另一个单击另开一格、不顶掉前一个；走完偏好摆回原样（与开发机共用一份 localStorage）
+    off = pp.get('off') or {}
+    kp = off.get('kept') or {}
+    sg = off.get('single') or {}
+    ok = ok and off.get('seg') is True and kp.get('img') is True and kp.get('previews') == [] and kp.get('italic') is False
+    ok = ok and sg.get('n') == 1 and sg.get('previews') == [] and sg.get('italic') is False
+    ok = ok and off.get('n') == 2 and off.get('both') is True and off.get('previews') == []
+    ok = ok and pp.get('restored') is True
     # 收得干净：一个预览不留、一个标签没关（后面那段断言「重新打开」此刻还灰着）
     ok = ok and pp.get('left') == [] and pp.get('stack') == 0
 

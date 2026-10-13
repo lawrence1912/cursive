@@ -384,6 +384,15 @@ export interface PrefValues {
    * 壳不读它（契约 v17：偏好整份原样转发），所以加这一项不动壳、不升契约版本。
    */
   hints: boolean
+  /**
+   * 单击文件树开**预览标签**（`main.ts` 的 `Tab.preview`）。**默认开**。
+   *
+   * 关掉 = 单击直接开普通标签（预览上线之前的样子，VS Code 的 `enablePreview: false`）。
+   * 闸只有一道，在 `spawnTab`：文件树单击、后退 / 前进重开、会话恢复都从那儿过。
+   * 关掉的那一刻，开着的那格预览就地转正（`syncPreview`）—— 不然它一直斜体挂着，
+   * 而再也不会有新的预览来顶掉它。壳不读它（契约 v17），不动壳、不升契约版本。
+   */
+  previewTabs: boolean
 }
 
 /** 用户自定义主题：`~/Library/Application Support/cursive/themes/*.css`（P3-4） */
