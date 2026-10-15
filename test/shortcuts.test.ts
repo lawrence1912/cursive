@@ -13,13 +13,17 @@ import type { MenuAction } from '../src/shared/types'
  *
  * 真相在原生菜单（`shell-swift/main.swift` 的 buildMenu），Swift 那边没有单测，
  * 这里直接读源码把整份菜单的键抠出来，再拿它去对：渲染层那张表（`ui/shortcuts.ts`）、
- * 命令面板右边那一列、字典里写死在句子里的那几句、README。
+ * 命令面板右边那一列、字典里写死在句子里的那几句、用户指南与 README。
  * 从前各处各写一份：同一个键在菜单里是 `⇧⌘O`、在文件树按钮上是 `⌘⇧O`；
  * README 写着命令面板是 ⇧⌘P，而那个键被「导出 PDF」占了好几个版本（第八节 21）。
+ *
+ * 完整的快捷键表在 `docs/user-guide.md`（2026-10-14 文档重构时从 README 搬过去）：
+ * 菜单里带键的命令那儿一条不能少；README 只摆几个代表性的键，写到的照样得是菜单里真有的。
  */
 
 const swift = readFileSync(new URL('../shell-swift/main.swift', import.meta.url), 'utf8')
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+const guide = readFileSync(new URL('../docs/user-guide.md', import.meta.url), 'utf8')
 
 /** 一个快捷键在文案里的样子：一串修饰键 + 一个键 */
 const TOKEN = /[⌃⌥⇧⌘]+(?:F\d{1,2}|[A-Z0-9]|[←→↑↓⇥⌫⏎=+\-−[\],./\\;'`])/g
@@ -228,7 +232,7 @@ describe('源码里不许再手写快捷键', () => {
 })
 
 /**
- * README 没写的菜单快捷键。都是 macOS 自己的那几条（每个应用都一样，写进去只是占地方）
+ * 用户指南没写的菜单快捷键。都是 macOS 自己的那几条（每个应用都一样，写进去只是占地方）
  */
 const UNDOCUMENTED: Record<string, string> = {
   '⌘Q': '退出（系统通行）',
@@ -240,39 +244,50 @@ const UNDOCUMENTED: Record<string, string> = {
   '⇧⌘Z': '重做（系统通行）'
 }
 
-describe('README', () => {
-  /** 正文里的快捷键（围栏代码块不算）；`⌘1 – ⌘6` 这种区间展开 */
-  function readmeKeys(): string[] {
-    let fenced = false
-    const body = readme
-      .split('\n')
-      .filter((line) => {
-        if (/^\s*(```|~~~)/.test(line)) {
-          fenced = !fenced
-          return false
-        }
-        return !fenced
-      })
-      .join('\n')
-    const keys = body.match(TOKEN) ?? []
-    for (const m of body.matchAll(/([⌃⌥⇧⌘]+)(\d)\s*[–-]\s*\1(\d)/g)) {
-      for (let n = Number(m[2]) + 1; n < Number(m[3]); n++) keys.push(`${m[1]}${n}`)
-    }
-    return keys
+/**
+ * 文档正文里的快捷键（围栏代码块不算）；`⌘1 – ⌘6` 这种区间展开。
+ * 不在菜单里的按键（表格里的 Tab、⌥ + ↑ 搬块、⌘ + 点击）写成带空格的「⌥ + ↑」，不算在内
+ */
+function docKeys(text: string): string[] {
+  let fenced = false
+  const body = text
+    .split('\n')
+    .filter((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        fenced = !fenced
+        return false
+      }
+      return !fenced
+    })
+    .join('\n')
+  const keys = body.match(TOKEN) ?? []
+  for (const m of body.matchAll(/([⌃⌥⇧⌘]+)(\d)\s*[–-]\s*\1(\d)/g)) {
+    for (let n = Number(m[2]) + 1; n < Number(m[3]); n++) keys.push(`${m[1]}${n}`)
   }
+  return keys
+}
 
+describe('用户指南（docs/user-guide.md）', () => {
   it('写到的每一个键都是菜单里真有的，写法与菜单一致', () => {
-    const keys = readmeKeys()
+    const keys = docKeys(guide)
     expect(keys.length).toBeGreaterThan(40)
     expect(keys.filter((k) => !CANONICAL.test(k))).toEqual([])
     expect(keys.filter((k) => !ALL_COMBOS.has(k))).toEqual([])
   })
 
   it('菜单里带键的命令都写进去了（系统通行的那几条除外）', () => {
-    const written = new Set(readmeKeys())
+    const written = new Set(docKeys(guide))
     const missing = [...ALL_COMBOS].filter((k) => !written.has(k) && !(k in UNDOCUMENTED))
     expect(missing).toEqual([])
     // 豁免名单也不许留着已经写进去、或者菜单里已经没有的键
     expect(Object.keys(UNDOCUMENTED).filter((k) => written.has(k) || !ALL_COMBOS.has(k))).toEqual([])
+  })
+})
+
+describe('README', () => {
+  it('写到的每一个键都是菜单里真有的，写法与菜单一致', () => {
+    const keys = docKeys(readme)
+    expect(keys.filter((k) => !CANONICAL.test(k))).toEqual([])
+    expect(keys.filter((k) => !ALL_COMBOS.has(k))).toEqual([])
   })
 })
