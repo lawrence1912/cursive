@@ -17,6 +17,18 @@ function contractActions(): MenuAction[] {
 }
 
 /**
+ * main.swift 里出现的原生选择器，两种写法都认：`#selector(NSText.cut(_:))` 与老写法
+ * `Selector(("cut:"))` 拼出来的是同一个 `cut:`。只认一种字面量的话，换个写法下面那几条
+ * 「不许是原生选择器」就成了空守卫 —— 撤销用另一种写法挂回 `undo:`，它们照样绿
+ */
+function nativeSelectors(swift: string): Set<string> {
+  const out = new Set<string>()
+  for (const m of swift.matchAll(/#selector\((?:\w+\.)*(\w+)\(_:\)\)/g)) out.add(`${m[1]}:`)
+  for (const m of swift.matchAll(/Selector\(\("(\w+:)"\)\)/g)) out.add(m[1]!)
+  return out
+}
+
+/**
  * 有意不进面板的那几条，每条都得说得出理由 —— 这份名单本身就是「为什么不列」的记录。
  */
 const OFF_PALETTE: Record<string, string> = {
@@ -109,13 +121,15 @@ describe('撤销这条键盘入口', () => {
   it('菜单项走 MenuAction，不再是 AppKit 的 undo:/redo:', () => {
     expect(swift).toContain('item(L("menu.edit.undo"), "edit:undo", key: "z")')
     expect(swift).toContain('item(L("menu.edit.redo"), "edit:redo"')
-    expect(swift).not.toContain('Selector(("undo:"))')
-    expect(swift).not.toContain('Selector(("redo:"))')
+    const native = nativeSelectors(swift)
+    expect(native.has('undo:')).toBe(false)
+    expect(native.has('redo:')).toBe(false)
   })
 
   it('剪切 / 拷贝 / 粘贴仍旧归 WebKit（那三条本来就该是原生选择器）', () => {
+    const native = nativeSelectors(swift)
     for (const sel of ['cut:', 'copy:', 'paste:']) {
-      expect(swift, `${sel} 不该被一起改掉`).toContain(`Selector(("${sel}"))`)
+      expect(native.has(sel), `${sel} 不该被一起改掉`).toBe(true)
     }
   })
 
@@ -148,7 +162,7 @@ describe('全选这条键盘入口', () => {
 
   it('菜单项走 MenuAction，不再是 AppKit 的 selectAll:', () => {
     expect(swift).toContain('item(L("menu.edit.selectAll"), "edit:select-all", key: "a")')
-    expect(swift).not.toContain('Selector(("selectAll:"))')
+    expect(nativeSelectors(swift).has('selectAll:')).toBe(false)
   })
 
   it('在契约里，也在面板里（漏一条 = 键是死的）', () => {

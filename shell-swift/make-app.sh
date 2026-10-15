@@ -32,6 +32,14 @@ ditto out/renderer "$APP/Contents/Resources/renderer"
 [ -f build/icon.icns ] && cp build/icon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Info.plist：.md 关联 rank=Default（装上即接管 md 默认打开方式）+ 导入 markdown UTI 补全 mdown/mkd 扩展名
+#
+# **本地化要声明**（0.5.1 之后补的）。界面文案是渲染层与壳自己那两张双语表，可「系统那一层」——
+# 保存 / 打开面板的按钮、AppKit 自己往菜单里加的 Start Dictation… / Emoji & Symbols / Close All、
+# NSError 给的原因（「写入失败：……」的后半句）—— 认的是 bundle 声明了哪些本地化。一个都不声明时
+# 只剩开发语言 en，中文系统上照样是 Save / Open / The folder “x” doesn’t exist.（0.5.1 实测）。
+# 声明 en + zh-Hans 之后跟系统语言走；**不跟应用里的语言开关走**，那个开关只管我们自己的文案。
+# 开发语言写 en：系统语言两样都不是时，渲染层的默认界面也是英文（i18n 的 `systemLang`）。
+# 裸跑的 `cursive-shell` 不读这份 plist —— 所以 release.sh 在包里那个二进制上验（[4+]）
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -41,6 +49,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key>			<string>Cursive</string>
 	<key>CFBundleExecutable</key>			<string>Cursive</string>
 	<key>CFBundleIdentifier</key>			<string>dev.lawrence.cursive</string>
+	<key>CFBundleDevelopmentRegion</key>	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleVersion</key>				<string>$VERSION</string>
 	<key>CFBundleShortVersionString</key>	<string>$VERSION</string>
 	<key>CFBundlePackageType</key>			<string>APPL</string>

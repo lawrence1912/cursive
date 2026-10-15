@@ -1147,6 +1147,29 @@ rm -f "$SCRATCH"/*.json
 echo "==> [4/4] 打包"
 ./shell-swift/make-app.sh
 
+# ---- 出包之后两条不开窗口的断言（0.5.1 之后补的）----
+#
+# ① **包体守住 12 MB**（ROADMAP 第一节门槛 4）。从前只在 make-app.sh 末尾打印一句 du -sh，
+#    涨过线没有任何一步会红。量的是文件的实际字节（Finder「简介」里的「大小」）——
+#    du 数的是占用的块，随卷的块大小变，同一个包换一块盘读数就不一样
+# ② **Info.plist 声明了 en + zh-Hans**（理由见 make-app.sh 那段注释）。少了它，中文系统上
+#    保存面板、AppKit 自己加的菜单项、报错原因全是英文，而裸跑的 E2E 根本看不见这件事
+python3 - <<'PKGPY'
+import os, plistlib, sys
+app = 'dist/Cursive.app'
+LIMIT = 12_000_000
+size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(app) for f in fs
+           if not os.path.islink(os.path.join(d, f)))
+info = plistlib.load(open(app + '/Contents/Info.plist', 'rb'))
+locs = info.get('CFBundleLocalizations') or []
+ok_size = size <= LIMIT
+ok_l10n = info.get('CFBundleDevelopmentRegion') == 'en' and {'en', 'zh-Hans'} <= set(locs)
+print(('PASS ' if ok_size else 'FAIL ') + '包体 %.2f MB（上限 %d MB）' % (size / 1e6, LIMIT // 1_000_000))
+print(('PASS ' if ok_l10n else 'FAIL ') + '本地化声明：开发语言 %s · %s'
+      % (info.get('CFBundleDevelopmentRegion'), ' / '.join(locs) or '（没有）'))
+sys.exit(0 if ok_size and ok_l10n else 1)
+PKGPY
+
 # ---- 0.3.0 T1：出包之后再验一次「另一片真的能跑」----
 #
 # compile.sh 合完已经断言过两片都在，但「lipo 里有这一片」和「这一片跑得起来」是两回事。
@@ -1184,8 +1207,14 @@ r = e['result']
 # 细项（表格/查找/树…）本机那一片已经逐条验过九遍，这儿再验一遍只是拖时间
 ok = (c['cm'] and c.get('cmState') and c.get('apiKeys', 0) >= 50
       and e['bytesEqual'] and r.get('jsOK') is True and r.get('cmLines', 0) > 0)
-print(('PASS ' if ok else 'FAIL ') + arch + ' 片：api %s 键 · 行 %s · 往返 %s'
-      % (c.get('apiKeys'), r.get('cmLines'), e['bytesEqual']))
+# 包里那个二进制的「系统那一层」落在哪种语言上（make-app.sh 声明的本地化）：系统是简体中文 /
+# 英文时它也得是。上面 [4/4] 只验了 plist 里写着，这儿验它在包里那个二进制上真的起作用。
+# 只比语言不比写法（zh-Hans、zh_CN、zh 这几种写法 AppKit 都认，实测过）；别的系统语言不在声明里，不验
+loc, sys_lang = c.get('bundleLocalization', ''), c.get('systemLanguage', '')
+want = 'zh' if sys_lang.startswith('zh-Hans') else ('en' if sys_lang.startswith('en') else None)
+ok = ok and (want is None or loc.startswith(want))
+print(('PASS ' if ok else 'FAIL ') + arch + ' 片：api %s 键 · 行 %s · 往返 %s · 系统层 %s（系统 %s）'
+      % (c.get('apiKeys'), r.get('cmLines'), e['bytesEqual'], loc or '?', sys_lang or '?'))
 sys.exit(0 if ok else 1)
 ARCHPY
     rm -f "$FIX/arch-probe.md"

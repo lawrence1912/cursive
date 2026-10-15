@@ -2428,7 +2428,8 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
         guard !smokeAuto else { return }
         fetchExportHtml { [weak self] html in
             guard let self, let html else { return }
-            self.fetchOutline { outline in
+            self.fetchOutline { [weak self] outline in
+                guard let self else { return }
                 let printer = PDFPrinter(html: self.inlineImages(html, embed: true),
                                          dest: .printer, opts: PDFOptions(), outline: outline,
                                          host: self.window)
@@ -3980,6 +3981,12 @@ final class WindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler
             // 「不许两条命令共用一个键」—— 撞了的话 AppKit 只认排在前面的那条，后面那条的键
             // 一声不响地死掉（⇧⌘P：导出 PDF 与命令面板；⌘H：隐藏与隐藏其他，都这么死过）
             if let main = NSApp.mainMenu { obj["menuKeys"] = Self.menuKeys(main) }
+            // 系统那一层（保存 / 打开面板、AppKit 自己加的菜单项、NSError 的原因）落在哪种语言上：
+            // 由包里 Info.plist 声明的本地化决定（make-app.sh），不归渲染层的语言开关。
+            // release.sh [4+] 在包里那个二进制上对账「系统是中文 / 英文时它也得是」——
+            // 裸跑的 cursive-shell 没有那份 plist，恒为 en，不验
+            obj["bundleLocalization"] = Bundle.main.preferredLocalizations.first ?? ""
+            obj["systemLanguage"] = Locale.preferredLanguages.first ?? ""
             // 0.3.0 T5：位置记忆按工作区分的键（release.sh 拿工作区根的 SHA-256 前 16 位对账）。
             // 报的是**算出来的键**，不是窗口上挂着的名字 —— 自检下压根不挂（见 applyFrameAutosave），
             // 而要守的正是「键是按工作区算的」这件事
@@ -7212,7 +7219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // 第八节 7：⇧⌘T 是这类命令的通行键位，可它在这份菜单里早就归了大纲 —— 退一档到 ⌥⇧⌘T，
         // 紧挨着「关闭标签」摆，误关之后第一眼就找得到
         file.addItem(item(L("menu.file.reopenTab"), "file:reopen-closed-tab", key: "t", modifiers: [.command, .option, .shift]))
-        file.addItem(NSMenuItem(title: L("menu.file.close"), action: Selector(("performClose:")), keyEquivalent: "W"))
+        file.addItem(NSMenuItem(title: L("menu.file.close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "W"))
         fileItem.submenu = file
 
         let editItem = NSMenuItem(); main.addItem(editItem)
@@ -7224,13 +7231,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // WebKit 栈里的记录当场变成死记录：`canUndo` 还是真（菜单项照亮、照吃 ⌘Z），
         // 可它既不派 `beforeinput` 也不做事 —— ⌘Z 落进死路。理由全文见
         // `src/shared/types.ts` 里 `MenuAction` 的 'edit:undo'。
-        // 剪切/拷贝/粘贴仍用原生选择器：那三条本来就该归 WebKit（见上面那行 ⚠️）
+        // 剪切/拷贝/粘贴仍用原生选择器：那三条本来就该归 WebKit（见上面那行 ⚠️）。
+        // `#selector(NSText.cut(_:))` 只是借 NSText 的声明拼出 `cut:`，target 是 nil，照旧沿响应链落进 WKWebView
         edit.addItem(item(L("menu.edit.undo"), "edit:undo", key: "z"))
         edit.addItem(item(L("menu.edit.redo"), "edit:redo", key: "z", modifiers: [.command, .shift]))
         edit.addItem(.separator())
-        edit.addItem(NSMenuItem(title: L("menu.edit.cut"), action: Selector(("cut:")), keyEquivalent: "x"))
-        edit.addItem(NSMenuItem(title: L("menu.edit.copy"), action: Selector(("copy:")), keyEquivalent: "c"))
-        edit.addItem(NSMenuItem(title: L("menu.edit.paste"), action: Selector(("paste:")), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: L("menu.edit.cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: L("menu.edit.copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: L("menu.edit.paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
         // **全选同样走渲染层**（0.4.1 修，与上面撤销那条同一个病灶）：`selectAll:`
         // 沿响应链落进 WKWebView，执行的是 WebKit 自己那条 SelectAll —— 它只认
         // 「编辑宿主里渲染出来的内容」，而 CodeMirror 只把视口那一段放进 DOM，
@@ -7376,7 +7384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         view.addItem(.separator())
         // ⌃⌘F 是 macOS 全屏的标准键位。写成裸 "f" 的话就是 ⌘F，与编辑菜单的
         // 「查找」撞车 —— AppKit 按菜单顺序取第一个匹配，查找在前，全屏永远轮不到
-        let fullScreen = NSMenuItem(title: L("view.fullScreen"), action: Selector(("toggleFullScreen:")), keyEquivalent: "f")
+        let fullScreen = NSMenuItem(title: L("view.fullScreen"), action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         view.addItem(fullScreen)
         viewItem.submenu = view
@@ -7393,8 +7401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let winItem = NSMenuItem(); main.addItem(winItem)
         let win = NSMenu(title: L("menu.window"))
-        win.addItem(NSMenuItem(title: L("win.minimize"), action: Selector(("performMiniaturize:")), keyEquivalent: "m"))
-        win.addItem(NSMenuItem(title: L("win.zoom"), action: Selector(("performZoom:")), keyEquivalent: ""))
+        win.addItem(NSMenuItem(title: L("win.minimize"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        win.addItem(NSMenuItem(title: L("win.zoom"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""))
         win.addItem(.separator())
         // 标签循环（0.2.x）。**必须是菜单项**：⌃Tab 落进 WKWebView 首先是 CodeMirror
         // 的事，而菜单的 performKeyEquivalent 排在所有键盘处理之前（判断 1 的同一条）。

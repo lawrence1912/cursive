@@ -327,7 +327,17 @@
   顺带查出来一处旧账：`FileSchemeHandler` 用的 `URL.path(percentEncoded:)` 是 macOS 13 才有的，
   也就是说「12+」这个承诺**在此之前一直是假的**（默认部署目标够高，编译器从来没报过）。
   已换成语义相同、10.10 就有的 `URLComponents.percentEncodedPath`
-- ⌘C/⌘V 在 WKWebView 不生效，除非应用菜单里有接线的「编辑」菜单（`Selector("cut:")` 等）
+- **Info.plist 不声明本地化 = 系统那一层永远是英文**（2026-10-14，0.5.1 之后补）。界面文案是渲染层与壳那两张双语表，
+  可保存 / 打开面板的按钮、AppKit 自己往菜单里加的 Start Dictation… / Emoji & Symbols / 按住 ⌥ 时的 Close All、
+  `NSError.localizedDescription`（「写入失败：……」的后半句）认的是 **bundle 声明了哪些本地化** —— 一个都不声明时
+  `Bundle.main.preferredLocalizations` 是 `["en"]`，中文系统上照样是 Save / Open / The folder “x” doesn’t exist.。
+  `make-app.sh` 现在声明 `en` + `zh-Hans`（开发语言 en），这一层于是跟**系统**语言走，不跟应用里的语言开关走。
+  它一直藏着，是因为 E2E 跑的裸 `cursive-shell` 没有那份 plist、恒为 en，而看惯了菜单的人不会再多看那几条英文。
+  现在 `release.sh` 出包后验 plist 写着，[4+] 在包里那个二进制上验它真的起作用（自检报 `bundleLocalization` / `systemLanguage`）。
+  **不开窗口的验法**：编一个几行的 AppKit 小程序，打印 `NSSavePanel().prompt` 与一次失败写盘的 `localizedDescription`，
+  放进 `X.app/Contents/{Info.plist,MacOS/}` 里跑，换两份 plist 对照。**坑**：裸可执行文件**同目录下的 `Info.plist`
+  会被 CFBundle 当成主 bundle 的那份读进去** —— 探针和 plist 放在一个目录里，「没声明」那组也出中文，结论正好反过来
+- ⌘C/⌘V 在 WKWebView 不生效，除非应用菜单里有接线的「编辑」菜单（`cut:` / `copy:` / `paste:` 这几个原生选择器）
 - `evaluateJavaScript` 与 `WKUserScript` **不受页面 CSP 限制**（页面 `script-src 'self'` 拦不住注入）
 - **didFinish 可能早于渲染层模块执行完**：监听器没注册时 emit `file:opened` 会静默丢失。壳侧轮询 `window.__cursive`（main.js 末尾暴露的就绪标记）就绪后再发射，见 `flushPendingOpen()`
 - **WebKit 会对自定义 scheme 的 URL 再做一次百分号编码（`%` → `%25`）**，而渲染层拼 safe-file URL 时已经 encodeURI 过了 → handler 逐级解码：解一次文件不存在就再解一次（对字面 `%` 文件名依然成立）
